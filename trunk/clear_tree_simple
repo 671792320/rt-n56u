@@ -1,29 +1,46 @@
-#!/bin/sh
+#!/bin/bash
 
-ROOTDIR=`pwd`
-export ROOTDIR=$ROOTDIR
+# Clear build artifacts between CI builds
+rm -rf romfs
+rm -rf images
+rm -rf stage
+rm -rf merge
+rm -f .config
+rm -f config.arch
 
-if [ ! -f "$ROOTDIR/.config" ] ; then
-	echo "Project config file .config not found! Terminate."
-	exit 1
+# Restore kernel config to original state
+if [ -f linux-3.4.x/.config ] && [ -f configs/boards/busybox.config ]; then
+    # Restore kernel .config from the board template (if .config is a symlink, it was already removed)
+    rm -f linux-3.4.x/.config
 fi
 
-echo "-------------CLEAN-SIMPLE---------------"
+# Restore busybox config
+rm -f user/busybox/busybox-1.24.x/.config
 
-DIRS="user/rc user/httpd user/wpa_supplicant user/shared \
-user/libdisk user/wireless_tools user/utils user/nvram \
-user/pppoe user/pppd user/802.1x user/lldt user/u2ec \
-user/networkmap user/inadyn user/vsftpd user/infosvr \
-user/LPRng user/wsdd2 user/lanauth user/mtd_write \
-user/rp-l2tp user/udpxy user/xl2tpd user/xupnpd \
-user/accel-pptpd libs/libtirpc"
+# Restore board header and makefile
+rm -f user/shared/board.mk
+rm -f user/shared/include/ralink_board.h
 
-for dir in ${DIRS} ; do
-	make -C $dir clean
-done
+# Clean kernel build artifacts that would be rebuilt
+rm -rf linux-3.4x/arch/mips/ramdisk/*.gz 2>/dev/null || true
+rm -f linux-3.4.x/vmlinux 2>/dev/null || true
+rm -f linux-3.4.x/linux 2>/dev/null || true
 
-rm -rf $ROOTDIR/stage
-rm -rf $ROOTDIR/romfs
-rm -rf $ROOTDIR/images
-rm -rf $ROOTDIR/stage
+# Restore wifi driver directories
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/rt2860v2
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/rt3090
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/rt5392
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/rt5592
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/rt3593
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt7610
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt76x2
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt76x3
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt7628
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt7615
+rm -rf linux-3.4.x/drivers/net/wireless/ralink/mt7915
 
+# Restore PPE
+rm -rf linux-3.4.x/net/nat/hw_nat
+
+echo "Clear completed"
+exit 0
