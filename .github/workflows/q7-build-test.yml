@@ -1,0 +1,82 @@
+name: Q7 Build Test
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'configs/boards/ZTE_Q7/**'
+      - 'configs/templates/ZTE_Q7.config'
+      - 'trunk/**'
+      - '.github/workflows/q7-build-test.yml'
+
+jobs:
+  build-q7:
+    name: build (mt7620, ZTE_Q7 only)
+    runs-on: ubuntu-22.04
+    env:
+      images_dir: ${{ github.workspace }}/images_output
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: |
+          sudo apt update
+          sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Run shellcheck
+        run: sh ./trunk/tools/shellcheck.sh
+
+      - name: Prepare MIPSel toolchain
+        run: |
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+
+      - name: Verify Q7 build inputs
+        run: |
+          test -f trunk/build_firmware_ci
+          test -f trunk/configs/templates/ZTE_Q7.config
+          test -f trunk/configs/boards/ZTE_Q7/board.h
+          test -f trunk/configs/boards/ZTE_Q7/board.mk
+          echo 'Q7 build inputs found.'
+
+      - name: Build ZTE_Q7 only
+        shell: bash
+        run: |
+          set -e
+          cd trunk
+          mkdir -p "${images_dir}"
+          rm -rf images romfs
+          mkdir -p images romfs
+          echo '===== BUILD TARGET: ZTE_Q7 ====='
+          fakeroot ./build_firmware_ci ZTE_Q7
+          echo '===== BUILD COMPLETE ====='
+          shopt -s nullglob
+          files=(images/*.trx)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo 'ERROR: no .trx image produced'
+            exit 1
+          fi
+          cp -f "${files[@]}" "${images_dir}/"
+          ls -lh "${images_dir}"
+
+      - name: Create checksums
+        if: success()
+        run: |
+          cd "${images_dir}"
+          md5sum *.trx | tee md5sum.txt
+          sha256sum *.trx | tee sha256sum.txt
+
+      - name: Upload Q7 firmware artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTE_Q7-build-test
+          path: |
+            ${{ env.images_dir }}/*.trx
+            ${{ env.images_dir }}/md5sum.txt
+            ${{ env.images_dir }}/sha256sum.txt
+          if-no-files-found: error
