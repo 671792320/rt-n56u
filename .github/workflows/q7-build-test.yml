@@ -6,12 +6,18 @@ permissions:
 on:
   workflow_dispatch:
   push:
+    branches:
+      - feature/q7-smart-lan-discovery
     paths:
       - 'trunk/configs/boards/ZTE_Q7/**'
       - 'trunk/configs/templates/ZTE_Q7.config'
       - 'trunk/build_firmware_ci'
       - 'trunk/user/**'
       - '.github/workflows/q7-build-test.yml'
+
+concurrency:
+  group: q7-build-test
+  cancel-in-progress: false
 
 jobs:
   build-q7:
@@ -48,19 +54,6 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
           echo 'Q7 build inputs found.'
-
-      - name: Prepare Q7 legacy kernel config
-        shell: bash
-        run: |
-          set -euo pipefail
-          cfg=trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
-          # The source tree contains the newer SHORTCUT_FE Kconfig symbol,
-          # while this legacy Q7 defconfig does not select it.  Explicitly
-          # answer N so the 3.4 Kconfig never asks for interactive input.
-          if ! grep -q '^# CONFIG_SHORTCUT_FE is not set$' "$cfg"; then
-            printf '\n# Q7 legacy build: SFE is not enabled\n# CONFIG_SHORTCUT_FE is not set\n' >> "$cfg"
-          fi
-          grep -n 'SHORTCUT_FE' "$cfg"
 
       - name: Build ZTE_Q7 only
         shell: bash
