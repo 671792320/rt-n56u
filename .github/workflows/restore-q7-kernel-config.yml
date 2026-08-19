@@ -17,16 +17,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore Q7 kernel config from master
+      - name: Restore original Q7 kernel config
         run: |
-          git fetch origin master
-          git checkout origin/master -- trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          git fetch origin feature/q7-smart-lan-discovery
+          git show 232f64952c045baf0b2e53fe1dd1f75d1e118d92:trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config > trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          if ! grep -q '^# CONFIG_SHORTCUT_FE is not set$' trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config; then
+            printf '\n# CONFIG_SHORTCUT_FE is not set\n' >> trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          fi
+          test -s trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          grep -q '^CONFIG_RALINK_MT7620=y$' trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           grep -q '^# CONFIG_SHORTCUT_FE is not set$' trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           if git diff --cached --quiet; then
-            echo 'Q7 kernel config already matches master.'
+            echo 'Q7 kernel config already restored.'
           else
             git commit -m 'fix: restore Q7 kernel config [q7-config-restored]'
             git push origin HEAD:feature/q7-smart-lan-discovery
