@@ -27,7 +27,7 @@ jobs:
     env:
       build_variant: ${{ matrix.build_variant }}
       targets: ${{ matrix.targets }}
-      images_dir: /opt/images
+      images_dir: ${{ github.workspace }}/images_output
     strategy:
       fail-fast: false
       matrix:
