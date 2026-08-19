@@ -60,7 +60,7 @@ jobs:
             printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$cfg"
           fi
           grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"
-          echo "Q7 kernel config prepared"
+          echo "Q7 kernel config template prepared"
 
       - name: Build ZTE_Q7
         run: |
@@ -68,10 +68,15 @@ jobs:
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
-          # The legacy Linux 3.4 Kconfig can ask new questions during make dep.
-          # Feed empty answers so CI always accepts each option's default without
-          # changing existing Q7 configuration values.
-          yes '' | fakeroot ./build_firmware_ci ZTE_Q7
+
+          # build_firmware_ci copies the board config into linux-3.4.x/.config
+          # internally. Patch the CI copy of the script so that the final kernel
+          # config is normalized immediately after that copy and before make dep.
+          # This handles NEW Kconfig symbols without changing the existing Q7
+          # configuration choices.
+          sed -i '/echo "--------------------------MAKE-DEP--------------------------------"/i\yes "" | make ARCH=mips -C linux-3.4.x oldconfig' build_firmware_ci
+
+          fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
           ls -lh images/*.trx
 
