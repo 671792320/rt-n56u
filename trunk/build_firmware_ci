@@ -116,6 +116,16 @@ cp -fL "$kernel_cf" "$kernel_tf"
 cp -fL "$busybox_cf" "$busybox_tf"
 cp -fL "$board_mk" "$ROOTDIR/user/shared/board.mk"
 cp -fL "$board_h" "$ROOTDIR/user/shared/include/ralink_board.h"
+
+# Q7 uses the legacy 3.4 kernel config while this source tree contains
+# the newer SHORTCUT_FE Kconfig symbol.  Answer N in the actual kernel
+# .config after all board/config copies, so Kconfig cannot stop for input.
+if [ "$CONFIG_FIRMWARE_PRODUCT_ID" = "ZTE_Q7" ]; then
+	if ! grep -q '^CONFIG_SHORTCUT_FE=' "$kernel_tf" && ! grep -q '^# CONFIG_SHORTCUT_FE is not set$' "$kernel_tf"; then
+		echo '# CONFIG_SHORTCUT_FE is not set' >> "$kernel_tf"
+	fi
+fi
+
 echo "############################# WI-FI ###################################"
 dir_wifi_src="$ROOTDIR/proprietary/rt_wifi"
 dir_wifi_dst="$ROOTDIR/$CONFIG_LINUXDIR/drivers/net/wireless/ralink"
