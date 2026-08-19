@@ -112,6 +112,10 @@ dir_y						+= networkmap
 dir_y						+= httpd
 dir_y						+= www
 dir_y						+= rc
+ifeq ($(CONFIG_FIRMWARE_PRODUCT_ID),ZTE_Q7)
+dir_y						+= camdiscover
+dir_y						+= q7netmgr
+endif
 dir_$(CONFIG_FIRMWARE_INCLUDE_ANTFS)		+= antfs
 dir_$(CONFIG_FIRMWARE_INCLUDE_NAPT66)		+= napt66
 dir_$(CONFIG_FIRMWARE_INCLUDE_SFE)		+= shortcut-fe
@@ -160,13 +164,13 @@ dir_$(FRP_ENABLE)				+= frp
 dir_$(SOFTETHERVPN_ENABLE)			+= softethervpn
 dir_$(CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT)         += scutclient
 dir_$(CONFIG_FIRMWARE_INCLUDE_VLMCSD)			+= vlmcsd
-dir_$(CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER)		+= dns-forwarder
+dir_$(CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER)			+= dns-forwarder
 dir_$(SHADOWSOCKS_ENABLE)				+= shadowsocks
 dir_$(CONFIG_FIRMWARE_INCLUDE_LRZSZ)			+= lrzsz
 dir_$(CONFIG_FIRMWARE_INCLUDE_GDUT_DRCOM)		+= gdut-drcom
 dir_$(CONFIG_FIRMWARE_INCLUDE_DOGCOM)			+= dogcom
 dir_$(CONFIG_FIRMWARE_INCLUDE_IPERF3)			+= iperf3
-dir_$(CONFIG_FIRMWARE_INCLUDE_MINIEAP)			+= minieap
+dir_$(CONFIG_FIRMWARE_INCLUDE_MINIEAP)		+= minieap
 dir_$(CONFIG_FIRMWARE_INCLUDE_NJIT_CLIENT)		+= njit-client
 dir_$(CONFIG_FIRMWARE_INCLUDE_MENTOHUST)		+= mentohust
 dir_$(CONFIG_FIRMWARE_INCLUDE_xTUN) 			+= xTun
@@ -174,9 +178,9 @@ ifeq ($(CONFIG_FIRMWARE_INCLUDE_WING),y)
 dir_y 			+= wing
 dir_y 			+= ipt2socks
 endif
-dir_$(TROJAN_ENABLE) 			+= trojan
-dir_$(CONFIG_FIRMWARE_INCLUDE_REDSOCKS)			+= redsocks
-dir_$(CONFIG_FIRMWARE_INCLUDE_3PROXY)			+= 3proxy
+dir_$(TROJAN_ENABLE) 		+= trojan
+dir_$(CONFIG_FIRMWARE_INCLUDE_REDSOCKS)		+= redsocks
+dir_$(CONFIG_FIRMWARE_INCLUDE_3PROXY)		+= 3proxy
 
 ifdef CONFIG_BLK_DEV_SD
 dir_$(CONFIG_FIRMWARE_INCLUDE_HDPARM)		+= hdparm
