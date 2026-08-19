@@ -49,6 +49,20 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
+      - name: Fix non-interactive Linux 3.4 config
+        run: |
+          set -e
+          cfg=trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          if grep -q '^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=' "$cfg"; then
+            sed -i 's/^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set/' "$cfg"
+          elif grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"; then
+            true
+          else
+            printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$cfg"
+          fi
+          grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"
+          echo "Q7 kernel config prepared for non-interactive build"
+
       - name: Build ZTE_Q7
         run: |
           set -e
