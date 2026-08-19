@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'configs/boards/ZTE_Q7/**'
-      - 'configs/templates/ZTE_Q7.config'
+      - 'trunk/configs/boards/ZTE_Q7/**'
+      - 'trunk/configs/templates/ZTE_Q7.config'
+      - 'trunk/build_firmware_ci'
       - 'trunk/**'
       - '.github/workflows/q7-build-test.yml'
 
@@ -41,18 +42,40 @@ jobs:
           test -f trunk/configs/templates/ZTE_Q7.config
           test -f trunk/configs/boards/ZTE_Q7/board.h
           test -f trunk/configs/boards/ZTE_Q7/board.mk
+          test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           echo 'Q7 build inputs found.'
 
       - name: Build ZTE_Q7 only
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           cd trunk
           mkdir -p "${images_dir}"
           rm -rf images romfs
           mkdir -p images romfs
+
           echo '===== BUILD TARGET: ZTE_Q7 ====='
+          echo '===== NON-INTERACTIVE KERNEL CONFIG: olddefconfig ====='
+
+          # Padavan's legacy CI build script copies the board kernel config and
+          # immediately runs make dep.  The 3.4 kernel can require newly-added
+          # Kconfig symbols to be resolved first; without this, CI can enter
+          # interactive "Restart config" prompts and fail without a TTY.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build_firmware_ci')
+          s = p.read_text()
+          marker = 'echo "--------------------------MAKE-DEP--------------------------------"'
+          inject = '''echo "----------------------NORMALIZE-KERNEL-CONFIG----------------------"\nmake olddefconfig\nif [ $? -ne 0 ]; then\n    echo "Kernel olddefconfig failed!"\n    exit 1\nfi\n'''
+          if marker not in s:
+              raise SystemExit('build_firmware_ci: MAKE-DEP marker not found')
+          if 'NORMALIZE-KERNEL-CONFIG' not in s:
+              s = s.replace(marker, inject + marker, 1)
+          p.write_text(s)
+          PY
+
           fakeroot ./build_firmware_ci ZTE_Q7
+
           echo '===== BUILD COMPLETE ====='
           shopt -s nullglob
           files=(images/*.trx)
