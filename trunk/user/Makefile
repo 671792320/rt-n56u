@@ -93,140 +93,114 @@ endif
 dir_y =
 dir_n =
 dir_  =
-
-dir_y						+= busybox
-dir_y						+= iptables
-dir_y						+= coremark
+dir_y += busybox
+dir_y += iptables
+dir_y += coremark
 ifneq ($(CONFIG_WITHOUT_KERNEL),y)
-dir_$(CONFIG_FIRMWARE_INCLUDE_IPSET)		+= ipset
-dir_y						+= accel-pptpd
+dir_$(CONFIG_FIRMWARE_INCLUDE_IPSET) += ipset
+dir_y += accel-pptpd
 endif
-dir_y						+= ebtables
-dir_y						+= iproute2
-dir_y						+= wireless_tools
-dir_y						+= shared
-dir_$(STORAGE_ENABLED)				+= libdisk
-dir_y						+= nvram
-dir_y						+= mtd_write
-dir_y						+= networkmap
-dir_y						+= httpd
-dir_y						+= www
-dir_y						+= rc
-# Smart LAN / camera discovery is a generic Padavan user-space component.
-dir_y						+= camdiscover
-dir_y						+= q7netmgr
-dir_$(CONFIG_FIRMWARE_INCLUDE_ANTFS)		+= antfs
-dir_$(CONFIG_FIRMWARE_INCLUDE_NAPT66)		+= napt66
-dir_$(CONFIG_FIRMWARE_INCLUDE_SFE)		+= shortcut-fe
-dir_y						+= infosvr
-dir_y						+= inadyn
-dir_y						+= miniupnpd
-dir_y						+= dnsmasq
-dir_y						+= igmpproxy
-dir_y						+= udpxy
-dir_y						+= utils
-dir_y						+= lanauth
-dir_y						+= 802.1x
-dir_y						+= wpa_supplicant
-dir_y						+= pppd
-dir_y						+= pppoe
-dir_y						+= xl2tpd
-dir_$(CONFIG_FIRMWARE_INCLUDE_RPL2TP)		+= rp-l2tp
-dir_y						+= lldt
-dir_y						+= scripts
-dir_$(CONFIG_FIRMWARE_INCLUDE_SMARTDNS)	+= smartdns
-dir_$(OPENSSH_ENABLED)				+= openssh
-dir_$(DROPBEAR_ENABLED)				+= dropbear
-dir_$(CONFIG_FIRMWARE_INCLUDE_HTOP)		+= htop
-dir_$(CONFIG_FIRMWARE_INCLUDE_NANO)		+= nano
-dir_$(CONFIG_FIRMWARE_INCLUDE_OPENVPN)		+= openvpn
-dir_$(CONFIG_FIRMWARE_INCLUDE_SSWAN)		+= strongswan
-dir_$(CONFIG_FIRMWARE_INCLUDE_XUPNPD)			+= xupnpd
-dir_$(CONFIG_FIRMWARE_INCLUDE_TCPDUMP)		+= tcpdump
-dir_$(CONFIG_FIRMWARE_INCLUDE_MTR)		+= mtr
-dir_$(CONFIG_FIRMWARE_INCLUDE_SOCAT)	+= socat
-dir_$(CONFIG_FIRMWARE_INCLUDE_SRELAY)	+= srelay
+dir_y += ebtables
+dir_y += iproute2
+dir_y += wireless_tools
+dir_y += shared
+dir_$(STORAGE_ENABLED) += libdisk
+dir_y += nvram
+dir_y += mtd_write
+dir_y += networkmap
+dir_y += httpd
+dir_y += www
+dir_y += rc
+# Generic Smart LAN / camera discovery components.
+dir_y += camdiscover
+dir_y += netmgr
+dir_$(CONFIG_FIRMWARE_INCLUDE_ANTFS) += antfs
+dir_$(CONFIG_FIRMWARE_INCLUDE_NAPT66) += napt66
+dir_$(CONFIG_FIRMWARE_INCLUDE_SFE) += shortcut-fe
+dir_y += infosvr
+dir_y += inadyn
+dir_y += miniupnpd
+dir_y += dnsmasq
+dir_y += igmpproxy
+dir_y += udpxy
+dir_y += utils
+dir_y += lanauth
+dir_y += 802.1x
+dir_y += wpa_supplicant
+dir_y += pppd
+dir_y += pppoe
+dir_y += xl2tpd
+dir_$(CONFIG_FIRMWARE_INCLUDE_RPL2TP) += rp-l2tp
+dir_y += lldt
+dir_y += scripts
+
+dir_$(CONFIG_FIRMWARE_INCLUDE_SMARTDNS) += smartdns
+dir_$(OPENSSH_ENABLED) += openssh
+dir_$(DROPBEAR_ENABLED) += dropbear
+dir_$(CONFIG_FIRMWARE_INCLUDE_HTOP) += htop
+dir_$(CONFIG_FIRMWARE_INCLUDE_NANO) += nano
+dir_$(CONFIG_FIRMWARE_INCLUDE_OPENVPN) += openvpn
+dir_$(CONFIG_FIRMWARE_INCLUDE_SSWAN) += strongswan
+dir_$(CONFIG_FIRMWARE_INCLUDE_XUPNPD) += xupnpd
+dir_$(CONFIG_FIRMWARE_INCLUDE_TCPDUMP) += tcpdump
+dir_$(CONFIG_FIRMWARE_INCLUDE_MTR) += mtr
+dir_$(CONFIG_FIRMWARE_INCLUDE_SOCAT) += socat
+dir_$(CONFIG_FIRMWARE_INCLUDE_SRELAY) += srelay
 dir_$(CONFIG_FIRMWARE_INCLUDE_TUNSAFE) += tunsafe
+
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_WIREGUARD),y)
 dir_y += wireguard-go
 dir_y += wireguard-tools
 endif
+
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_SMBD36),y)
-dir_$(SAMBA_ENABLED)				+= samba36
-dir_y							+= wsdd2
+dir_$(SAMBA_ENABLED) += samba36
+dir_y += wsdd2
 else
-dir_$(SAMBA_ENABLED)				+= samba3
+dir_$(SAMBA_ENABLED) += samba3
 endif
-dir_$(CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS)	+= chnroute
-dir_$(CONFIG_FIRMWARE_INCLUDE_TTYD)			+= ttyd
-dir_$(FRP_ENABLE)				+= frp
-dir_$(SOFTETHERVPN_ENABLE)			+= softethervpn
-dir_$(CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT)         += scutclient
-dir_$(CONFIG_FIRMWARE_INCLUDE_VLMCSD)			+= vlmcsd
-dir_$(CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER)		+= dns-forwarder
-dir_$(SHADOWSOCKS_ENABLE)				+= shadowsocks
-dir_$(CONFIG_FIRMWARE_INCLUDE_LRZSZ)			+= lrzsz
-dir_$(CONFIG_FIRMWARE_INCLUDE_GDUT_DRCOM)			+= gdut-drcom
-dir_$(CONFIG_FIRMWARE_INCLUDE_DOGCOM)			+= dogcom
-dir_$(CONFIG_FIRMWARE_INCLUDE_IPERF3)			+= iperf3
-dir_$(CONFIG_FIRMWARE_INCLUDE_MINIEAP)			+= minieap
-dir_$(CONFIG_FIRMWARE_INCLUDE_NJIT_CLIENT)		+= njit-client
-dir_$(CONFIG_FIRMWARE_INCLUDE_MENTOHUST)		+= mentohust
-dir_$(CONFIG_FIRMWARE_INCLUDE_xTUN) 			+= xTun
+
+dir_$(CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS) += chnroute
+dir_$(CONFIG_FIRMWARE_INCLUDE_TTYD) += ttyd
+dir_$(FRP_ENABLE) += frp
+dir_$(SOFTETHERVPN_ENABLE) += softethervpn
+dir_$(CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT) += scutclient
+dir_$(CONFIG_FIRMWARE_INCLUDE_VLMCSD) += vlmcsd
+dir_$(CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER) += dns-forwarder
+dir_$(SHADOWSOCKS_ENABLE) += shadowsocks
+dir_$(CONFIG_FIRMWARE_INCLUDE_LRZSZ) += lrzsz
+dir_$(CONFIG_FIRMWARE_INCLUDE_GDUT_DRCOM) += gdut-drcom
+dir_$(CONFIG_FIRMWARE_INCLUDE_DOGCOM) += dogcom
+dir_$(CONFIG_FIRMWARE_INCLUDE_IPERF3) += iperf3
+dir_$(CONFIG_FIRMWARE_INCLUDE_MINIEAP) += minieap
+dir_$(CONFIG_FIRMWARE_INCLUDE_NJIT_CLIENT) += njit-client
+dir_$(CONFIG_FIRMWARE_INCLUDE_MENTOHUST) += mentohust
+dir_$(CONFIG_FIRMWARE_INCLUDE_xTUN) += xTun
+
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_WING),y)
-dir_y 			+= wing
-dir_y 			+= ipt2socks
+dir_y += wing
+dir_y += ipt2socks
 endif
-dir_$(TROJAN_ENABLE) 			+= trojan
-dir_$(CONFIG_FIRMWARE_INCLUDE_REDSOCKS)		+= redsocks
-dir_$(CONFIG_FIRMWARE_INCLUDE_3PROXY)		+= 3proxy
+dir_$(TROJAN_ENABLE) += trojan
+dir_$(CONFIG_FIRMWARE_INCLUDE_REDSOCKS) += redsocks
+dir_$(CONFIG_FIRMWARE_INCLUDE_3PROXY) += 3proxy
 
 ifdef CONFIG_BLK_DEV_SD
-dir_$(CONFIG_FIRMWARE_INCLUDE_HDPARM)		+= hdparm
+dir_$(CONFIG_FIRMWARE_INCLUDE_HDPARM) += hdparm
 endif
 
 ifdef CONFIG_USB_SUPPORT
-dir_y						+= p910nd
-dir_y						+= usb-modeswitch
-dir_y						+= comgt-0.32
-dir_y						+= uqmi
-dir_$(CONFIG_FIRMWARE_INCLUDE_LPRD)		+= LPRng
-dir_$(CONFIG_FIRMWARE_INCLUDE_U2EC)		+= u2ec
-dir_$(CONFIG_FIRMWARE_INCLUDE_DUMP1090)	+= dump1090
-endif
-
-ifeq ($(STORAGE_ENABLED),y)
-dir_$(CONFIG_FIRMWARE_INCLUDE_NFSD)		+= nfs-utils
-ifneq (,$(filter y,$(CONFIG_FIRMWARE_INCLUDE_NFSD) $(CONFIG_FIRMWARE_INCLUDE_NFSC)))
-dir_y						+= rpcbind
-endif
-dir_y						+= optware
-dir_y						+= util-linux
-dir_$(FS_EXT_ENABLED)				+= e2fsprogs
-dir_$(FS_FAT_ENABLED)				+= dosfstools
-dir_$(FS_NTFS_ENABLED)				+= ntfs-3g
-dir_$(CONFIG_FIRMWARE_INCLUDE_PARTED)		+= parted
-dir_$(CONFIG_FIRMWARE_INCLUDE_FTPD)		+= vsftpd
-dir_$(CONFIG_FIRMWARE_INCLUDE_MINIDLNA)	+= minidlna
-dir_$(CONFIG_FIRMWARE_INCLUDE_FIREFLY)	+= firefly
-dir_$(CONFIG_FIRMWARE_INCLUDE_TRANSMISSION)	+= transmission
-dir_y						+= aria2
-endif
-
-ifdef CONFIG_MTD_UBI
-ifneq ($(STORAGE_ENABLED),y)
-dir_y						+= optware
-dir_y						+= util-linux
-endif
-dir_y						+= mtd-utils
+dir_y += p910nd
+dir_y += usb-modeswitch
+dir_y += comgt-0.32
+dir_y += uqmi
+dir_$(CONFIG_FIRMWARE_INCLUDE_LPRD) += LPRng
+dir_$(CONFIG_FIRMWARE_INCLUDE_U2EC) += u2ec
+dir_$(CONFIG_FIRMWARE_INCLUDE_DUMP1090) += dump1090
 endif
 
 all:
-	for i in $(dir_y) ; do \
-		[ ! -d $$i ] || \
-		$(MAKE) -j1 -C $$i || \
-		exit $$? ; \
-	done
+	for i in $(dir_y) ; do [ ! -d $$i ] || $(MAKE) -j1 -C $$i || exit $$? ; done
 
 %_only:
 	$(MAKE) -C $(@:_only=)
@@ -234,17 +208,8 @@ all:
 %_romfs:
 	$(MAKE) -C $(@:_romfs=) romfs
 
-%_clean:
-	$(MAKE) -C $(@:_clean=) clean
-
 romfs:
-	for i in $(dir_y) ; do \
-		[ ! -d $$i ] || \
-		$(MAKE) -C $$i romfs ; \
-	done
+	for i in $(dir_y) ; do [ ! -d $$i ] || $(MAKE) -C $$i romfs ; done
 
 clean:
-	for i in `ls -d *` ; do \
-		[ ! -d $$i ] || \
-		$(MAKE) -C $$i clean ; \
-	done
+	for i in `ls -d *` ; do [ ! -d $$i ] || $(MAKE) -C $$i clean ; done
