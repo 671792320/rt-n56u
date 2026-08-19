@@ -1,8 +1,21 @@
-obj-y += netmgr.o
-CFLAGS += -Wall -O2
-netmgr: netmgr.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-clean:
-	rm -f *.o netmgr
+ifndef ROOTDIR
+ROOTDIR=../..
+endif
+USERDIR=$(ROOTDIR)/user
+SHDIR=$(ROOTDIR)/user/shared
+INSTALLDIR=$(ROOTDIR)/romfs
+include $(SHDIR)/boards.mk
+include $(SHDIR)/cflags.mk
+CFLAGS += -Os -s -I. -I$(SHDIR) -I$(SHDIR)/include
+EXEC=netmgr
+OBJS=netmgr.o
+all: $(EXEC)
+$(EXEC): $(OBJS)
+	$(CC) -o $@ $(OBJS)
+	$(STRIP) $@
+%.o: %.c
+	$(CC) -c $< $(CFLAGS)
 romfs:
-	$(ROMFSINST) /bin/netmgr
+	$(ROMFSINST) /usr/bin/$(EXEC)
+clean:
+	rm -f $(EXEC) $(OBJS)
