@@ -1,17 +1,21 @@
-obj-y += camdiscover.o
-
-CFLAGS += -Wall -O2
-
-camdiscover-objs := camdiscover.o
-
-$(camdiscover-objs):
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-camdiscover: $(camdiscover-objs)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-clean:
-	rm -f *.o camdiscover
-
+ifndef ROOTDIR
+ROOTDIR=../..
+endif
+USERDIR=$(ROOTDIR)/user
+SHDIR=$(ROOTDIR)/user/shared
+INSTALLDIR=$(ROOTDIR)/romfs
+include $(SHDIR)/boards.mk
+include $(SHDIR)/cflags.mk
+CFLAGS += -Os -s -I. -I$(SHDIR) -I$(SHDIR)/include
+EXEC=camdiscover
+OBJS=camdiscover.o
+all: $(EXEC)
+$(EXEC): $(OBJS)
+	$(CC) -o $@ $(OBJS)
+	$(STRIP) $@
+%.o: %.c
+	$(CC) -c $< $(CFLAGS)
 romfs:
-	$(ROMFSINST) /bin/camdiscover
+	$(ROMFSINST) /usr/bin/$(EXEC)
+clean:
+	rm -f $(EXEC) $(OBJS)
