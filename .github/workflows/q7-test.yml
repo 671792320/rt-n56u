@@ -1,0 +1,23 @@
+name: Q7 Workflow Test
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: START
+        run: |
+          echo "Q7 workflow is running"
+          echo "Commit: $GITHUB_SHA"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify workflow
+        run: |
+          test -f trunk/configs/boards/ZTE_Q7/board.h
+          echo "Q7 board files found"
+          echo "WORKFLOW_OK"
