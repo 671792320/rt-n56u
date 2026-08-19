@@ -50,32 +50,12 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
-      - name: Prepare non-interactive Linux 3.4 config
-        run: |
-          set -e
-          cfg=trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
-          if grep -q '^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=' "$cfg"; then
-            sed -i 's/^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set/' "$cfg"
-          elif ! grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"; then
-            printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$cfg"
-          fi
-          grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"
-          echo "Q7 kernel config template prepared"
-
       - name: Build ZTE_Q7
         run: |
           set -e
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
-
-          # build_firmware_ci copies the board config into linux-3.4.x/.config
-          # internally. Patch the CI copy of the script so that the final kernel
-          # config is normalized immediately after that copy and before make dep.
-          # This handles NEW Kconfig symbols without changing the existing Q7
-          # configuration choices.
-          sed -i '/echo "--------------------------MAKE-DEP--------------------------------"/i\yes "" | make ARCH=mips -C linux-3.4.x oldconfig' build_firmware_ci
-
           fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
           ls -lh images/*.trx
