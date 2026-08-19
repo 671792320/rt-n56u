@@ -39,6 +39,7 @@ jobs:
 
       - name: Verify Q7 and SmartLAN sources
         run: |
+          set -e
           test -f trunk/build_firmware_ci
           test -f trunk/configs/templates/ZTE_Q7.config
           test -f trunk/configs/boards/ZTE_Q7/board.h
@@ -49,19 +50,17 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
-      - name: Fix non-interactive Linux 3.4 config
+      - name: Prepare non-interactive Linux 3.4 config
         run: |
           set -e
           cfg=trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           if grep -q '^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=' "$cfg"; then
             sed -i 's/^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set/' "$cfg"
-          elif grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"; then
-            true
-          else
+          elif ! grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"; then
             printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$cfg"
           fi
           grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$cfg"
-          echo "Q7 kernel config prepared for non-interactive build"
+          echo "Q7 kernel config prepared"
 
       - name: Build ZTE_Q7
         run: |
@@ -69,7 +68,10 @@ jobs:
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
-          fakeroot ./build_firmware_ci ZTE_Q7
+          # The legacy Linux 3.4 Kconfig can ask new questions during make dep.
+          # Feed empty answers so CI always accepts each option's default without
+          # changing existing Q7 configuration values.
+          yes '' | fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
           ls -lh images/*.trx
 
