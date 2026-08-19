@@ -1,0 +1,67 @@
+name: Q7 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: q7-build
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ZTE_Q7 only
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          sudo apt update
+          sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Shellcheck
+        run: sh ./trunk/tools/shellcheck.sh
+
+      - name: Prepare MIPSel toolchain
+        run: |
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+
+      - name: Verify Q7 and SmartLAN sources
+        run: |
+          test -f trunk/build_firmware_ci
+          test -f trunk/configs/templates/ZTE_Q7.config
+          test -f trunk/configs/boards/ZTE_Q7/board.h
+          test -f trunk/configs/boards/ZTE_Q7/board.mk
+          test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          test -f trunk/user/camdiscover/camdiscover.c
+          test -f trunk/user/camdiscover/Makefile
+          test -f trunk/user/netmgr/netmgr.c
+          test -f trunk/user/netmgr/Makefile
+
+      - name: Build ZTE_Q7
+        run: |
+          set -e
+          cd trunk
+          rm -rf images romfs
+          mkdir -p images romfs
+          fakeroot ./build_firmware_ci ZTE_Q7
+          test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
+          ls -lh images/*.trx
+
+      - name: Upload Q7 firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTE_Q7-SmartLAN-V1
+          path: trunk/images/*.trx
+          if-no-files-found: error
