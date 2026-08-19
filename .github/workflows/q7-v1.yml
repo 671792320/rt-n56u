@@ -1,0 +1,50 @@
+name: Q7 Smart LAN Discovery V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/q7-smart-lan-discovery
+
+permissions:
+  contents: read
+
+env:
+  TARGET: ZTE_Q7
+  IMAGES_DIR: ${{ github.workspace }}/images_output
+
+jobs:
+  build-q7:
+    name: Build ZTE_Q7 V1
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout V1 source
+        uses: actions/checkout@v4
+
+      - name: Prepare build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Prepare MIPS toolchain
+        working-directory: toolchain-mipsel
+        run: sh dl_toolchain.sh
+
+      - name: Build ZTE_Q7 firmware
+        working-directory: trunk
+        run: |
+          set -e
+          mkdir -p "$IMAGES_DIR"
+          fakeroot ./build_firmware_ci "$TARGET"
+          test -f "images/${TARGET}.trx"
+          cp -f "images/${TARGET}.trx" "$IMAGES_DIR/${TARGET}-SmartLAN-V1.trx"
+
+      - name: Generate checksum
+        working-directory: ${{ github.workspace }}/images_output
+        run: md5sum *.trx | tee md5sum.txt
+
+      - name: Upload Q7 V1 firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTE_Q7-SmartLAN-V1
+          path: ${{ github.workspace }}/images_output/*
