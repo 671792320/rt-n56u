@@ -14,10 +14,11 @@ jobs:
     name: build (mt7620, ZTE_Q7 only)
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout Q7 source
         uses: actions/checkout@v4
         with:
           ref: feature/q7-smart-lan-discovery
+          fetch-depth: 1
 
       - name: Workflow trigger test
         run: |
@@ -48,6 +49,17 @@ jobs:
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
+
+      - name: Restore clean Padavan build script
+        run: |
+          git fetch origin master --depth=1
+          git show origin/master:trunk/build_firmware_ci > trunk/build_firmware_ci
+          chmod +x trunk/build_firmware_ci
+
+      - name: Prepare Q7 legacy kernel config
+        run: |
+          cfg=trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          grep -q '^CONFIG_SHORTCUT_FE=' "$cfg" || grep -q '^# CONFIG_SHORTCUT_FE is not set$' "$cfg" || echo '# CONFIG_SHORTCUT_FE is not set' >> "$cfg"
 
       - name: Build ZTE_Q7 only
         shell: bash
