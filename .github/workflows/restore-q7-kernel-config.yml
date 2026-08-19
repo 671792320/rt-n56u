@@ -1,0 +1,33 @@
+name: Restore Q7 kernel config
+
+on:
+  push:
+    branches: [feature/q7-smart-lan-discovery]
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: ${{ !contains(github.event.head_commit.message, '[q7-config-restored]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore Q7 kernel config from master
+        run: |
+          git fetch origin master
+          git checkout origin/master -- trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          grep -q '^# CONFIG_SHORTCUT_FE is not set$' trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          if git diff --cached --quiet; then
+            echo 'Q7 kernel config already matches master.'
+          else
+            git commit -m 'fix: restore Q7 kernel config [q7-config-restored]'
+            git push origin HEAD:feature/q7-smart-lan-discovery
+          fi
