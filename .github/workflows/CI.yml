@@ -1,24 +1,21 @@
 name: CI
 
-# Workflow permissions for forked repositories
 permissions:
   contents: write
   actions: write
 
-# Controls when the action will run. 
-on: 
-  push:
-  pull_request:
+# Keep the original full CI available for manual runs/releases, but do not
+# start it automatically while the Q7 board is being validated.
+on:
   workflow_dispatch:
     inputs:
       debug_enabled:
-        description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'     
+        description: 'Run the build with tmate debugging enabled'
         required: false
         default: 'no'
   release:
     types: [published]
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   build:
     name: build
