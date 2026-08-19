@@ -5,6 +5,9 @@ permissions:
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
 
 jobs:
   build-q7:
@@ -15,6 +18,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: feature/q7-smart-lan-discovery
+
+      - name: Workflow trigger test
+        run: |
+          echo "Q7 Build Test workflow started"
+          echo "Source branch: feature/q7-smart-lan-discovery"
 
       - name: Prepare environment
         run: |
