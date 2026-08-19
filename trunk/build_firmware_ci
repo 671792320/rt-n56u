@@ -131,7 +131,6 @@ rm -rf "$dir_wifi_dst/mt76x3"
 rm -rf "$dir_wifi_dst/mt7628"
 rm -rf "$dir_wifi_dst/mt7615"
 rm -rf "$dir_wifi_dst/mt7915"
-
 mkdir -p "$dir_wifi_dst/mt76x3"
 cp -f "$dir_wifi_src/rtpci/4.1.X.X/mt76x3/Kconfig" "$dir_wifi_dst/mt76x3/Kconfig"
 mkdir -p "$dir_wifi_dst/mt7615/embedded"
@@ -149,24 +148,20 @@ if [ "$CONFIG_RALINK_MT7620" = "y" ] ; then
 		func_disable_kernel_param "CONFIG_RT_FIRST_IF_MT7620"
 		CONFIG_RT_FIRST_IF_RT2860=y
 	fi
-	if [ -n "$CONFIG_RT_FIRST_IF_RT2860" = "y" ] ; then
+	if [ "$CONFIG_RT_FIRST_IF_RT2860" = "y" ] ; then
 		cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/rt2860v2" "$dir_wifi_dst/"
 		cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/rt2860v2_ap" "$dir_wifi_dst/"
 	fi
 fi
 if [ -n "$CONFIG_RT3090_AP" ] ; then
 	dir_wifi_ver="2.7.X.X"
-	if [ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "2.5" ] ; then
-		dir_wifi_ver="2.5.X.X"
-	fi
+	if [ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "2.5" ] ; then dir_wifi_ver="2.5.X.X"; fi
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/rt3090" "$dir_wifi_dst/"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/rt3090_ap" "$dir_wifi_dst/"
 fi
 if [ -n "$CONFIG_RT5392_AP" ] ; then
 	dir_wifi_ver="2.7.X.X"
-	if [ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "2.5" ] ; then
-		dir_wifi_ver="2.5.X.X"
-	fi
+	if [ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "2.5" ] ; then dir_wifi_ver="2.5.X.X"; fi
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/rt5392" "$dir_wifi_dst/"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/rt5392_ap" "$dir_wifi_dst/"
 fi
@@ -202,11 +197,7 @@ if [ -n "$CONFIG_MT7628_AP" ] ; then
 fi
 if [ -n "$CONFIG_MT7615_AP" ] ; then
 	dir_wifi_ver="5.0.5.1"
-	if [ "$CONFIG_FIRMWARE_WIFI_DRIVER" = "4.4.2.1" ] || \
-		[ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "4.4.2.1" ] || \
-		[ "$CONFIG_FIRMWARE_WIFI5_DRIVER" = "4.4.2.1" ]; then
-		dir_wifi_ver="4.4.2.1"
-	fi
+	if [ "$CONFIG_FIRMWARE_WIFI_DRIVER" = "4.4.2.1" ] || [ "$CONFIG_FIRMWARE_WIFI2_DRIVER" = "4.4.2.1" ] || [ "$CONFIG_FIRMWARE_WIFI5_DRIVER" = "4.4.2.1" ]; then dir_wifi_ver="4.4.2.1"; fi
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7615" "$dir_wifi_dst/"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7615_ap" "$dir_wifi_dst/"
 fi
@@ -215,6 +206,7 @@ if [ -n "$CONFIG_MT7915_AP" ] ; then
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7915" "$dir_wifi_dst/"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7915_ap" "$dir_wifi_dst/"
 fi
+
 echo "############################ HWNAT ####################################"
 dir_ppe_src="$ROOTDIR/proprietary/rt_ppe"
 dir_ppe_dst="$ROOTDIR/$CONFIG_LINUXDIR/net/nat"
@@ -229,6 +221,7 @@ if [ "$CONFIG_PRODUCT" = "MT7621" ] ; then
 		cp -rf "$dir_eip_src" "$dir_eip_dst/"
 	fi
 fi
+
 echo "############################# CPU #####################################"
 if [ "$CONFIG_FIRMWARE_CPU_SLEEP" = "y" -o "$CONFIG_RALINK_SYSTICK_COUNTER" = "y" ] ; then
 	func_enable_kernel_param "CONFIG_RALINK_SYSTICK_COUNTER"
@@ -240,29 +233,26 @@ if [ "$CONFIG_FIRMWARE_CPU_SLEEP" = "y" -o "$CONFIG_RALINK_SYSTICK_COUNTER" = "y
 	func_disable_kernel_param "CONFIG_HIGH_RES_TIMERS"
 fi
 if [ "$CONFIG_RALINK_MT7620" = "y" ] ; then
-	if [ "$CONFIG_FIRMWARE_CPU_600MHZ" = "y" ] ; then
-		func_enable_kernel_param "CONFIG_RALINK_MT7620_PLL600"
-	fi
+	if [ "$CONFIG_FIRMWARE_CPU_600MHZ" = "y" ] ; then func_enable_kernel_param "CONFIG_RALINK_MT7620_PLL600"; fi
 fi
 if [ "$CONFIG_RALINK_MT7621" = "y" ] ; then
-	if [ "$CONFIG_FIRMWARE_CPU_900MHZ" = "y" ] ; then
-		func_enable_kernel_param "CONFIG_RALINK_MT7621_PLL900"
-	fi
+	if [ "$CONFIG_FIRMWARE_CPU_900MHZ" = "y" ] ; then func_enable_kernel_param "CONFIG_RALINK_MT7621_PLL900"; fi
 	if [ "$CONFIG_FIRMWARE_RAM_MOD_256" = "y" ] ; then
 		func_disable_kernel_param "CONFIG_RT2880_DRAM_64M"
 		func_disable_kernel_param "CONFIG_RT2880_DRAM_128M"
 		func_enable_kernel_param "CONFIG_RT2880_DRAM_256M"
 	fi
 fi
+
 echo "############################# SMP #####################################"
 if [ -n "$CONFIG_SMP" ] ; then
 	func_enable_busybox_param "CONFIG_FEATURE_TOP_SMP_CPU"
 	func_enable_busybox_param "CONFIG_FEATURE_TOP_SMP_PROCESS"
 fi
+
 echo "############################# RTC #####################################"
-if [ -n "$CONFIG_RTC_CLASS" ] ; then
-	func_enable_busybox_param "CONFIG_HWCLOCK"
-fi
+if [ -n "$CONFIG_RTC_CLASS" ] ; then func_enable_busybox_param "CONFIG_HWCLOCK"; fi
+
 echo "############################# IPV6 ####################################"
 if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 	func_disable_kernel_param "CONFIG_INET_TUNNEL"
@@ -278,23 +268,31 @@ if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 	func_enable_busybox_param "CONFIG_FEATURE_IP_LINK"
 	func_enable_busybox_param "CONFIG_FEATURE_IP_ROUTE"
 fi
-echo "#######################################################################"
-echo "--------------------------MAKE-DEP--------------------------------"
-make dep
-echo "--------------------------MAKE-ALL--------------------------------"
-make
 
+echo "--------------------------KERNEL-OLDDEFCONFIG-----------------------"
+make olddefconfig
 if [ $? -ne 0 ]; then
-    echo "Build failed!"
-    exit 1
+	echo "Kernel olddefconfig failed!"
+	exit 1
 fi
 
-# Rename the generated .trx file
+echo "--------------------------MAKE-DEP--------------------------------"
+make dep
+if [ $? -ne 0 ]; then
+	echo "make dep failed!"
+	exit 1
+fi
+
+echo "--------------------------MAKE-ALL--------------------------------"
+make
+if [ $? -ne 0 ]; then
+	echo "Build failed!"
+	exit 1
+fi
+
 echo "--------------------------RENAME-IMAGE--------------------------------"
 for f in images/*.trx; do
-    if [ -f "$f" ]; then
-        cp -f "$f" "images/${CONFIG_FIRMWARE_PRODUCT_ID}.trx"
-    fi
+	if [ -f "$f" ]; then cp -f "$f" "images/${CONFIG_FIRMWARE_PRODUCT_ID}.trx"; fi
 done
 
 echo "Build completed successfully for $1"
