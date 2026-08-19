@@ -1,5 +1,10 @@
 name: CI
 
+# Workflow permissions for forked repositories
+permissions:
+  contents: write
+  actions: write
+
 # Controls when the action will run. 
 on: 
   push:
