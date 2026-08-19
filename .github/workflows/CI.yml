@@ -27,7 +27,6 @@ jobs:
     env:
       build_variant: ${{ matrix.build_variant }}
       targets: ${{ matrix.targets }}
-      images_dir: ${{ github.workspace }}/images_output
     strategy:
       fail-fast: false
       matrix:
@@ -60,19 +59,24 @@ jobs:
       - name: Start build
         run: |
           cd trunk
-          rm -rf ${images_dir}
-          mkdir -p ${images_dir}
+          IMAGES_DIR=$GITHUB_WORKSPACE/images_output
+          rm -rf "$IMAGES_DIR"
+          mkdir -p "$IMAGES_DIR"
           for m in $targets; do fakeroot ./build_firmware_ci $m; \
-          if [ $? = 0 ]; then cp -f images/*.trx ${images_dir}/$m.trx; else exit 1; fi; \
+          if [ $? = 0 ]; then cp -f images/*.trx "$IMAGES_DIR/$m.trx"; else exit 1; fi; \
           ./clear_tree_simple >/dev/null 2>&1; done
       - name: Create archive
         if: ${{ github.event_name != 'release' && success() }}
         run: |
-          ls -lh ${images_dir}
-          GIT_VERSION=`git rev-parse --short=7 HEAD 2>/dev/null` && [ -n "$GIT_VERSION" ] && \
+          IMAGES_DIR=$GITHUB_WORKSPACE/images_output
+          ls -lh "$IMAGES_DIR"
+          cd "$IMAGES_DIR"
+          GIT_VERSION=$(git rev-parse --short=7 HEAD 2>/dev/null) && [ -n "$GIT_VERSION" ] && \
           image_name=images_${build_variant}_${GIT_VERSION} || image_name=images_${build_variant}
-          cd ${images_dir}; md5sum *.trx |tee md5sum.txt; 7z a -mx=9 ${image_name}.7z ./*
+          md5sum *.trx |tee md5sum.txt
+          7z a -mx=9 ${image_name}.7z ./*
           echo "image_name=${image_name}" >> $GITHUB_ENV
+          echo "images_dir=$IMAGES_DIR" >> $GITHUB_ENV
       - name: Upload images to Artifact
         if: ${{ github.event_name != 'release' && success() }}
         uses: actions/upload-artifact@v4
