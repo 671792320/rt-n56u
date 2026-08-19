@@ -113,13 +113,17 @@ echo "--------------------------COPY-CONFIG-----------------------------"
 echo "######################### FOR-ALL-DEVICES #############################"
 ln -sf vendors/Ralink/config.arch config.arch
 cp -fL "$kernel_cf" "$kernel_tf"
-# Linux 3.4.x in this tree can see newer Kconfig symbols during CI.
-# Keep the new conntrack chain-events option disabled before silentoldconfig.
+
+# Linux 3.4.x in this tree may contain Kconfig symbols which are newer than
+# the board configuration.  Normalize the FINAL copied kernel .config here,
+# after all board-specific changes above and before make dep.  This is kept
+# inside the build script so CI and manual builds use exactly the same path.
 if grep -q '^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=' "$kernel_tf"; then
 	sed -i 's/^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set/' "$kernel_tf"
 elif ! grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$kernel_tf"; then
 	printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$kernel_tf"
 fi
+
 cp -fL "$busybox_cf" "$busybox_tf"
 cp -fL "$board_mk" "$ROOTDIR/user/shared/board.mk"
 cp -fL "$board_h" "$ROOTDIR/user/shared/include/ralink_board.h"
@@ -266,11 +270,9 @@ if [ -n "$CONFIG_SMP" ] ; then
 	func_enable_busybox_param "CONFIG_FEATURE_TOP_SMP_CPU"
 	func_enable_busybox_param "CONFIG_FEATURE_TOP_SMP_PROCESS"
 fi
-echo "############################# RTC #####################################"
 if [ -n "$CONFIG_RTC_CLASS" ] ; then
 	func_enable_busybox_param "CONFIG_HWCLOCK"
 fi
-echo "############################# IPV6 ####################################"
 if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 	func_disable_kernel_param "CONFIG_INET_TUNNEL"
 	func_disable_kernel_param "CONFIG_IPV6"
@@ -287,6 +289,17 @@ if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 	func_enable_busybox_param "CONFIG_FEATURE_IP_ROUTE"
 fi
 echo "#######################################################################"
+
+# Normalize any NEW kernel symbols after all board-specific config edits.
+# This must happen immediately before make dep so the following kernel build
+# never invokes interactive Kconfig in CI.
+echo "--------------------------KCONFIG-NORMALIZE-------------------------"
+( cd "$ROOTDIR/$CONFIG_LINUXDIR" && yes "" | make ARCH=mips oldconfig )
+if [ $? -ne 0 ]; then
+	echo "Kernel Kconfig normalization failed!"
+	exit 1
+fi
+
 echo "--------------------------MAKE-DEP--------------------------------"
 make dep
 echo "--------------------------MAKE-ALL--------------------------------"
@@ -297,7 +310,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Rename the generated .trx file
 echo "--------------------------RENAME-IMAGE--------------------------------"
 for f in images/*.trx; do
     if [ -f "$f" ]; then
