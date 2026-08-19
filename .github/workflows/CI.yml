@@ -29,6 +29,7 @@ jobs:
       targets: ${{ matrix.targets }}
       images_dir: /opt/images
     strategy:
+      fail-fast: false
       matrix:
         include:
           - build_variant: "mt7620"
