@@ -11,17 +11,12 @@ endif
 CFLAGS+=$(COPT) -ffunction-sections -fdata-sections
 LDFLAGS += -Wl,--gc-sections
 
-# The CI/rootfs build does not reliably stage a linkable libz.so before
-# Dropbear's configure test.  zlib compression is optional in Dropbear;
-# disable it for the Q7 firmware so the legacy uClibc cross build does not
-# depend on the host/staging zlib linker setup.
-
 all: config_test
-	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" MULTI=1
+	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) PROGRAMS=\"dropbear dbclient dropbearkey dropbearconvert scp\" MULTI=1
 
 config_test:
 	( if [ -f ./config_done ]; then \
-		echo "the same configuration"; \
+		echo \"the same configuration\"; \
 	else \
 		make configure && touch config_done; \
 	fi )
@@ -39,8 +34,8 @@ configure:
 		--disable-loginfunc \
 		--disable-pututline \
 		--disable-pututxline \
-		--disable-wtmpx \
-		--disable-zlib \
+		--disable-harden \
+		--enable-zlib \
 		--enable-bundled-libtom \
 		--host=$(HOST_TARGET) \
 		--build=$(HOST_BUILD) ; \
