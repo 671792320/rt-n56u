@@ -12,10 +12,11 @@ CFLAGS+=$(COPT) -ffunction-sections -fdata-sections
 LDFLAGS += -Wl,--gc-sections
 
 # Dropbear is configured after the in-tree target libraries have been built.
-# Use Padavan's staged zlib explicitly.  --with-zlib is handled by Dropbear's
-# configure.ac and avoids relying on configure's generic library search.
+# zlib is installed into the Padavan staging tree by libs/libz.  Pass both
+# the staged include directory and the zlib archive explicitly: this avoids
+# relying on the host linker or on configure's cross-library search logic.
 DROPBEAR_STAGE=$(ROOTDIR)/stage
-DROPBEAR_ZLIB=$(DROPBEAR_STAGE)
+DROPBEAR_ZLIB_A=$(DROPBEAR_STAGE)/lib/libz.a
 
 all: config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" MULTI=1
@@ -32,6 +33,7 @@ configure:
 	autoreconf -v; \
 	CPPFLAGS="-I$(DROPBEAR_STAGE)/include" \
 	LDFLAGS="-L$(DROPBEAR_STAGE)/lib -Wl,-rpath-link,$(DROPBEAR_STAGE)/lib" \
+	LIBS="$(DROPBEAR_ZLIB_A)" \
 	./configure \
 		--prefix=/usr \
 		--disable-lastlog \
@@ -44,7 +46,6 @@ configure:
 		--disable-pututxline \
 		--disable-wtmpx \
 		--enable-zlib \
-		--with-zlib=$(DROPBEAR_ZLIB) \
 		--enable-bundled-libtom \
 		--host=$(HOST_TARGET) \
 		--build=$(HOST_BUILD) ; \
