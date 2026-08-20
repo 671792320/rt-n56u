@@ -11,12 +11,10 @@ endif
 CFLAGS+=$(COPT) -ffunction-sections -fdata-sections
 LDFLAGS += -Wl,--gc-sections
 
-# Dropbear is configured after the in-tree target libraries have been built.
-# zlib is installed by libs/libz into the Padavan staging tree.  Use
-# Dropbear's native --with-zlib=DIR option so configure adds both the staged
-# headers and library search path to its zlib test.  This is more reliable
-# than relying on inherited LDFLAGS during cross compilation.
-DROPBEAR_STAGE=$(ROOTDIR)/stage
+# The CI/rootfs build does not reliably stage a linkable libz.so before
+# Dropbear's configure test.  zlib compression is optional in Dropbear;
+# disable it for the Q7 firmware so the legacy uClibc cross build does not
+# depend on the host/staging zlib linker setup.
 
 all: config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" MULTI=1
@@ -31,8 +29,6 @@ config_test:
 configure:
 	( cd $(SRC_NAME) ; \
 	autoreconf -v; \
-	CPPFLAGS="-I$(DROPBEAR_STAGE)/include" \
-	LDFLAGS="-L$(DROPBEAR_STAGE)/lib -Wl,-rpath-link,$(DROPBEAR_STAGE)/lib" \
 	./configure \
 		--prefix=/usr \
 		--disable-lastlog \
@@ -44,8 +40,7 @@ configure:
 		--disable-pututline \
 		--disable-pututxline \
 		--disable-wtmpx \
-		--with-zlib=$(DROPBEAR_STAGE) \
-		--enable-zlib \
+		--disable-zlib \
 		--enable-bundled-libtom \
 		--host=$(HOST_TARGET) \
 		--build=$(HOST_BUILD) ; \
