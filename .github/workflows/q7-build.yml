@@ -50,6 +50,21 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
+      - name: Normalize Linux 3.4 conntrack Kconfig
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
+          s = p.read_text()
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          if old not in s:
+              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
+
       - name: Build ZTE_Q7
         run: |
           set -e
