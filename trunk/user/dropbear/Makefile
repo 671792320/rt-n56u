@@ -13,7 +13,7 @@ LDFLAGS += -Wl,--gc-sections
 
 # Dropbear is configured after the in-tree target libraries have been built.
 # Linux/Padavan's zlib is installed into the firmware staging directory, but
-# the cross compiler does not search that directory by default.  Explicitly
+# the cross compiler does not search that directory by default. Explicitly
 # expose the staged headers and libraries so configure can find libz.
 DROPBEAR_STAGE=$(ROOTDIR)/stage
 DROPBEAR_CPPFLAGS=-I$(DROPBEAR_STAGE)/include
@@ -44,7 +44,6 @@ configure:
 		--disable-loginfunc \
 		--disable-pututline \
 		--disable-pututxline \
-		--disable-wtmpx \
 		--enable-zlib \
 		--enable-bundled-libtom \
 		--host=$(HOST_TARGET) \
