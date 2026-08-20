@@ -58,7 +58,7 @@ mkdir -p -m 777 /tmp/modem
 mkdir -p -m 777 /tmp/rc_notification
 mkdir -p -m 777 /tmp/rc_action_incomplete
 mkdir -p -m 700 /home/root
-mkdir -p -m 700 /home/admin
+mkdir -p -m 700 /home/root/.ssh
 mkdir -p -m 755 /etc/storage
 mkdir -p -m 755 /etc/ssl
 mkdir -p -m 755 /etc/Wireless
