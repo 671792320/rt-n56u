@@ -50,20 +50,35 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
-      - name: Normalize Linux 3.4 conntrack Kconfig
+      - name: Normalize Linux 3.4 Kconfig for CI
         run: |
           set -e
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
-          s = p.read_text()
+
+          kconfig = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
+          s = kconfig.read_text()
           old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
           new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
-          if old not in s:
-              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
-          p.write_text(s.replace(old, new, 1))
+          if old in s:
+              s = s.replace(old, new, 1)
+          kconfig.write_text(s)
+
+          build = Path('trunk/build_firmware_ci')
+          s = build.read_text()
+          old_line = '( cd "$ROOTDIR/$CONFIG_LINUXDIR" && yes "" | make ARCH=mips oldconfig )'
+          new_line = '( cd "$ROOTDIR/$CONFIG_LINUXDIR" && make ARCH=mips olddefconfig )'
+          if old_line in s:
+              s = s.replace(old_line, new_line, 1)
+          else:
+              raise SystemExit('build_firmware_ci oldconfig command not found')
+          s = s.replace('CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS', 'CONFIG_NF_CONNTRACK_CHAIN_EVENTS')
+          build.write_text(s)
           PY
+          echo '--- Kconfig symbol ---'
           grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
+          echo '--- CI config command ---'
+          grep -n 'olddefconfig\|oldconfig' trunk/build_firmware_ci
 
       - name: Build ZTE_Q7
         run: |
