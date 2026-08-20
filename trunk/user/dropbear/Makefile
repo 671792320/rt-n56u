@@ -11,6 +11,14 @@ endif
 CFLAGS+=$(COPT) -ffunction-sections -fdata-sections
 LDFLAGS += -Wl,--gc-sections
 
+# Dropbear is configured after the in-tree target libraries have been built.
+# Linux/Padavan's zlib is installed into the firmware staging directory, but
+# the cross compiler does not search that directory by default.  Explicitly
+# expose the staged headers and libraries so configure can find libz.
+DROPBEAR_STAGE=$(ROOTDIR)/stage
+DROPBEAR_CPPFLAGS=-I$(DROPBEAR_STAGE)/include
+DROPBEAR_LDFLAGS=-L$(DROPBEAR_STAGE)/lib -Wl,-rpath-link,$(DROPBEAR_STAGE)/lib
+
 all: config_test
 	$(MAKE) -j$(HOST_NCPU) -C $(SRC_NAME) PROGRAMS="dropbear dbclient dropbearkey dropbearconvert scp" MULTI=1
 
@@ -24,6 +32,8 @@ config_test:
 configure:
 	( cd $(SRC_NAME) ; \
 	autoreconf -v; \
+	CPPFLAGS="$(DROPBEAR_CPPFLAGS)" \
+	LDFLAGS="$(DROPBEAR_LDFLAGS)" \
 	./configure \
 		--prefix=/usr \
 		--disable-lastlog \
@@ -34,6 +44,7 @@ configure:
 		--disable-loginfunc \
 		--disable-pututline \
 		--disable-pututxline \
+		--disable-wtmpx \
 		--enable-zlib \
 		--enable-bundled-libtom \
 		--host=$(HOST_TARGET) \
