@@ -27,7 +27,7 @@ jobs:
       - name: Prepare environment
         run: |
           sudo apt update
-          sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+          sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full util-linux
 
       - name: Shellcheck
         run: sh ./trunk/tools/shellcheck.sh
@@ -49,23 +49,6 @@ jobs:
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
-
-      - name: Normalize Linux 3.4 Kconfig for CI
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-
-          kconfig = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
-          s = kconfig.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
-          if old in s:
-              s = s.replace(old, new, 1)
-          kconfig.write_text(s)
-          PY
-          echo '--- Kconfig symbol ---'
-          grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
 
       - name: Build ZTE_Q7
         run: |
