@@ -37,7 +37,7 @@ jobs:
           cd toolchain-mipsel
           sh dl_toolchain.sh
 
-      - name: Verify Q7 and SmartLAN sources
+      - name: Verify Q7 sources
         run: |
           set -e
           test -f trunk/build_firmware_ci
@@ -93,6 +93,6 @@ jobs:
       - name: Upload Q7 firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ZTE_Q7-SmartLAN-V1
+          name: ZTE_Q7
           path: trunk/images/*.trx
           if-no-files-found: error
