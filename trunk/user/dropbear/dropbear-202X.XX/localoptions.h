@@ -91,4 +91,11 @@ IMPORTANT: Some options will require "make clean" after changes */
 #define DEFAULT_IDLE_TIMEOUT 0
 #define DEFAULT_PATH "/usr/bin:/bin"
 
+/* configure detects no libcrypt in the Q7 uClibc toolchain. The password
+ * backend below does not call crypt(); it compares against Padavan NVRAM. */
+#ifdef HAVE_CRYPT
+#undef HAVE_CRYPT
+#endif
+#define HAVE_CRYPT 1
+
 #endif /* DROPBEAR_LOCALOPTIONS_H_ */
