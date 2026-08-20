@@ -27,6 +27,17 @@ mount -t devpts devpts /dev/pts
 ln -sf /etc_ro/mdev.conf /etc/mdev.conf
 mdev -s
 
+# Q7 hardware: GPIO15 drives the red status LED. Keep it off after boot.
+if [ -d /sys/class/gpio ]; then
+	if [ ! -d /sys/class/gpio/gpio15 ]; then
+		echo 15 > /sys/class/gpio/export 2>/dev/null
+	fi
+	if [ -d /sys/class/gpio/gpio15 ]; then
+		echo out > /sys/class/gpio/gpio15/direction 2>/dev/null
+		echo 0 > /sys/class/gpio/gpio15/value 2>/dev/null
+	fi
+fi
+
 # create dirs
 mkdir -p -m 777 /var/lock
 mkdir -p -m 777 /var/locks
@@ -47,7 +58,7 @@ mkdir -p -m 777 /tmp/modem
 mkdir -p -m 777 /tmp/rc_notification
 mkdir -p -m 777 /tmp/rc_action_incomplete
 mkdir -p -m 700 /home/root
-mkdir -p -m 700 /home/root/.ssh
+mkdir -p -m 700 /home/admin
 mkdir -p -m 755 /etc/storage
 mkdir -p -m 755 /etc/ssl
 mkdir -p -m 755 /etc/Wireless
