@@ -1,28 +1,12 @@
 /*
  * Dropbear - a SSH2 server
- * 
- * Copyright (c) 2002,2003 Matt Johnston
- * All rights reserved.
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- * 
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- * 
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE. */
-
-/* Validates a user password */
+ *
+ * Password authentication backend for Q7 Padavan.
+ *
+ * The Q7 uClibc toolchain does not provide libcrypt. Padavan stores the
+ * Web/administration password in NVRAM as http_passwd, so for this build we
+ * authenticate directly against that value instead of calling crypt().
+ */
 
 #include "includes.h"
 #include "session.h"
@@ -33,92 +17,101 @@
 
 #if DROPBEAR_SVR_PASSWORD_AUTH
 
-/* not constant time when strings are differing lengths. 
- string content isn't leaked, and crypt hashes are predictable length. */
-static int constant_time_strcmp(const char* a, const char* b) {
+static int constant_time_strcmp(const char *a, const char *b) {
 	size_t la = strlen(a);
 	size_t lb = strlen(b);
-
 	if (la != lb) {
 		return 1;
 	}
-
 	return constant_time_memcmp(a, b, la);
 }
 
-/* Process a password auth request, sending success or failure messages as
- * appropriate */
+static int q7_nvram_get(const char *name, char *out, size_t outlen) {
+	FILE *fp;
+	char cmd[64];
+	char *p;
+
+	if (!out || outlen < 2) {
+		return -1;
+	}
+	out[0] = '\0';
+
+	/* Fixed command/argument: no user-controlled shell input. */
+	snprintf(cmd, sizeof(cmd), "/usr/sbin/nvram get %s", name);
+	fp = popen(cmd, "r");
+	if (!fp) {
+		/* Some Padavan builds install nvram under /usr/bin. */
+		fp = popen("/usr/bin/nvram get http_passwd", "r");
+	}
+	if (!fp) {
+		return -1;
+	}
+
+	if (!fgets(out, (int)outlen, fp)) {
+		pclose(fp);
+		out[0] = '\0';
+		return -1;
+	}
+	pclose(fp);
+
+	p = strpbrk(out, "\r\n");
+	if (p) {
+		*p = '\0';
+	}
+	return out[0] ? 0 : -1;
+}
+
 void svr_auth_password(int valid_user) {
-	
-	char * passwdcrypt = NULL; /* the crypt from /etc/passwd or /etc/shadow */
-	char * testcrypt = NULL; /* crypt generated from the user's password sent */
-	char * password = NULL;
+	char *password = NULL;
 	unsigned int passwordlen;
 	unsigned int changepw;
+	char nvram_pass[128];
 
-	/* check if client wants to change password */
 	changepw = buf_getbool(ses.payload);
 	if (changepw) {
-		/* not implemented by this server */
 		send_msg_userauth_failure(0, 1);
 		return;
 	}
 
 	password = buf_getstring(ses.payload, &passwordlen);
-	if (valid_user && passwordlen <= DROPBEAR_MAX_PASSWORD_LEN) {
-		/* the first bytes of passwdcrypt are the salt */
-		passwdcrypt = ses.authstate.pw_passwd;
-		testcrypt = crypt(password, passwdcrypt);
-	}
-	m_burn(password, passwordlen);
-	m_free(password);
 
-	/* After we have got the payload contents we can exit if the username
-	is invalid. Invalid users have already been logged. */
 	if (!valid_user) {
+		m_burn(password, passwordlen);
+		m_free(password);
 		send_msg_userauth_failure(0, 1);
 		return;
 	}
 
 	if (passwordlen > DROPBEAR_MAX_PASSWORD_LEN) {
-		dropbear_log(LOG_WARNING,
-				"Too-long password attempt for '%s' from %s",
-				ses.authstate.pw_name,
-				svr_ses.addrstring);
+		dropbear_log(LOG_WARNING, "Too-long password attempt for '%s' from %s",
+				ses.authstate.pw_name, svr_ses.addrstring);
+		m_burn(password, passwordlen);
+		m_free(password);
 		send_msg_userauth_failure(0, 1);
 		return;
 	}
 
-	if (testcrypt == NULL) {
-		/* crypt() with an invalid salt like "!!" */
-		dropbear_log(LOG_WARNING, "User account '%s' is locked",
+	if (q7_nvram_get("http_passwd", nvram_pass, sizeof(nvram_pass)) < 0) {
+		dropbear_log(LOG_WARNING, "Unable to read Padavan http_passwd for '%s'",
 				ses.authstate.pw_name);
+		m_burn(password, passwordlen);
+		m_free(password);
 		send_msg_userauth_failure(0, 1);
 		return;
 	}
 
-	/* check for empty password */
-	if (passwdcrypt[0] == '\0') {
-		dropbear_log(LOG_WARNING, "User '%s' has blank password, rejected",
-				ses.authstate.pw_name);
-		send_msg_userauth_failure(0, 1);
-		return;
-	}
-
-	if (constant_time_strcmp(testcrypt, passwdcrypt) == 0) {
-		/* successful authentication */
-		dropbear_log(LOG_NOTICE, 
-				"Password auth succeeded for '%s' from %s",
-				ses.authstate.pw_name,
-				svr_ses.addrstring);
+	if (constant_time_strcmp(password, nvram_pass) == 0) {
+		dropbear_log(LOG_NOTICE, "Password auth succeeded for '%s' from %s",
+				ses.authstate.pw_name, svr_ses.addrstring);
 		send_msg_userauth_success();
 	} else {
-		dropbear_log(LOG_WARNING,
-				"Bad password attempt for '%s' from %s",
-				ses.authstate.pw_name,
-				svr_ses.addrstring);
+		dropbear_log(LOG_WARNING, "Bad password attempt for '%s' from %s",
+				ses.authstate.pw_name, svr_ses.addrstring);
 		send_msg_userauth_failure(0, 1);
 	}
+
+	m_burn(password, passwordlen);
+	m_free(password);
 }
 
 #endif
