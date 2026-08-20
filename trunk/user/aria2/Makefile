@@ -55,7 +55,7 @@ configure:
 		--without-gnutls \
 		--with-libz \
 		--with-openssl \
-		--with-libxml2 \
+		--without-libxml2 \
 		--with-libiconv-prefix=$(STAGEDIR) \
 		PKG_CONFIG_LIBDIR="$(STAGEDIR)/lib/pkgconfig" \
 		ZLIB_CFLAGS="-I$(STAGEDIR)/include" \
