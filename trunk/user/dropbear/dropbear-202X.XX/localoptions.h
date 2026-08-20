@@ -61,8 +61,8 @@ IMPORTANT: Some options will require "make clean" after changes */
 #define DO_HOST_LOOKUP 0
 #define DO_MOTD 0
 #define MOTD_FILENAME "/etc/motd"
-/* Q7 toolchain has no crypt(); use public-key server authentication. */
-#define DROPBEAR_SVR_PASSWORD_AUTH 0
+/* Q7: password authentication is checked against Padavan NVRAM. */
+#define DROPBEAR_SVR_PASSWORD_AUTH 1
 #define DROPBEAR_SVR_PAM_AUTH 0
 #define DROPBEAR_SVR_PUBKEY_AUTH 1
 #define DROPBEAR_SVR_PUBKEY_OPTIONS 1
