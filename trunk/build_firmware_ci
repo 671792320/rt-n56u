@@ -286,6 +286,23 @@ if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 fi
 echo "#######################################################################"
 
+echo "--------------------------KCONFIG-NORMALIZE-------------------------"
+if ! command -v script >/dev/null 2>&1; then
+	echo "ERROR: util-linux 'script' command is required for non-interactive oldconfig"
+	exit 1
+fi
+# Linux 3.4.x does not provide olddefconfig. Run oldconfig inside a
+# pseudo-terminal so kconfig accepts the piped default answers in CI.
+yes "" | script -q -c "make ARCH=mips oldconfig" /dev/null
+if [ $? -ne 0 ]; then
+	echo "Kernel Kconfig normalization failed!"
+	exit 1
+fi
+if [ ! -f "$ROOTDIR/$CONFIG_LINUXDIR/include/config/auto.conf" ]; then
+	echo "Kernel Kconfig did not generate include/config/auto.conf"
+	exit 1
+fi
+
 echo "--------------------------MAKE-DEP--------------------------------"
 make dep
 echo "--------------------------MAKE-ALL--------------------------------"
