@@ -230,9 +230,6 @@ all:
 %_romfs:
 	$(MAKE) -C $(@:_romfs=) romfs
 
-%_clean:
-	$(MAKE) -C $(@:_clean=) clean
-
 romfs:
 	for i in $(dir_y) ; do \
 		[ ! -d $$i ] || \
