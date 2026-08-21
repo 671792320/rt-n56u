@@ -48,6 +48,7 @@ romfs:
 	$(ROMFSINST) /usr/bin/$(RAW_EXEC)
 	$(ROMFSINST) /usr/bin/$(dhcpdetect)
 	$(ROMFSINST) /usr/bin/$(lanwatch)
+	$(ROMFSINST) /usr/bin/lanwatch_start.sh
 
 clean:
 	rm -f $(EXEC) $(RAW_EXEC) $(OBJS) $(FILTER_OBJS) $(dhcpdetect) $(DHCP_OBJS) $(lanwatch) $(LANWATCH_OBJS)
