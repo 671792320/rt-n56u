@@ -14,7 +14,12 @@
 <script>
 var $j = jQuery.noConflict();
 <% login_state_hook(); %>
-function initial(){ show_banner(1); show_menu(5,7,6); show_footer(); }
+function checkEnter(e){ e=e||window.event; return (e.keyCode||e.which||0) === 13; }
+function initial(){
+  show_banner(1); show_menu(5,7,6); show_footer();
+  var defaults={lan_discovery_ifname:'eth2.1',lan_discovery_dhcp_timeout:'3',lan_discovery_timeout:'10',lan_discovery_onvif_port:'3702',lan_discovery_ssdp_port:'1900',lan_discovery_hik_port:'37020',lan_discovery_dahua_port:'37810'};
+  for(var k in defaults){ if(document.form[k] && document.form[k].value==='') document.form[k].value=defaults[k]; }
+}
 function save(){
   if (!login_safe()) return false;
   document.form.action_mode.value=' Apply ';
@@ -37,7 +42,7 @@ function save(){
 <input type="hidden" name="action_mode" value="">
 <input type="hidden" name="action_script" value="">
 <div class="container-fluid"><div class="row-fluid"><div class="span3"><div class="well sidebar-nav side_nav" style="padding:0"><ul id="mainMenu" class="clearfix"></ul><ul class="clearfix"><li><div id="subMenu" class="accordion"></div></li></ul></div></div>
-<div class="span9"><div class="box well grad_colour_dark_blue"><h2 class="box_head round_top">LAN 自动发现配置</h2><div class="round_bottom"><div class="row-fluid"><div class="alert alert-info">LAN口产生 Link Up 事件后，先检测 DHCP，再执行设备发现。默认启用。</div>
+<div class="span9"><div class="box well grad_colour_dark_blue"><h2 class="box_head round_top">LAN 自动发现配置</h2><div class="round_bottom"><div class="row-fluid"><div class="alert alert-info">LAN口产生 Link Up 事件后，先检测 DHCP，再执行设备发现。默认启用；自身设备地址会自动过滤。</div>
 <table width="100%" cellpadding="4" cellspacing="0" class="table">
 <tr><td>LAN事件检测</td><td><select name="lan_discovery_enable" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_enable", "0", "selected"); %>>禁用</option></select></td></tr>
 <tr><td>检测接口</td><td><input name="lan_discovery_ifname" class="span6" value="<% nvram_get_x("", "lan_discovery_ifname"); %>"></td></tr>
