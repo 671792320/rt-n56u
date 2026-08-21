@@ -36,7 +36,7 @@ run_discovery() {
         /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1
         rc=$?
         if [ "$rc" = "0" ]; then
-            log "DHCP server detected: $(cat /tmp/dhcpdetect_lan.log 2>/dev/null)"
+            log "DHCP server detected: $(< /tmp/dhcpdetect_lan.log)"
         else
             log "no DHCP server reply"
         fi
@@ -49,7 +49,7 @@ run_discovery() {
             -O "$onvif" -S "$ssdp" -H "$hik" -D "$dahua" -A "$raw" \
             >/tmp/camdiscover_lan.log 2>&1
         log "device discovery finished"
-        cat /tmp/camdiscover_lan.log | logger -t camdiscover
+        logger -t camdiscover < /tmp/camdiscover_lan.log
     fi
 }
 
@@ -71,9 +71,9 @@ while :; do
     fi
 
     if [ -r "/sys/class/net/$iface/carrier" ]; then
-        state="$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)"
+        state="$(< "/sys/class/net/$iface/carrier")"
     else
-        state="$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)"
+        state="$(< "/sys/class/net/$iface/operstate")"
         [ "$state" = "up" ] && state=1 || state=0
     fi
 
