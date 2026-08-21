@@ -14,18 +14,30 @@ CFLAGS += -Os -s -I. -I$(SHDIR) -I$(SHDIR)/include
 CFLAGS += -include $(CURDIR)/camdiscover_compat.h -include netinet/ip.h
 
 EXEC=camdiscover
+RAW_EXEC=camdiscover.raw
 dhcpdetect=dhcpdetect
+lanwatch=lanwatch
 OBJS=camdiscover.o
+FILTER_OBJS=camdiscover_filter.o
 DHCP_OBJS=dhcpdetect.o
+LANWATCH_OBJS=lanwatch.o
 
-all: $(EXEC) $(dhcpdetect)
+all: $(EXEC) $(RAW_EXEC) $(dhcpdetect) $(lanwatch)
 
-$(EXEC): $(OBJS)
+$(RAW_EXEC): $(OBJS)
 	$(CC) -o $@ $(OBJS)
+	$(STRIP) $@
+
+$(EXEC): $(FILTER_OBJS)
+	$(CC) -o $@ $(FILTER_OBJS)
 	$(STRIP) $@
 
 $(dhcpdetect): $(DHCP_OBJS)
 	$(CC) -o $@ $(DHCP_OBJS)
+	$(STRIP) $@
+
+$(lanwatch): $(LANWATCH_OBJS)
+	$(CC) -o $@ $(LANWATCH_OBJS)
 	$(STRIP) $@
 
 %.o: %.c
@@ -33,7 +45,9 @@ $(dhcpdetect): $(DHCP_OBJS)
 
 romfs:
 	$(ROMFSINST) /usr/bin/$(EXEC)
+	$(ROMFSINST) /usr/bin/$(RAW_EXEC)
 	$(ROMFSINST) /usr/bin/$(dhcpdetect)
+	$(ROMFSINST) /usr/bin/$(lanwatch)
 
 clean:
-	rm -f $(EXEC) $(OBJS) $(dhcpdetect) $(DHCP_OBJS)
+	rm -f $(EXEC) $(RAW_EXEC) $(OBJS) $(FILTER_OBJS) $(dhcpdetect) $(DHCP_OBJS) $(lanwatch) $(LANWATCH_OBJS)
