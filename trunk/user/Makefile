@@ -43,11 +43,13 @@ ifeq ($(CONFIG_FIRMWARE_INCLUDE_WINS),y)
 SAMBA_ENABLED=y
 endif
 
+ifeq ($(CONFIG_FIRMWARE_ENABLE_USB),y)
 ifdef CONFIG_MMC_BLOCK
 STORAGE_ENABLED=y
 endif
 ifdef CONFIG_BLK_DEV_SD
 STORAGE_ENABLED=y
+endif
 endif
 
 ifeq ($(STORAGE_ENABLED),y)
@@ -177,10 +179,10 @@ endif
 dir_$(TROJAN_ENABLE) += trojan
 dir_$(CONFIG_FIRMWARE_INCLUDE_REDSOCKS) += redsocks
 dir_$(CONFIG_FIRMWARE_INCLUDE_3PROXY) += 3proxy
+ifeq ($(CONFIG_FIRMWARE_ENABLE_USB),y)
 ifdef CONFIG_BLK_DEV_SD
 dir_$(CONFIG_FIRMWARE_INCLUDE_HDPARM) += hdparm
 endif
-ifdef CONFIG_USB_SUPPORT
 dir_y += p910nd
 dir_y += usb-modeswitch
 dir_y += comgt-0.32
@@ -204,7 +206,7 @@ dir_$(CONFIG_FIRMWARE_INCLUDE_FTPD) += vsftpd
 dir_$(CONFIG_FIRMWARE_INCLUDE_MINIDLNA) += minidlna
 dir_$(CONFIG_FIRMWARE_INCLUDE_FIREFLY) += firefly
 dir_$(CONFIG_FIRMWARE_INCLUDE_TRANSMISSION) += transmission
-dir_y += aria2
+dir_$(CONFIG_FIRMWARE_INCLUDE_ARIA) += aria2
 endif
 ifdef CONFIG_MTD_UBI
 ifneq ($(STORAGE_ENABLED),y)
@@ -229,9 +231,6 @@ all:
 
 %_romfs:
 	$(MAKE) -C $(@:_romfs=) romfs
-
-%_clean:
-	$(MAKE) -C $(@:_clean=) clean
 
 romfs:
 	for i in $(dir_y) ; do \
