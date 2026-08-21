@@ -27,6 +27,19 @@ jobs:
         run: |
           set -e
           python3 tools/lan_webui_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
+          s = p.read_text()
+          if 'function register_lan_discovery_menu()' not in s:
+              s += '''\n\n/* Register LAN discovery after the menu arrays have been initialized. */\nfunction register_lan_discovery_menu(){\n    if (typeof menuL1_title == "undefined" || typeof menuL1_link == "undefined" || typeof menuL1_icon == "undefined") return;\n    if (typeof lan_discovery_menu_index != "number") lan_discovery_menu_index = -1;\n    var i;\n    for (i=1; i<menuL1_title.length; i++) {\n        if (menuL1_link[i] == "Advanced_LANDiscover_Content.asp") { lan_discovery_menu_index=i; return; }\n    }\n    lan_discovery_menu_index = menuL1_title.length;\n    menuL1_title.push("LAN自动发现");\n    menuL1_link.push("Advanced_LANDiscover_Content.asp");\n    menuL1_icon.push("icon-search");\n}\n'''
+          marker='function show_menu(L1,L2,L3){'
+          if marker not in s:
+              raise SystemExit('show_menu function not found')
+          if 'register_lan_discovery_menu();' not in s:
+              s=s.replace(marker, marker+'\n\tregister_lan_discovery_menu();',1)
+          p.write_text(s)
+          PY
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/camdiscover/camdiscover.c
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
@@ -59,9 +72,9 @@ jobs:
           grep -q 'dir_y += lan_autodiscover' trunk/user/Makefile
           grep -q 'lan_autodiscover.sh' trunk/user/rc/init.c
           grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'lan_discovery_menu_index' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'register_lan_discovery_menu' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'show_menu(m,0,0)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'custom UDP' trunk/user/camdiscover/camdiscover.c
+          grep -q 'CUSTOM UDP discovery' trunk/user/camdiscover/camdiscover.c
           grep -q 'lan_discovery_custom_' trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Restore upstream userspace baseline
