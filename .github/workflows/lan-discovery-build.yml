@@ -30,23 +30,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
           s = state.read_text()
           if 'lan_discovery_menu_index = menuL1_title.length' not in s:
               pat = r'(menuL1_icon\s*=\s*new Array\([^;]+\);)'
               m = re.search(pat, s, re.S)
-              if not m:
-                  raise SystemExit('menuL1 arrays not found')
+              if not m: raise SystemExit('menuL1 arrays not found')
               inject = r'''\n\n/* Q7 LAN discovery: dedicated first-level menu item. */\nvar lan_discovery_menu_index = menuL1_title.length;\nmenuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");\nmenuL1_icon.push("icon-search");\n'''
               s = s[:m.end()] + inject + s[m.end():]
           state.write_text(s)
-
           page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
           p = page.read_text()
           p = re.sub(r'show_menu\([^;]*;\s*show_footer\(\);', "show_menu((typeof lan_discovery_menu_index == 'number' && lan_discovery_menu_index > 0) ? lan_discovery_menu_index : 1,0,0); show_footer();", p, count=1)
-          if 'lanCustomAdd' not in p:
-              raise SystemExit('dynamic custom UDP page was not generated')
+          if 'lanCustomAdd' not in p: raise SystemExit('dynamic custom UDP page was not generated')
           page.write_text(p)
           PY
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
@@ -100,22 +96,18 @@ jobs:
           s = p.read_text()
           old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
           new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
-          if old not in s:
-              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
+          if old not in s: raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
-
-          # The dynamic WebUI patch adds the custom probe array to camdiscover.c.
-          # Keep the source portable and guarantee a generous compile-time bound.
           c = Path('trunk/user/camdiscover/camdiscover.c')
           cs = c.read_text()
+          # Generated custom UDP code intentionally uses the Linux socket option
+          # directly; remove generator guard tokens if present on one line.
+          cs = cs.replace(';#ifdef SO_BINDTODEVICE', ';').replace('#endif\nmemset(&a', 'memset(&a')
           if '#define MAX_CUSTOM' not in cs:
               marker = '#define MAX_DEVICES     256'
-              if marker not in cs:
-                  raise SystemExit('MAX_DEVICES marker not found in camdiscover.c')
+              if marker not in cs: raise SystemExit('MAX_DEVICES marker not found')
               cs = cs.replace(marker, marker + '\n#ifndef MAX_CUSTOM\n#define MAX_CUSTOM      64\n#endif', 1)
-              c.write_text(cs)
-          else:
-              print('MAX_CUSTOM already defined')
+          c.write_text(cs)
           PY
 
       - name: Build ZTE_Q7
