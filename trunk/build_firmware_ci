@@ -193,12 +193,12 @@ fi
 if [ -n "$CONFIG_MT7610_AP" ] ; then
 	dir_wifi_ver="3.0.X.X"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7610" "$dir_wifi_dst/"
-	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt7610_ap" "$dir_wifi_dst/"
+	cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/mt7610_ap" "$dir_wifi_dst/"
 fi
 if [ -n "$CONFIG_MT76X2_AP" ] ; then
 	dir_wifi_ver="3.0.X.X"
 	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt76x2" "$dir_wifi_dst/"
-	cp -rfL "$dir_wifi_src/rtpci/$dir_wifi_ver/mt76x2_ap" "$dir_wifi_dst/"
+	cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/mt76x2_ap" "$dir_wifi_dst/"
 fi
 if [ -n "$CONFIG_MT76X3_AP" ] ; then
 	dir_wifi_ver="4.1.X.X"
@@ -277,7 +277,6 @@ if [ "$CONFIG_FIRMWARE_ENABLE_IPV6" != "y" ] ; then
 	func_disable_busybox_param "CONFIG_FEATURE_IPV6"
 	func_disable_busybox_param "CONFIG_FEATURE_PREFER_IPV4_ADDRESS"
 	func_disable_busybox_param "CONFIG_TRACEROUTE6"
-	func_disable_busybox_param "CONFIG_FEATURE_UDHCP_RFC5969"
 	func_disable_busybox_param "CONFIG_DHCP6C"
 	func_enable_busybox_param "CONFIG_IP"
 	func_enable_busybox_param "CONFIG_FEATURE_IP_ADDRESS"
@@ -288,12 +287,13 @@ echo "#######################################################################"
 
 echo "--------------------------KCONFIG-NORMALIZE-------------------------"
 if ! command -v script >/dev/null 2>&1; then
-	echo "ERROR: util-linux 'script' command is required for non-interactive oldconfig"
+	echo "ERROR: util-linux 'script' command is required for non-interactive Kconfig"
 	exit 1
 fi
-# Linux 3.4.x does not provide olddefconfig. Run oldconfig inside a
-# pseudo-terminal so kconfig accepts the piped default answers in CI.
-yes "" | script -q -c "make ARCH=mips oldconfig" /dev/null
+# Linux 3.4.x invokes silentoldconfig during every normal build.
+# Prepare the configuration once, using the actual silentoldconfig target
+# inside a pseudo-terminal so new symbols accept their default values.
+printf '\n%.0s' $(seq 1 4096) | script -q -c "make ARCH=mips silentoldconfig" /dev/null
 if [ $? -ne 0 ]; then
 	echo "Kernel Kconfig normalization failed!"
 	exit 1
