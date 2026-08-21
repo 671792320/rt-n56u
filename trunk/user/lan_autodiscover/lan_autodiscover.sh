@@ -36,7 +36,7 @@ run_discovery() {
         /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1
         rc=$?
         if [ "$rc" = "0" ]; then
-            log "DHCP server detected: $(< /tmp/dhcpdetect_lan.log)"
+            log "DHCP server detected: $(sed -n '1p' /tmp/dhcpdetect_lan.log 2>/dev/null)"
         else
             log "no DHCP server reply"
         fi
@@ -71,9 +71,9 @@ while :; do
     fi
 
     if [ -r "/sys/class/net/$iface/carrier" ]; then
-        state="$(< "/sys/class/net/$iface/carrier")"
+        state="$(sed -n '1p' "/sys/class/net/$iface/carrier" 2>/dev/null)"
     else
-        state="$(< "/sys/class/net/$iface/operstate")"
+        state="$(sed -n '1p' "/sys/class/net/$iface/operstate" 2>/dev/null)"
         [ "$state" = "up" ] && state=1 || state=0
     fi
 
