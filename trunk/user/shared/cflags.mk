@@ -48,7 +48,6 @@ endif
 
 ifdef CONFIG_RALINK_MT7621
 CFLAGS += -DCONFIG_RALINK_MT7621
-# new kernels use GIC shared offset = 8 (MIPS) + 7 (GIC local)
 ifdef CONFIG_MIPS_GIC
 CFLAGS += -DGIC_OFFSET=15
 else
@@ -93,7 +92,6 @@ else
 ifdef CONFIG_RT_SECOND_IF_RANGE_5GHZ
 CFLAGS += -DUSE_WID_5G=$(CONFIG_RT_SECOND_CARD)
 else
-
 ifdef CONFIG_RT_SECOND_IF_NONE
 ifdef CONFIG_DBDC_MODE
 ifdef CONFIG_RT_FIRST_IF_MT7615E
@@ -105,7 +103,6 @@ endif
 endif
 endif
 endif
-
 endif
 endif
 
@@ -159,7 +156,7 @@ CFLAGS += -DAPP_ARIA
 endif
 endif
 
-ifneq ($(BOARD_NUM_USB_PORTS),0)
+ifeq ($(CONFIG_FIRMWARE_ENABLE_USB),y)
 CFLAGS += -DUSE_USB_SUPPORT
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_LPRD),y)
 CFLAGS += -DSRV_LPRD
@@ -257,4 +254,3 @@ endif
 ifeq ($(CONFIG_32M_REBOOT_FIXUP),y)
 CFLAGS += -DMTD_FLASH_32M_REBOOT_BUG
 endif
-
