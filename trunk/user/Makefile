@@ -196,7 +196,6 @@ dir_$(CONFIG_FIRMWARE_INCLUDE_NFSD) += nfs-utils
 ifneq (,$(filter y,$(CONFIG_FIRMWARE_INCLUDE_NFSD) $(CONFIG_FIRMWARE_INCLUDE_NFSC)))
 dir_y += rpcbind
 endif
-dir_y += optware
 dir_y += util-linux
 dir_$(FS_EXT_ENABLED) += e2fsprogs
 dir_$(FS_FAT_ENABLED) += dosfstools
@@ -210,7 +209,6 @@ dir_$(CONFIG_FIRMWARE_INCLUDE_ARIA) += aria2
 endif
 ifdef CONFIG_MTD_UBI
 ifneq ($(STORAGE_ENABLED),y)
-dir_y += optware
 dir_y += util-linux
 endif
 dir_y += mtd-utils
