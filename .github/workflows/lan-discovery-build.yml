@@ -23,27 +23,44 @@ jobs:
           ref: lan-discovery-config
           fetch-depth: 1
 
-      - name: Apply configurable LAN discovery WebUI and custom UDP probes
+      - name: Apply LAN discovery WebUI and custom UDP probes
         run: |
           set -e
           python3 tools/lan_webui_patch.py
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
-          s = p.read_text()
-          if 'function register_lan_discovery_menu()' not in s:
-              s += '''\n\n/* Register LAN discovery after the menu arrays have been initialized. */\nfunction register_lan_discovery_menu(){\n    if (typeof menuL1_title == "undefined" || typeof menuL1_link == "undefined" || typeof menuL1_icon == "undefined") return;\n    if (typeof lan_discovery_menu_index != "number") lan_discovery_menu_index = -1;\n    var i;\n    for (i=1; i<menuL1_title.length; i++) {\n        if (menuL1_link[i] == "Advanced_LANDiscover_Content.asp") { lan_discovery_menu_index=i; return; }\n    }\n    lan_discovery_menu_index = menuL1_title.length;\n    menuL1_title.push("LAN自动发现");\n    menuL1_link.push("Advanced_LANDiscover_Content.asp");\n    menuL1_icon.push("icon-search");\n}\n'''
-          marker='function show_menu(L1,L2,L3){'
-          if marker not in s:
-              raise SystemExit('show_menu function not found')
-          if 'register_lan_discovery_menu();' not in s:
-              s=s.replace(marker, marker+'\n\tregister_lan_discovery_menu();',1)
-          p.write_text(s)
+          import re
+
+          state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
+          s = state.read_text()
+          # Register the item immediately after the real L1 arrays are initialized.
+          if 'lan_discovery_menu_index = menuL1_title.length;' not in s:
+              pat = r'(menuL1_icon\s*=\s*new Array\([^;]+\);)'
+              m = re.search(pat, s, re.S)
+              if not m:
+                  raise SystemExit('menuL1 arrays not found')
+              inject = r'''\n\n/* Q7 LAN discovery: dedicated first-level menu item. */\nvar lan_discovery_menu_index = -1;\nfor (var _ldi = 1; _ldi < menuL1_title.length; _ldi++) {\n    if (menuL1_link[_ldi] == "Advanced_LANDiscover_Content.asp") {\n        lan_discovery_menu_index = _ldi;\n        break;\n    }\n}\nif (lan_discovery_menu_index < 0) {\n    lan_discovery_menu_index = menuL1_title.length;\n    menuL1_title.push("LAN自动发现");\n    menuL1_link.push("Advanced_LANDiscover_Content.asp");\n    menuL1_icon.push("icon-search");\n}\n'''
+              s = s[:m.end()] + inject + s[m.end():]
+          state.write_text(s)
+
+          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          p = page.read_text()
+          p = re.sub(r'show_menu\([^;]*;\s*show_footer\(\);', "show_menu((typeof lan_discovery_menu_index == 'number' && lan_discovery_menu_index > 0) ? lan_discovery_menu_index : 1,0,0); show_footer();", p, count=1)
+          if 'lan_custom_rows' not in p:
+              marker = '<div class="row-fluid"><div class="span12"><button type="button" class="btn btn-primary" onClick="save();">保存设置</button>'
+              if marker not in p:
+                  raise SystemExit('save button marker not found')
+              rows = '''<h4>自定义 UDP 发现</h4>\n<div class="alert alert-warning">只添加你需要的协议。点击 + 新增一条，点击 − 删除最后一条。最多 6 条；删除后该项不会参与发现。</div>\n<table width="100%" class="table table-condensed"><tr><th>启用</th><th>名称</th><th>UDP端口</th><th>发送内容</th><th>操作</th></tr>\n<div id="lan_custom_rows">\n'''
+              for i in range(1,7):
+                  rows += f'''<tr id="lan_custom_row_{i}" style="display:{'table-row' if i == 1 else 'none'}"><td><select name="lan_discovery_custom_{i}_enable"><option value="1">是</option><option value="0" selected>否</option></select></td><td><input name="lan_discovery_custom_{i}_name" class="span3" value="<% nvram_get_x("", "lan_discovery_custom_{i}_name"); %>"></td><td><input name="lan_discovery_custom_{i}_port" class="span2" value="<% nvram_get_x("", "lan_discovery_custom_{i}_port"); %>"></td><td><input name="lan_discovery_custom_{i}_payload" class="span5" value="<% nvram_get_x("", "lan_discovery_custom_{i}_payload"); %>"></td><td></td></tr>\n'''
+              rows += '''</div></table><div style="margin:8px 0"><button type="button" class="btn btn-success" onclick="lanCustomAdd();">＋ 新增</button> <button type="button" class="btn" onclick="lanCustomRemove();">− 删除</button> <span id="lan_custom_count">1/6</span></div>\n'''
+              p = p.replace(marker, rows + marker, 1)
+              js = '''\nvar lanCustomCount=1;\nfunction lanCustomSync(){\n  for(var i=1;i<=6;i++){var r=document.getElementById('lan_custom_row_'+i); if(r) r.style.display=(i<=lanCustomCount)?'table-row':'none';}\n  var c=document.getElementById('lan_custom_count'); if(c)c.innerHTML=lanCustomCount+'/6';\n}\nfunction lanCustomAdd(){ if(lanCustomCount<6){lanCustomCount++;lanCustomSync();} }\nfunction lanCustomRemove(){ if(lanCustomCount>1){ var i=lanCustomCount; ['enable','name','port','payload'].forEach(function(x){var e=document.form['lan_discovery_custom_'+i+'_'+x];if(e)e.value=(x=='enable'?'0':'');}); lanCustomCount--;lanCustomSync(); } }\nfunction lanCustomInit(){ var n=1; for(var i=1;i<=6;i++){var nm=document.form['lan_discovery_custom_'+i+'_name'],pt=document.form['lan_discovery_custom_'+i+'_port'],en=document.form['lan_discovery_custom_'+i+'_enable']; if((nm&&nm.value)||(pt&&pt.value)||(en&&en.value=='1')) n=i; } lanCustomCount=n;lanCustomSync(); }\n'''
+              p = p.replace('function save(){', js + '\nfunction save(){', 1)
+              p = p.replace('show_banner(1);', 'show_banner(1); lanCustomInit();', 1)
+          page.write_text(p)
           PY
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
-          test -f trunk/user/camdiscover/camdiscover.c
-          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Prepare environment
         run: |
@@ -72,10 +89,10 @@ jobs:
           grep -q 'dir_y += lan_autodiscover' trunk/user/Makefile
           grep -q 'lan_autodiscover.sh' trunk/user/rc/init.c
           grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'register_lan_discovery_menu' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'show_menu(m,0,0)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'CUSTOM UDP discovery' trunk/user/camdiscover/camdiscover.c
+          grep -q 'lan_discovery_menu_index = menuL1_title.length' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'lanCustomAdd' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'lan_discovery_custom_' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'CUSTOM UDP discovery' trunk/user/camdiscover/camdiscover.c
 
       - name: Restore upstream userspace baseline
         run: |
@@ -94,8 +111,7 @@ jobs:
           s = p.read_text()
           old = 'config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'
           new = 'config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'
-          if old not in s:
-              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
+          if old not in s: raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
           PY
 
