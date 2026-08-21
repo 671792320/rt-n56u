@@ -16,19 +16,23 @@
  */
 #include <arpa/inet.h>
 #include <getopt.h>
-#include <net/if.h>
 #include <netinet/in.h>
-#include <netinet/ip.h>
-#include <netpacket/packet.h>
-#include <linux/if_ether.h>
-#include <linux/if_arp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Use the kernel UAPI networking headers consistently.  The old Padavan
+ * uClibc headers expose duplicate definitions when net/if.h/netpacket/packet.h
+ * are mixed with linux/if_arp.h. */
+#include <linux/if.h>
+#include <linux/if_ether.h>
+#include <linux/if_arp.h>
+#include <linux/if_packet.h>
 
 #define ONVIF_ADDR      "239.255.255.250"
 #define ONVIF_PORT      3702
@@ -57,6 +61,28 @@ struct seen_entry {
 
 static struct seen_entry seen[MAX_DEVICES];
 static int seen_count;
+
+static unsigned int get_ifindex(const char *ifname)
+{
+    int fd;
+    struct ifreq ifr;
+
+    if (!ifname || !*ifname)
+        return 0;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return 0;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    return (unsigned int)ifr.ifr_ifindex;
+}
 
 static int seen_add(const char *key)
 {
@@ -250,7 +276,7 @@ static int send_dahua_probe(int fd)
         return -1;
     u = (unsigned int *)frame;
     u[0] = 32;
-    u[1] = 0x50494844; /* "DHIP" */
+    u[1] = 0x50494844;
     u[2] = 0;
     u[3] = 0;
     u[4] = (unsigned int)blen;
@@ -449,7 +475,7 @@ int main(int argc, char **argv)
 
     if (!ifname) ifname = "br0";
     c.ifname = ifname;
-    c.ifindex = if_nametoindex(ifname);
+    c.ifindex = get_ifindex(ifname);
     if (!c.ifindex) {
         fprintf(stderr, "camdiscover: interface %s not found\n", ifname);
         return 1;
@@ -500,29 +526,29 @@ int main(int argc, char **argv)
 
     end = time(NULL) + timeout;
     while (time(NULL) < end) {
-        fd_set r;
+        fd_set rfds;
         struct timeval tv;
         int maxfd = -1;
+        int left = (int)(end - time(NULL));
 
-        FD_ZERO(&r);
-        if (c.fd_onvif >= 0) { FD_SET(c.fd_onvif, &r); if (c.fd_onvif > maxfd) maxfd = c.fd_onvif; }
-        if (c.fd_ssdp >= 0) { FD_SET(c.fd_ssdp, &r); if (c.fd_ssdp > maxfd) maxfd = c.fd_ssdp; }
-        if (c.fd_hik >= 0) { FD_SET(c.fd_hik, &r); if (c.fd_hik > maxfd) maxfd = c.fd_hik; }
-        if (c.fd_dahua >= 0) { FD_SET(c.fd_dahua, &r); if (c.fd_dahua > maxfd) maxfd = c.fd_dahua; }
-        if (c.fd_raw >= 0) { FD_SET(c.fd_raw, &r); if (c.fd_raw > maxfd) maxfd = c.fd_raw; }
+        if (left < 0) left = 0;
+        FD_ZERO(&rfds);
+        if (c.fd_onvif >= 0) { FD_SET(c.fd_onvif, &rfds); if (c.fd_onvif > maxfd) maxfd = c.fd_onvif; }
+        if (c.fd_ssdp >= 0) { FD_SET(c.fd_ssdp, &rfds); if (c.fd_ssdp > maxfd) maxfd = c.fd_ssdp; }
+        if (c.fd_hik >= 0) { FD_SET(c.fd_hik, &rfds); if (c.fd_hik > maxfd) maxfd = c.fd_hik; }
+        if (c.fd_dahua >= 0) { FD_SET(c.fd_dahua, &rfds); if (c.fd_dahua > maxfd) maxfd = c.fd_dahua; }
+        if (c.fd_raw >= 0) { FD_SET(c.fd_raw, &rfds); if (c.fd_raw > maxfd) maxfd = c.fd_raw; }
         if (maxfd < 0) break;
 
-        tv.tv_sec = (long)(end - time(NULL));
+        tv.tv_sec = left > 1 ? 1 : left;
         tv.tv_usec = 0;
-        if (tv.tv_sec < 0) break;
-        rc = select(maxfd + 1, &r, NULL, NULL, &tv);
-        if (rc <= 0) continue;
-
-        if (c.fd_onvif >= 0 && FD_ISSET(c.fd_onvif, &r)) handle_onvif(c.fd_onvif);
-        if (c.fd_ssdp >= 0 && FD_ISSET(c.fd_ssdp, &r)) handle_ssdp(c.fd_ssdp);
-        if (c.fd_hik >= 0 && FD_ISSET(c.fd_hik, &r)) handle_hik(c.fd_hik);
-        if (c.fd_dahua >= 0 && FD_ISSET(c.fd_dahua, &r)) handle_dahua(c.fd_dahua);
-        if (c.fd_raw >= 0 && FD_ISSET(c.fd_raw, &r)) handle_raw(c.fd_raw);
+        if (select(maxfd + 1, &rfds, NULL, NULL, &tv) < 0)
+            continue;
+        if (c.fd_onvif >= 0 && FD_ISSET(c.fd_onvif, &rfds)) handle_onvif(c.fd_onvif);
+        if (c.fd_ssdp >= 0 && FD_ISSET(c.fd_ssdp, &rfds)) handle_ssdp(c.fd_ssdp);
+        if (c.fd_hik >= 0 && FD_ISSET(c.fd_hik, &rfds)) handle_hik(c.fd_hik);
+        if (c.fd_dahua >= 0 && FD_ISSET(c.fd_dahua, &rfds)) handle_dahua(c.fd_dahua);
+        if (c.fd_raw >= 0 && FD_ISSET(c.fd_raw, &rfds)) handle_raw(c.fd_raw);
     }
 
     if (c.fd_onvif >= 0) close(c.fd_onvif);
@@ -530,8 +556,5 @@ int main(int argc, char **argv)
     if (c.fd_hik >= 0) close(c.fd_hik);
     if (c.fd_dahua >= 0) close(c.fd_dahua);
     if (c.fd_raw >= 0) close(c.fd_raw);
-
-    printf("[camdiscover] finished devices=%d\n", seen_count);
-    fflush(stdout);
     return 0;
 }
