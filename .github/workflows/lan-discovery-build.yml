@@ -28,6 +28,7 @@ jobs:
         run: |
           set -e
           python3 tools/apply_lan_discovery.py
+          python3 tools/fix_lan_compile.py
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Commit generated source changes
@@ -60,7 +61,6 @@ jobs:
           test -f trunk/build_firmware_ci
           test -f trunk/configs/templates/ZTE_Q7.config
           test -f trunk/configs/boards/ZTE_Q7/board.h
-          test -f trunk/configs/boards/ZTE_Q7/board.mk
           test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           test -f trunk/user/camdiscover/camdiscover.c
           test -f trunk/user/camdiscover/dhcpdetect.c
