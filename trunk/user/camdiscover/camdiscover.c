@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -61,6 +62,9 @@ struct seen_entry {
 
 static struct seen_entry seen[MAX_DEVICES];
 static int seen_count;
+static char self_mac[32];
+static char self_ips[16][INET_ADDRSTRLEN];
+static int self_ip_count;
 
 static unsigned int get_ifindex(const char *ifname)
 {
@@ -125,9 +129,65 @@ static void extract_tag(const char *x, const char *tag, char *o, size_t n)
     o[l] = 0;
 }
 
+static int is_self_ip(const char *ip)
+{
+    int i;
+    if (!ip || !*ip) return 0;
+    for (i = 0; i < self_ip_count; i++)
+        if (!strcmp(self_ips[i], ip)) return 1;
+    return 0;
+}
+
+static void load_self_addresses(void)
+{
+    int fd;
+    char buf[4096];
+    struct ifconf ifc;
+    struct ifreq *ifr;
+    int i, n;
+
+    self_ip_count = 0;
+    self_mac[0] = 0;
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    memset(&ifc, 0, sizeof(ifc));
+    ifc.ifc_len = sizeof(buf);
+    ifc.ifc_buf = buf;
+    if (ioctl(fd, SIOCGIFCONF, &ifc) == 0) {
+        n = ifc.ifc_len / (int)sizeof(struct ifreq);
+        ifr = ifc.ifc_req;
+        for (i = 0; i < n && self_ip_count < 16; i++) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)&ifr[i].ifr_addr;
+            if (sa->sin_family == AF_INET &&
+                inet_ntop(AF_INET, &sa->sin_addr, self_ips[self_ip_count], INET_ADDRSTRLEN))
+                self_ip_count++;
+        }
+    }
+    close(fd);
+}
+
+static void load_self_mac(const char *ifname)
+{
+    int fd;
+    struct ifreq ifr;
+    unsigned char *m;
+    if (!ifname) return;
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == 0) {
+        m = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+        snprintf(self_mac, sizeof(self_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+    close(fd);
+}
+
 static void print_ipv4_device(const char *kind, const char *ip, const char *mac)
 {
     char key[80];
+    if (is_self_ip(ip)) return;
     snprintf(key, sizeof(key), "%s:%s:%s", kind, ip ? ip : "", mac ? mac : "");
     if (!seen_add(key))
         return;
@@ -141,6 +201,7 @@ static void print_ipv4_device(const char *kind, const char *ip, const char *mac)
 static void print_text_device(const char *kind, const char *ip, const char *text)
 {
     char key[80];
+    if (is_self_ip(ip)) return;
     snprintf(key, sizeof(key), "%s:%s", kind, ip ? ip : "");
     if (!seen_add(key))
         return;
@@ -219,7 +280,7 @@ static int send_multicast(int fd, const char *group, int port, const char *data,
     return (n == (ssize_t)len) ? 0 : -1;
 }
 
-static int send_onvif_probe(int fd)
+static int send_onvif_probe(int fd, int port)
 {
     char p[2048];
     int n;
@@ -238,10 +299,10 @@ static int send_onvif_probe(int fd)
         "</d:Probe></e:Body></e:Envelope>", (unsigned long)time(NULL));
     if (n < 0 || n >= (int)sizeof(p))
         return -1;
-    return send_multicast(fd, ONVIF_ADDR, ONVIF_PORT, p, (size_t)n);
+    return send_multicast(fd, ONVIF_ADDR, port, p, (size_t)n);
 }
 
-static int send_ssdp_probe(int fd)
+static int send_ssdp_probe(int fd, int port)
 {
     static const char p[] =
         "M-SEARCH * HTTP/1.1\r\n"
@@ -250,10 +311,10 @@ static int send_ssdp_probe(int fd)
         "MX: 2\r\n"
         "ST: ssdp:all\r\n"
         "USER-AGENT: Padavan-camdiscover/1.0\r\n\r\n";
-    return send_multicast(fd, SSDP_ADDR, SSDP_PORT, p, strlen(p));
+    return send_multicast(fd, SSDP_ADDR, port, p, strlen(p));
 }
 
-static int send_hik_probe(int fd)
+static int send_hik_probe(int fd, int port)
 {
     static const char p[] =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
@@ -261,10 +322,10 @@ static int send_hik_probe(int fd)
         "<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n"
         "<Types>inquiry</Types>\r\n"
         "</Probe>\r\n";
-    return send_multicast(fd, HIK_ADDR, HIK_PORT, p, strlen(p));
+    return send_multicast(fd, HIK_ADDR, port, p, strlen(p));
 }
 
-static int send_dahua_probe(int fd)
+static int send_dahua_probe(int fd, int port)
 {
     unsigned char frame[320];
     unsigned int *u;
@@ -284,7 +345,7 @@ static int send_dahua_probe(int fd)
     u[6] = (unsigned int)blen;
     u[7] = 0;
     memcpy(frame + 32, body, blen);
-    return send_multicast(fd, DAHUA_ADDR, DAHUA_PORT, (const char *)frame, 32 + blen);
+    return send_multicast(fd, DAHUA_ADDR, port, (const char *)frame, 32 + blen);
 }
 
 static void handle_onvif(int fd)
@@ -418,6 +479,7 @@ static void handle_raw(int fd)
         ipoff += 4;
     }
     mac_to_text(buf + 6, mac, sizeof(mac));
+    if (self_mac[0] && !strcasecmp(mac, self_mac)) return;
 
     if (proto == ETH_P_ARP && n >= (ssize_t)(ipoff + sizeof(struct arphdr) + 20)) {
         ah = (struct arphdr *)(buf + ipoff);
@@ -441,17 +503,22 @@ static void handle_raw(int fd)
 
 static void usage(const char *p)
 {
-    printf("Usage: %s [-i interface] [-t seconds]\n", p);
-    printf("  -i interface   interface to discover on (recommended: eth2.1)\n");
+    printf("Usage: %s [-i interface] [-t seconds] [-o onvif] [-s ssdp] [-k hik] [-d dahua] [-O 0|1] [-S 0|1] [-H 0|1] [-D 0|1] [-A 0|1]\n", p);
+    printf("  -i interface   discovery interface (default br0)\n");
     printf("  -t seconds     discovery window, 1..60 (default 10)\n");
-    printf("\nActive: ONVIF, SSDP/UPnP, Hikvision SADP, Dahua DHIP\n");
-    printf("Passive: ARP and IPv4 device observation\n");
+    printf("  -o/-s/-k/-d    protocol destination ports\n");
+    printf("  -O/-S/-H/-D    enable ONVIF/SSDP/HIK-SADP/DAHUA-DHIP\n");
+    printf("  -A              enable ARP/IPv4 passive discovery\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *ifname = NULL;
     int timeout = 10;
+    int onvif_port = ONVIF_PORT, ssdp_port = SSDP_PORT;
+    int hik_port = HIK_PORT, dahua_port = DAHUA_PORT;
+    int enable_onvif = 1, enable_ssdp = 1, enable_hik = 1;
+    int enable_dahua = 1, enable_raw = 1;
     int opt;
     struct discover_ctx c;
     time_t end;
@@ -460,14 +527,23 @@ int main(int argc, char **argv)
     memset(&c, 0, sizeof(c));
     c.fd_onvif = c.fd_ssdp = c.fd_hik = c.fd_dahua = c.fd_raw = -1;
 
-    while ((opt = getopt(argc, argv, "i:t:h")) != -1) {
+    while ((opt = getopt(argc, argv, "i:t:o:s:k:d:O:S:H:D:A:h")) != -1) {
         if (opt == 'i') {
             ifname = optarg;
         } else if (opt == 't') {
             timeout = atoi(optarg);
             if (timeout < 1) timeout = 1;
             if (timeout > 60) timeout = 60;
-        } else {
+        } else if (opt == 'o') onvif_port = atoi(optarg);
+        else if (opt == 's') ssdp_port = atoi(optarg);
+        else if (opt == 'k') hik_port = atoi(optarg);
+        else if (opt == 'd') dahua_port = atoi(optarg);
+        else if (opt == 'O') enable_onvif = atoi(optarg) ? 1 : 0;
+        else if (opt == 'S') enable_ssdp = atoi(optarg) ? 1 : 0;
+        else if (opt == 'H') enable_hik = atoi(optarg) ? 1 : 0;
+        else if (opt == 'D') enable_dahua = atoi(optarg) ? 1 : 0;
+        else if (opt == 'A') enable_raw = atoi(optarg) ? 1 : 0;
+        else {
             usage(argv[0]);
             return opt == 'h' ? 0 : 1;
         }
@@ -476,21 +552,24 @@ int main(int argc, char **argv)
     if (!ifname) ifname = "br0";
     c.ifname = ifname;
     c.ifindex = get_ifindex(ifname);
+    load_self_addresses();
+    load_self_mac(ifname);
     if (!c.ifindex) {
         fprintf(stderr, "camdiscover: interface %s not found\n", ifname);
         return 1;
     }
 
-    printf("[camdiscover] interface=%s ifindex=%u timeout=%d\n",
-           c.ifname, c.ifindex, timeout);
+    printf("[camdiscover] interface=%s ifindex=%u timeout=%d ports=%d/%d/%d/%d protocols=%d%d%d%d raw=%d\n",
+           c.ifname, c.ifindex, timeout, onvif_port, ssdp_port, hik_port, dahua_port,
+           enable_onvif, enable_ssdp, enable_hik, enable_dahua, enable_raw);
     fflush(stdout);
 
-    c.fd_onvif = make_udp_receiver(ONVIF_ADDR, ONVIF_PORT, c.ifindex);
-    c.fd_ssdp = make_udp_receiver(SSDP_ADDR, SSDP_PORT, c.ifindex);
-    c.fd_hik = make_udp_receiver(HIK_ADDR, HIK_PORT, c.ifindex);
-    c.fd_dahua = make_udp_receiver(DAHUA_ADDR, DAHUA_PORT, c.ifindex);
+    if (enable_onvif) c.fd_onvif = make_udp_receiver(ONVIF_ADDR, onvif_port, c.ifindex);
+    if (enable_ssdp) c.fd_ssdp = make_udp_receiver(SSDP_ADDR, ssdp_port, c.ifindex);
+    if (enable_hik) c.fd_hik = make_udp_receiver(HIK_ADDR, hik_port, c.ifindex);
+    if (enable_dahua) c.fd_dahua = make_udp_receiver(DAHUA_ADDR, dahua_port, c.ifindex);
 
-    c.fd_raw = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    c.fd_raw = enable_raw ? socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)) : -1;
     if (c.fd_raw >= 0) {
         struct sockaddr_ll sll;
         memset(&sll, 0, sizeof(sll));
@@ -507,19 +586,19 @@ int main(int argc, char **argv)
     }
 
     if (c.fd_onvif >= 0) {
-        rc = send_onvif_probe(c.fd_onvif);
+        rc = send_onvif_probe(c.fd_onvif, onvif_port);
         printf("[camdiscover] ONVIF probe %s\n", rc == 0 ? "sent" : "FAILED");
     } else printf("[camdiscover] ONVIF socket FAILED\n");
     if (c.fd_ssdp >= 0) {
-        rc = send_ssdp_probe(c.fd_ssdp);
+        rc = send_ssdp_probe(c.fd_ssdp, ssdp_port);
         printf("[camdiscover] SSDP probe %s\n", rc == 0 ? "sent" : "FAILED");
     } else printf("[camdiscover] SSDP socket FAILED\n");
     if (c.fd_hik >= 0) {
-        rc = send_hik_probe(c.fd_hik);
+        rc = send_hik_probe(c.fd_hik, hik_port);
         printf("[camdiscover] HIK-SADP probe %s\n", rc == 0 ? "sent" : "FAILED");
     } else printf("[camdiscover] HIK-SADP socket FAILED\n");
     if (c.fd_dahua >= 0) {
-        rc = send_dahua_probe(c.fd_dahua);
+        rc = send_dahua_probe(c.fd_dahua, dahua_port);
         printf("[camdiscover] DAHUA-DHIP probe %s\n", rc == 0 ? "sent" : "FAILED");
     } else printf("[camdiscover] DAHUA-DHIP socket FAILED\n");
     fflush(stdout);

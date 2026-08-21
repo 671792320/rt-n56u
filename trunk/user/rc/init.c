@@ -517,6 +517,11 @@ init_main_loop(void)
 	/* Router init and start */
 	init_router();
 
+	/* Start the configurable LAN discovery watcher. It is self-contained and
+	 * reads its settings from NVRAM, so no board-specific interface is baked in. */
+	if (access("/usr/bin/lan_autodiscover.sh", X_OK) == 0)
+		system("/usr/bin/lan_autodiscover.sh >/dev/null 2>&1 &");
+
 	/* unblock SIGUSR1 */
 	control_signal(SIGUSR1, SIG_UNBLOCK);
 

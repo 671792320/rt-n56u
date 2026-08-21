@@ -215,6 +215,7 @@ dir_y += mtd-utils
 endif
 
 dir_y += camdiscover
+dir_y += lan_autodiscover
 dir_y += netmgr
 
 all:
