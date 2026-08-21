@@ -2,11 +2,16 @@
 #define CAMDISCOVER_COMPAT_H
 
 /*
- * The Q7 uClibc toolchain ships old libc networking headers alongside
- * Linux 3.4 UAPI headers.  Both sets define sockaddr_ll/ifreq/ifmap.
- * camdiscover uses the Linux packet API, so use the kernel definitions
- * and provide the libc function declaration it needs.
+ * Q7 uses an old uClibc toolchain whose libc networking headers conflict
+ * with the Linux 3.4 UAPI packet headers. camdiscover uses the kernel
+ * packet API, so select the kernel definitions consistently.
+ *
+ * linux/if.h embeds struct sockaddr, therefore socket.h must be included
+ * first.  Do not include net/if.h or netpacket/packet.h here: their structs
+ * conflict with linux/if.h and linux/if_packet.h on this toolchain.
  */
+#include <sys/socket.h>
+
 #ifndef _NET_IF_H
 #define _NET_IF_H 1
 #endif
