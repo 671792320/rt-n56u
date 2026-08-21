@@ -23,12 +23,14 @@ jobs:
           ref: lan-discovery-config
           fetch-depth: 1
 
-      - name: Apply LAN discovery source changes
+      - name: Verify committed LAN discovery sources
         run: |
           set -e
-          python3 tools/apply_lan_discovery.py
-          python3 tools/fix_lan_compile.py
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/camdiscover/camdiscover.c
+          test -f trunk/user/camdiscover/dhcpdetect.c
+          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
 
       - name: Register WebUI page
         run: |
