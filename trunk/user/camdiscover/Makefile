@@ -11,12 +11,10 @@ CFLAGS += -include $(CURDIR)/camdiscover_compat.h -include netinet/ip.h
 
 EXEC=camdiscover
 dhcpdetect=dhcpdetect
-udpdiscover=udpdiscover
 OBJS=camdiscover.o
 DHCP_OBJS=dhcpdetect.o
-UDP_OBJS=udpdiscover.o
 
-all: $(EXEC) $(dhcpdetect) $(udpdiscover)
+all: $(EXEC) $(dhcpdetect)
 
 $(EXEC): $(OBJS)
 	$(CC) -o $@ $(OBJS)
@@ -26,17 +24,12 @@ $(dhcpdetect): $(DHCP_OBJS)
 	$(CC) -o $@ $(DHCP_OBJS)
 	$(STRIP) $@
 
-$(udpdiscover): $(UDP_OBJS)
-	$(CC) -o $@ $(UDP_OBJS)
-	$(STRIP) $@
-
 %.o: %.c
 	$(CC) -c $< $(CFLAGS)
 
 romfs:
 	$(ROMFSINST) /usr/bin/$(EXEC)
 	$(ROMFSINST) /usr/bin/$(dhcpdetect)
-	$(ROMFSINST) /usr/bin/$(udpdiscover)
 
 clean:
-	rm -f $(EXEC) $(OBJS) $(dhcpdetect) $(DHCP_OBJS) $(udpdiscover) $(UDP_OBJS)
+	rm -f $(EXEC) $(OBJS) $(dhcpdetect) $(DHCP_OBJS)
