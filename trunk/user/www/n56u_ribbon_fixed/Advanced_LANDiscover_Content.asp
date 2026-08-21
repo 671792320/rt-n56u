@@ -16,7 +16,7 @@ var $j = jQuery.noConflict();
 <% login_state_hook(); %>
 function checkEnter(e){ e=e||window.event; return (e.keyCode||e.which||0) === 13; }
 function initial(){
-  show_banner(1); show_menu(5,7,6); show_footer();
+  show_banner(1); show_menu(5,3,7); show_footer();
   var defaults={lan_discovery_ifname:'eth2.1',lan_discovery_dhcp_timeout:'3',lan_discovery_timeout:'10',lan_discovery_onvif_port:'3702',lan_discovery_ssdp_port:'1900',lan_discovery_hik_port:'37020',lan_discovery_dahua_port:'37810'};
   for(var k in defaults){ if(document.form[k] && document.form[k].value==='') document.form[k].value=defaults[k]; }
 }
