@@ -48,6 +48,9 @@ jobs:
           test -f trunk/user/camdiscover/camdiscover.c
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/camdiscover/camdiscover_compat.h
+          test -f trunk/user/camdiscover/dhcpdetect.c
+          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
@@ -82,11 +85,16 @@ jobs:
           mkdir -p images romfs
           fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
+          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
+          cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
+          rm -f images/ZTE_Q7.trx
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           ls -lh images/*.trx
 
       - name: Upload Q7 firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ZTE_Q7
+          name: ZTE_Q7_${{ env.BUILD_DATE }}
           path: trunk/images/*.trx
           if-no-files-found: error
