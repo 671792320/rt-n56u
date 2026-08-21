@@ -37,9 +37,9 @@ ifeq ($(STORAGE_ENABLED),y)
 OBJS += hotplug_stor.o
 OBJS += services_stor.o
 endif
-ifdef CONFIG_USB_SUPPORT
-OBJS += hotplug_usb.o usb_modem.o services_usb.o
-endif
+# Q7 minimal firmware: do not build legacy USB userspace handlers.
+# Kernel USB support may remain enabled independently.
+
 ifdef CONFIG_RTL8367
 OBJS += switch_rtl8367.o
 CFLAGS += -I$(ROOTDIR)/$(LINUXDIR)/drivers/net/rtl8367
@@ -188,21 +188,4 @@ ifdef CONFIG_MMC_BLOCK
 	cd $(INSTALLDIR)/sbin && ln -sf rc ejmmc
 	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_mmc
 endif
-ifdef CONFIG_BLK_DEV_SD
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_sd
-endif
-ifdef CONFIG_USB_SUPPORT
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_sr
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_sg
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_lp
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_net
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_tty
-	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_wdm
-	cd $(INSTALLDIR)/sbin && ln -sf rc zerocd
-	cd $(INSTALLDIR)/sbin && ln -sf rc usb5v
-	cd $(INSTALLDIR)/sbin && ln -sf rc ejusb
-	cd $(INSTALLDIR)/sbin && ln -sf rc ejusb1
-ifneq ($(BOARD_NUM_USB_PORTS),1)
-	cd $(INSTALLDIR)/sbin && ln -sf rc ejusb2
-endif
-endif
+# USB userspace helper symlinks intentionally omitted for Q7 minimal firmware.
