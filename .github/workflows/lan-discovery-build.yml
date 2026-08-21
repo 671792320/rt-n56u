@@ -31,14 +31,45 @@ jobs:
           python3 tools/fix_lan_compile.py
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = page.read_text()
+          old = 'show_banner(1); show_menu(5,7,6); show_footer();'
+          new = 'show_banner(1); show_menu(5,3,7); show_footer();'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif 'show_menu(5,3,7)' not in s:
+              raise SystemExit('LAN discovery page menu call not found')
+          page.write_text(s)
+
+          state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
+          s = state.read_text()
+          old_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#");'
+          new_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#>", "LAN自动发现");'
+          if old_title in s:
+              s = s.replace(old_title, new_title, 1)
+          elif '"LAN自动发现"' not in s:
+              raise SystemExit('LAN tab title definition not found')
+
+          old_link = 'tablink[2] = new Array("", "Advanced_LAN_Content.asp", "Advanced_DHCP_Content.asp", "Advanced_GWStaticRoute_Content.asp", "Advanced_IPTV_Content.asp", "Advanced_Switch_Content.asp", "Advanced_WOL_Content.asp");'
+          new_link = 'tablink[2] = new Array("", "Advanced_LAN_Content.asp", "Advanced_DHCP_Content.asp", "Advanced_GWStaticRoute_Content.asp", "Advanced_IPTV_Content.asp", "Advanced_Switch_Content.asp", "Advanced_WOL_Content.asp", "Advanced_LANDiscover_Content.asp");'
+          if old_link in s:
+              s = s.replace(old_link, new_link, 1)
+          elif '"Advanced_LANDiscover_Content.asp"' not in s:
+              raise SystemExit('LAN tab link definition not found')
+          state.write_text(s)
+          PY
+
       - name: Commit generated source changes
         run: |
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- trunk/user/camdiscover/camdiscover.c trunk/user/Makefile trunk/user/rc/init.c trunk/user/lan_autodiscover trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          git add -- trunk/user/camdiscover/camdiscover.c trunk/user/Makefile trunk/user/rc/init.c trunk/user/lan_autodiscover trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp trunk/user/www/n56u_ribbon_fixed/state.js
           if ! git diff --cached --quiet; then
-            git commit -m "lan discovery: add configurable LAN event watcher and WebUI"
+            git commit -m "lan discovery: register configurable WebUI page"
             git push origin HEAD:${{ github.ref_name }}
           fi
 
@@ -68,6 +99,8 @@ jobs:
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'dir_y += lan_autodiscover' trunk/user/Makefile
           grep -q 'lan_autodiscover.sh' trunk/user/rc/init.c
+          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'show_menu(5,3,7)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
 
       - name: Restore upstream userspace baseline
         run: |
@@ -84,8 +117,13 @@ jobs:
           from pathlib import Path
           p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
           s = p.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS
+\tbool "Register multiple callbacks to ct events"
+\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS
+\tbool "Register multiple callbacks to ct events"
+\tdefault n
+\tselect NF_CONNTRACK_EVENTS'''
           if old not in s:
               raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
