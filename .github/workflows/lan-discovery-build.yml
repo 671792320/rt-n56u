@@ -103,6 +103,19 @@ jobs:
           if old not in s:
               raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
+
+          # The dynamic WebUI patch adds the custom probe array to camdiscover.c.
+          # Keep the source portable and guarantee a generous compile-time bound.
+          c = Path('trunk/user/camdiscover/camdiscover.c')
+          cs = c.read_text()
+          if '#define MAX_CUSTOM' not in cs:
+              marker = '#define MAX_DEVICES     256'
+              if marker not in cs:
+                  raise SystemExit('MAX_DEVICES marker not found in camdiscover.c')
+              cs = cs.replace(marker, marker + '\n#ifndef MAX_CUSTOM\n#define MAX_CUSTOM      64\n#endif', 1)
+              c.write_text(cs)
+          else:
+              print('MAX_CUSTOM already defined')
           PY
 
       - name: Build ZTE_Q7
