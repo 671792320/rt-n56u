@@ -49,12 +49,8 @@ jobs:
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
-
-      - name: Verify Linux 3.4 Kconfig normalization
-        run: |
-          set -e
-          grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
-          grep -n 'KCONFIG-NORMALIZE\|silentoldconfig' trunk/build_firmware_ci
+          grep -q 'make ARCH=mips oldconfig' trunk/build_firmware_ci
+          grep -q 'rtpci/\$dir_wifi_ver/mt76x2_ap' trunk/build_firmware_ci
 
       - name: Build ZTE_Q7
         run: |
