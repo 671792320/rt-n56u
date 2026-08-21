@@ -50,37 +50,11 @@ jobs:
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
 
-      - name: Normalize Linux 3.4 Kconfig for CI
+      - name: Verify Linux 3.4 Kconfig normalization
         run: |
           set -e
-          python3 - <<'PY'
-          from pathlib import Path
-
-          kconfig = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
-          s = kconfig.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
-          if old in s:
-              s = s.replace(old, new, 1)
-          kconfig.write_text(s)
-          PY
-
-          # The Linux 3.4 tree has no olddefconfig.  Its oldconfig requires a
-          # terminal, while CI provides redirected stdin.  build_firmware_ci
-          # already uses a pty; replace its unbounded `yes` input with a finite
-          # stream so the pty can terminate cleanly after accepting defaults.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('trunk/build_firmware_ci')
-          s = p.read_text()
-          old = 'yes "" | script -q -c "make ARCH=mips oldconfig" /dev/null'
-          new = 'printf \'\\n%.0s\' $(seq 1 4096) | script -q -c "make ARCH=mips oldconfig" /dev/null'
-          if old not in s:
-              raise SystemExit('expected oldconfig command not found in build_firmware_ci')
-          p.write_text(s.replace(old, new, 1))
-          PY
-
-          grep -n 'oldconfig\|olddefconfig' trunk/build_firmware_ci
+          grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
+          grep -n 'KCONFIG-NORMALIZE\|silentoldconfig' trunk/build_firmware_ci
 
       - name: Build ZTE_Q7
         run: |
