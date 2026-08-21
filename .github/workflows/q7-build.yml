@@ -47,8 +47,17 @@ jobs:
           test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           test -f trunk/user/camdiscover/camdiscover.c
           test -f trunk/user/camdiscover/Makefile
+          test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
+
+      - name: Restore upstream userspace baseline
+        run: |
+          set -e
+          git fetch --no-tags origin 0b8c0c504dba197663550f05ef4074a47e653c89 --depth=1
+          git checkout 0b8c0c504dba197663550f05ef4074a47e653c89 -- trunk/user/shared/cflags.mk trunk/user/rc/Makefile
+          grep -q 'ifneq ($(BOARD_NUM_USB_PORTS),0)' trunk/user/shared/cflags.mk
+          grep -q 'hotplug_usb.o usb_modem.o services_usb.o' trunk/user/rc/Makefile
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
