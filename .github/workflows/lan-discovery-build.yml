@@ -23,49 +23,14 @@ jobs:
           ref: lan-discovery-config
           fetch-depth: 1
 
-      - name: Verify committed LAN discovery sources
+      - name: Apply configurable LAN discovery WebUI and custom UDP probes
         run: |
           set -e
+          python3 tools/lan_webui_patch.py
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/camdiscover/camdiscover.c
-          test -f trunk/user/camdiscover/dhcpdetect.c
-          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-
-      - name: Register LAN discovery in WebUI
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-
-          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
-          s = page.read_text()
-          if 'show_menu(5,3,7)' not in s:
-              old = 'show_menu(5,7,6)'
-              if old not in s:
-                  raise SystemExit('LAN discovery page menu call not found')
-              s = s.replace(old, 'show_menu(5,3,7)', 1)
-          page.write_text(s)
-
-          state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
-          s = state.read_text()
-
-          old_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#>");'
-          new_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#>", "LAN自动发现");'
-          if '"LAN自动发现"' not in old_title:
-              if old_title not in s:
-                  raise SystemExit('LAN discovery tabtitle anchor not found')
-              s = s.replace(old_title, new_title, 1)
-
-          old_link = 'tablink[2] = new Array("", "Advanced_LAN_Content.asp", "Advanced_DHCP_Content.asp", "Advanced_GWStaticRoute_Content.asp", "Advanced_IPTV_Content.asp", "Advanced_Switch_Content.asp", "Advanced_WOL_Content.asp");'
-          new_link = 'tablink[2] = new Array("", "Advanced_LAN_Content.asp", "Advanced_DHCP_Content.asp", "Advanced_GWStaticRoute_Content.asp", "Advanced_IPTV_Content.asp", "Advanced_Switch_Content.asp", "Advanced_WOL_Content.asp", "Advanced_LANDiscover_Content.asp");'
-          if '"Advanced_LANDiscover_Content.asp"' not in old_link:
-              if old_link not in s:
-                  raise SystemExit('LAN discovery tablink anchor not found')
-              s = s.replace(old_link, new_link, 1)
-
-          state.write_text(s)
-          PY
+          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Prepare environment
         run: |
@@ -94,8 +59,10 @@ jobs:
           grep -q 'dir_y += lan_autodiscover' trunk/user/Makefile
           grep -q 'lan_autodiscover.sh' trunk/user/rc/init.c
           grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'show_menu(5,3,7)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q '"LAN自动发现"' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'lan_discovery_menu_index' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'show_menu(m,0,0)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'custom UDP' trunk/user/camdiscover/camdiscover.c
+          grep -q 'lan_discovery_custom_' trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Restore upstream userspace baseline
         run: |
