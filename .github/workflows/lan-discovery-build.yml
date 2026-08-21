@@ -46,7 +46,7 @@ jobs:
 
           state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
           s = state.read_text()
-          old_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#");'
+          old_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#>");'
           new_title = 'tabtitle[2] = new Array("", "<#menu5_2_1#>", "<#menu5_2_2#>", "<#menu5_2_3#>", "<#menu5_2_4#>", "<#menu5_2_5#>", "<#menu5_2_6#>", "LAN自动发现");'
           if old_title in s:
               s = s.replace(old_title, new_title, 1)
