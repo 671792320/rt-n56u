@@ -7,7 +7,7 @@ if [ -z "$1" ] ; then
 fi
 
 if [ ! -f configs/templates/$1.config ] ; then
-	echo "configs/templates/$1.config not found!"
+	echo "configs/templates/$1.config not found! Terminate."
 	exit 1
 fi
 
@@ -26,30 +26,30 @@ board_mk=""
 
 func_enable_kernel_param()
 {
-	if [ -n "`grep "^# $1 is not set" $kernel_tf`" ] ; then
+	if [ -n "`grep \"^# $1 is not set\" $kernel_tf`" ] ; then
 		sed -i "s/# $1 is not set/$1=y/" $kernel_tf
 	fi
 }
 
 func_disable_kernel_param()
 {
-	if [ -n "`grep "^$1=y" $kernel_tf`" ] ; then
+	if [ -n "`grep \"^$1=y\" $kernel_tf`" ] ; then
 		sed -i "s/$1=y/# $1 is not set/" $kernel_tf
-	elif [ -n "`grep "^$1=m" $kernel_tf`" ] ; then
+	elif [ -n "`grep \"^$1=m\" $kernel_tf`" ] ; then
 		sed -i "s/$1=m/# $1 is not set/" $kernel_tf
 	fi
 }
 
 func_enable_busybox_param()
 {
-	if [ -n "`grep "^# $1 is not set" $busybox_tf`" ] ; then
+	if [ -n "`grep \"^# $1 is not set\" $busybox_tf`" ] ; then
 		sed -i "s/# $1 is not set/$1=y/" $busybox_tf
 	fi
 }
 
 func_disable_busybox_param()
 {
-	if [ -n "`grep "^$1=y" $busybox_tf`" ] ; then
+	if [ -n "`grep \"^$1=y\" $busybox_tf`" ] ; then
 		sed -i "s/$1=y/# $1 is not set/" $busybox_tf
 	fi
 }
@@ -114,12 +114,14 @@ echo "######################### FOR-ALL-DEVICES #############################"
 ln -sf vendors/Ralink/config.arch config.arch
 cp -fL "$kernel_cf" "$kernel_tf"
 
-# Linux 3.4.x contains newer kconfig symbols than the original Q7 board config.
-# Keep this one known-incompatible option explicitly disabled.
-if grep -q '^CONFIG_NF_CONNTRACK_CHAIN_EVENTS=' "$kernel_tf"; then
-	sed -i 's/^CONFIG_NF_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NF_CONNTRACK_CHAIN_EVENTS is not set/' "$kernel_tf"
-elif ! grep -q '^# CONFIG_NF_CONNTRACK_CHAIN_EVENTS is not set' "$kernel_tf"; then
-	printf '\n# CONFIG_NF_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$kernel_tf"
+# Linux 3.4.x in this tree may contain Kconfig symbols which are newer than
+# the board configuration.  Normalize the FINAL copied kernel .config here,
+# after all board-specific changes above and before make dep.  This is kept
+# inside the build script so CI and manual builds use exactly the same path.
+if grep -q '^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=' "$kernel_tf"; then
+	sed -i 's/^CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS=.*/# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set/' "$kernel_tf"
+elif ! grep -q '^# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set' "$kernel_tf"; then
+	printf '\n# CONFIG_NETFILTER_CONNTRACK_CHAIN_EVENTS is not set\n' >> "$kernel_tf"
 fi
 
 cp -fL "$busybox_cf" "$busybox_tf"
@@ -158,7 +160,7 @@ if [ "$CONFIG_RALINK_MT7620" = "y" ] ; then
 		func_disable_kernel_param "CONFIG_RT_FIRST_IF_MT7620"
 		CONFIG_RT_FIRST_IF_RT2860=y
 	fi
-	if [ "$CONFIG_RT_FIRST_IF_RT2860" = "y" ] ; then
+	if [ -n "$CONFIG_RT_FIRST_IF_RT2860" = "y" ] ; then
 		cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/rt2860v2" "$dir_wifi_dst/"
 		cp -rfL "$dir_wifi_src/rtsoc/$dir_wifi_ver/rt2860v2_ap" "$dir_wifi_dst/"
 	fi
@@ -291,26 +293,14 @@ fi
 echo "#######################################################################"
 
 echo "--------------------------KCONFIG-NORMALIZE-------------------------"
-KERNEL_DIR="$ROOTDIR/$CONFIG_LINUXDIR"
-if ! command -v script >/dev/null 2>&1; then
-	echo "ERROR: util-linux 'script' command is required for non-interactive oldconfig"
-	exit 1
-fi
-# Run the kconfig target from the Linux 3.4.x source directory. The top-level
-# trunk Makefile does not provide oldconfig itself.
-printf '\n%.0s' $(seq 1 4096) | script -q -c "cd '$KERNEL_DIR' && make ARCH=mips oldconfig" /dev/null
+( cd "$ROOTDIR/$CONFIG_LINUXDIR" && yes "" | make ARCH=mips oldconfig )
 if [ $? -ne 0 ]; then
 	echo "Kernel Kconfig normalization failed!"
-	exit 1
-fi
-if [ ! -f "$KERNEL_DIR/include/config/auto.conf" ]; then
-	echo "Kernel Kconfig did not generate include/config/auto.conf"
 	exit 1
 fi
 
 echo "--------------------------MAKE-DEP--------------------------------"
 make dep
-
 echo "--------------------------MAKE-ALL--------------------------------"
 make
 
