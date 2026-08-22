@@ -17,23 +17,33 @@ var $j = jQuery.noConflict();
 <% login_state_hook(); %>
 
 /*
- * Do not modify state.js menu tables. Padavan generates the stock menu in
- * show_menu(); this page only appends one item after that generation.
+ * Register this page as a real Level-1 menu item before show_menu() renders
+ * the sidebar.  The registration is deliberately idempotent so it remains
+ * compatible with state.js builds that already contain the entry.
  */
-function add_lan_discovery_menu(){
-	var m = document.getElementById('mainMenu');
-	if(!m) return;
-	if(document.getElementById('option_lan_discovery')) return;
-	var li = document.createElement('li');
-	li.id = 'option_lan_discovery';
-	li.innerHTML = '<a href="Advanced_LANDiscover_Content.asp" title="LAN自动发现"><i class="icon-search"></i>&nbsp;&nbsp;LAN自动发现</a>';
-	m.appendChild(li);
+function register_lan_discovery_menu(){
+	var i;
+	if(typeof(menuL1_link) == 'undefined' || typeof(menuL1_title) == 'undefined' || typeof(menuL1_icon) == 'undefined')
+		return 0;
+
+	for(i=1;i<menuL1_link.length;i++){
+		if(menuL1_link[i] == 'Advanced_LANDiscover_Content.asp')
+			return i;
+	}
+
+	menuL1_title.push('LAN自动发现');
+	menuL1_link.push('Advanced_LANDiscover_Content.asp');
+	menuL1_icon.push('icon-search');
+	return menuL1_link.length-1;
 }
 
 function initial(){
 	show_banner(1);
-	if(typeof(show_menu) == 'function') show_menu(5,7,6);
-	add_lan_discovery_menu();
+	var lan_menu_index = register_lan_discovery_menu();
+	if(lan_menu_index > 0)
+		show_menu(lan_menu_index,0,0);
+	else if(typeof(show_menu) == 'function')
+		show_menu(5,7,6);
 	show_footer();
 	var defaults={lan_discovery_ifname:'eth2.1',lan_discovery_dhcp_timeout:'3',lan_discovery_timeout:'10',lan_discovery_onvif_port:'3702',lan_discovery_ssdp_port:'1900',lan_discovery_hik_port:'37020',lan_discovery_dahua_port:'37810'};
 	for(var k in defaults){
