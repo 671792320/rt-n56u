@@ -1,0 +1,2 @@
+LAN discovery WebUI rebuild trigger.
+The lan-discovery-config branch already contains the dedicated first-level menu, dynamic custom UDP entries (1-64), NVRAM-backed parameters, and build-time WebUI patching.
