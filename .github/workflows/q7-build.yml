@@ -24,17 +24,17 @@ jobs:
           ref: master
           fetch-depth: 1
 
-      - name: Restore stock WebUI and add LAN discovery level-1 menu
+      - name: Add LAN discovery level-1 menu
         shell: bash
         run: |
           set -e
-          git fetch --no-tags origin 0b8c0c504dba197663550f05ef4074a47e653c89 --depth=1
-          git checkout 0b8c0c504dba197663550f05ef4074a47e653c89 -- trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_title = new Array' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          sed -i '/menuL1_icon = new Array.*icon-wrench.*as.asp.*);/a menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");\nmenuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
+          sed -i '/^menuL1_icon = new Array/i menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");' trunk/user/www/n56u_ribbon_fixed/state.js
+          sed -i '/^menuL1_icon = new Array/a menuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_icon.push("icon-search")' trunk/user/www/n56u_ribbon_fixed/state.js
 
       - name: Prepare environment
         run: |
@@ -68,18 +68,19 @@ jobs:
           grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
 
-      - name: Restore upstream userspace baseline
-        run: |
-          set -e
-          git fetch --no-tags origin 0b8c0c504dba197663550f05ef4074a47e653c89 --depth=1
-          git checkout 0b8c0c504dba197663550f05ef4074a47e653c89 -- trunk/user/shared/cflags.mk trunk/user/rc/Makefile
-          grep -q 'ifneq ($(BOARD_NUM_USB_PORTS),0)' trunk/user/shared/cflags.mk
-          grep -q 'hotplug_usb.o usb_modem.o services_usb.o' trunk/user/rc/Makefile
-
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
           set -e
-          python3 -c 'from pathlib import Path; p=Path("trunk/linux-3.4.x/net/netfilter/Kconfig"); s=p.read_text(); old="config NF_CONNTRACK_CHAIN_EVENTS\\n\\tbool \\\"Register multiple callbacks to ct events\\\"\\n\\tselect NF_CONNTRACK_EVENTS"; new="config NF_CONNTRACK_CHAIN_EVENTS\\n\\tbool \\\"Register multiple callbacks to ct events\\\"\\n\\tdefault n\\n\\tselect NF_CONNTRACK_EVENTS"; raise SystemExit("NF_CONNTRACK_CHAIN_EVENTS block not found") if old not in s else p.write_text(s.replace(old,new,1))'
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
+          s = p.read_text()
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          if old not in s:
+              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
           grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
 
       - name: Build ZTE_Q7
