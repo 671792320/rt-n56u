@@ -24,6 +24,64 @@ jobs:
           ref: master
           fetch-depth: 1
 
+      - name: Register LAN discovery native WebUI menu
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          state = Path('trunk/user/www/n56u_ribbon_fixed/state.js')
+          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+
+          s = state.read_text()
+          anchor = 'menuL1_icon = new Array("", "icon-home", "icon-hdd", "icon-retweet", "icon-globe", "icon-tasks", "icon-random", "icon-wrench");'
+          if 'Advanced_LANDiscover_Content.asp' not in s:
+              if anchor not in s:
+                  raise SystemExit('native menu anchor not found')
+              insert = anchor + r'''
+
+/* LAN discovery: native Level-1 menu entry. */
+var _lan_discovery_menu_registered = 0;
+for (var _lan_discovery_i = 0; _lan_discovery_i < menuL1_link.length; _lan_discovery_i++) {
+	if (menuL1_link[_lan_discovery_i] == "Advanced_LANDiscover_Content.asp") {
+		_lan_discovery_menu_registered = 1;
+		break;
+	}
+}
+if (!_lan_discovery_menu_registered) {
+	menuL1_title.push("LAN自动发现");
+	menuL1_link.push("Advanced_LANDiscover_Content.asp");
+	menuL1_icon.push("icon-search");
+}'''
+              s = s.replace(anchor, insert, 1)
+              state.write_text(s)
+
+          p = page.read_text()
+          p = re.sub(r'/\* Do not modify global state\.js menu tables\..*?\n\}\n\n', '', p, flags=re.S)
+          p = re.sub(r'function add_lan_discovery_menu\(\)\{.*?\n\}\n\n', '', p, flags=re.S)
+          if 'function get_lan_discovery_menu_index()' not in p:
+              helper = '''function get_lan_discovery_menu_index(){
+	var i;
+	for(i=1;i<menuL1_link.length;i++){
+		if(menuL1_link[i] == "Advanced_LANDiscover_Content.asp") return i;
+	}
+	return 0;
+}
+
+'''
+              p = p.replace('function initial(){', helper + 'function initial(){', 1)
+          p = re.sub(r'\n\s*if\(typeof\(show_menu\) == \'function\'\) show_menu\(5,7,6\);', '\n\tshow_menu(get_lan_discovery_menu_index(),0,0);', p, count=1)
+          p = p.replace('\n\tadd_lan_discovery_menu();', '')
+          page.write_text(p)
+          PY
+
+          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_icon.push("icon-search")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'get_lan_discovery_menu_index' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          ! grep -q 'add_lan_discovery_menu' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+
       - name: Prepare environment
         run: |
           sudo apt update
@@ -53,6 +111,8 @@ jobs:
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
+          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
 
       - name: Restore upstream userspace baseline
         run: |
