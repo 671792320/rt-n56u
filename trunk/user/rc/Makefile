@@ -37,8 +37,11 @@ ifeq ($(STORAGE_ENABLED),y)
 OBJS += hotplug_stor.o
 OBJS += services_stor.o
 endif
-# Q7 minimal firmware: do not build legacy USB userspace handlers.
-# Kernel USB support may remain enabled independently.
+ifeq ($(CONFIG_FIRMWARE_ENABLE_USB),y)
+OBJS += hotplug_usb.o
+OBJS += services_usb.o
+OBJS += usb_modem.o
+endif
 
 ifdef CONFIG_RTL8367
 OBJS += switch_rtl8367.o
@@ -188,4 +191,7 @@ ifdef CONFIG_MMC_BLOCK
 	cd $(INSTALLDIR)/sbin && ln -sf rc ejmmc
 	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_mmc
 endif
-# USB userspace helper symlinks intentionally omitted for Q7 minimal firmware.
+ifeq ($(CONFIG_FIRMWARE_ENABLE_USB),y)
+	cd $(INSTALLDIR)/sbin && ln -sf rc mdev_usb
+	cd $(INSTALLDIR)/sbin && ln -sf rc usb_modem
+endif
