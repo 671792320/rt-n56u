@@ -15,7 +15,7 @@ CFLAGS += -include $(CURDIR)/camdiscover_compat.h -include netinet/ip.h
 
 EXEC=camdiscover
 dhcpdetect=dhcpdetect
-OBJS=camdiscover.o
+OBJS=camdiscover.o camdiscover_debug.o
 DHCP_OBJS=dhcpdetect.o
 
 all: $(EXEC) $(dhcpdetect)
@@ -27,6 +27,9 @@ $(EXEC): $(OBJS)
 $(dhcpdetect): $(DHCP_OBJS)
 	$(CC) -o $@ $(DHCP_OBJS)
 	$(STRIP) $@
+
+camdiscover.o: camdiscover.c
+	$(CC) -Drecvfrom=camdiscover_recvfrom -c $< $(CFLAGS)
 
 %.o: %.c
 	$(CC) -c $< $(CFLAGS)
