@@ -16,13 +16,16 @@
 var $j = jQuery.noConflict();
 <% login_state_hook(); %>
 
-/* Do not modify global state.js menu tables. Add this feature after the stock menu is generated. */
+/*
+ * Do not modify state.js menu tables. Padavan generates the stock menu in
+ * show_menu(); this page only appends one item after that generation.
+ */
 function add_lan_discovery_menu(){
-	var m = $("mainMenu");
-	if(!m || $("option_lan_discovery")) return;
+	var m = document.getElementById('mainMenu');
+	if(!m) return;
+	if(document.getElementById('option_lan_discovery')) return;
 	var li = document.createElement('li');
 	li.id = 'option_lan_discovery';
-	li.className = 'active';
 	li.innerHTML = '<a href="Advanced_LANDiscover_Content.asp" title="LAN自动发现"><i class="icon-search"></i>&nbsp;&nbsp;LAN自动发现</a>';
 	m.appendChild(li);
 }
