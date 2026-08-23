@@ -91,6 +91,16 @@ add_device() {
     esac
 }
 
+prepare_custom_config() {
+    custom="$(nv lan_discovery_custom)"
+    if [ -n "$custom" ]; then
+        printf '%s\n' "$custom" > /tmp/camdiscover_custom.conf
+        return 0
+    fi
+    rm -f /tmp/camdiscover_custom.conf
+    return 1
+}
+
 run_discovery() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
@@ -130,10 +140,13 @@ run_discovery() {
         nvram set lan_discovery_devices=""
         nvram set lan_discovery_status_count="0"
         log_line "开始设备发现 $iface"
+        prepare_custom_config
         : > /tmp/camdiscover_lan.log
+        custom_arg=""
+        [ -f /tmp/camdiscover_custom.conf ] && custom_arg="-C /tmp/camdiscover_custom.conf"
         /usr/bin/camdiscover -i "$iface" -t "$discover_timeout" \
             -o "$onvif_port" -s "$ssdp_port" -k "$hik_port" -d "$dahua_port" \
-            -O "$onvif" -S "$ssdp" -H "$hik" -D "$dahua" -A "$raw" \
+            -O "$onvif" -S "$ssdp" -H "$hik" -D "$dahua" -A "$raw" $custom_arg \
             > /tmp/camdiscover_lan.log 2>&1 &
         pid=$!
         while kill -0 "$pid" 2>/dev/null; do
@@ -141,7 +154,7 @@ run_discovery() {
                 tail -n 40 /tmp/camdiscover_lan.log | while IFS= read -r line; do
                     [ -n "$line" ] || continue
                     case "$line" in DEVICE\ *) add_device "$line";; esac
-                    case "$line" in DEVICE\ *|*probe*|*RX*|*FAILED*) log_line "$line";; esac
+                    case "$line" in DEVICE\ *|*probe*|*RX*|*FAILED*|*custom*) log_line "$line";; esac
                 done
             fi
             sleep 1
@@ -157,6 +170,7 @@ run_discovery() {
 ensure_defaults
 refresh_interfaces
 last_state=-1
+last_iface=""
 iface_refresh=0
 while :; do
     iface_refresh=$((iface_refresh + 1))
@@ -166,6 +180,11 @@ while :; do
     fi
     enable="$(cfg lan_discovery_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
+    if [ "$iface" != "$last_iface" ]; then
+        last_iface="$iface"
+        last_state=-1
+        log_line "检测接口切换为 $iface"
+    fi
     if [ "$enable" != "1" ]; then
         nvram set lan_discovery_status_state="已禁用"
         if [ -e "/sys/class/net/$iface" ]; then
