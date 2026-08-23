@@ -21,6 +21,9 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_dahua)" ] || nvram set lan_discovery_dahua=1
     [ -n "$(nv lan_discovery_dahua_port)" ] || nvram set lan_discovery_dahua_port=37810
     [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
+    [ -n "$(nv lan_discovery_status_dhcp)" ] || nvram set lan_discovery_status_dhcp="未检测"
+    [ -n "$(nv lan_discovery_status_state)" ] || nvram set lan_discovery_status_state="空闲"
+    [ -n "$(nv lan_discovery_status_count)" ] || nvram set lan_discovery_status_count=0
 }
 
 log_line() {
@@ -41,12 +44,10 @@ refresh_interfaces() {
         [ -d "$p" ] || continue
         iface="${p##*/}"
         [ "$iface" = "lo" ] && continue
-
         role="LAN"
         if printf '%s\n' "$(nv lan_ifnames)" | tr ' ' '\n' | grep -qx "$iface"; then role="LAN"; fi
         if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
         case "$iface" in wan*|ppp*|wwan*) role="WAN";; esac
-
         ip="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
         mac="$(cat "$p/address" 2>/dev/null)"
         if [ -r "$p/carrier" ]; then
@@ -163,7 +164,6 @@ while :; do
         refresh_interfaces
         iface_refresh=0
     fi
-
     enable="$(cfg lan_discovery_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
     if [ "$enable" != "1" ]; then
@@ -181,7 +181,6 @@ while :; do
         sleep 2
         continue
     fi
-
     if [ ! -e "/sys/class/net/$iface" ]; then
         set_link_status "$iface" "不存在"
         if [ "$last_state" != "-2" ]; then
@@ -191,14 +190,12 @@ while :; do
         sleep 2
         continue
     fi
-
     if [ -r "/sys/class/net/$iface/carrier" ]; then
         state="$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)"
     else
         state="$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)"
         [ "$state" = "up" ] && state=1 || state=0
     fi
-
     if [ "$state" != "$last_state" ]; then
         last_state="$state"
         if [ "$state" = "1" ]; then
