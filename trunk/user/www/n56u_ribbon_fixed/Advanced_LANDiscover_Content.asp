@@ -13,93 +13,33 @@
 <script type="text/javascript" src="/state.js"></script>
 <script type="text/javascript" src="/popup.js"></script>
 <script type="text/javascript">
-var $j = jQuery.noConflict();
+var $j=jQuery.noConflict();
 <% login_state_hook(); %>
-function initial(){
-	show_banner(1);
-	show_menu(8,0,0);
-	show_footer();
-	var defaults={lan_discovery_ifname:'eth2.1',lan_discovery_dhcp_timeout:'3',lan_discovery_timeout:'10',lan_discovery_onvif_port:'3702',lan_discovery_ssdp_port:'1900',lan_discovery_hik_port:'37020',lan_discovery_dahua_port:'37810'};
-	for(var k in defaults){
-		if(document.form[k] && document.form[k].value==='') document.form[k].value=defaults[k];
-	}
-}
-function checkEnter(e){
-	e=e||window.event;
-	return (e.keyCode||e.which||0)===13;
-}
-function save(){
-	if(!login_safe()) return false;
-	document.form.action_mode.value=' Apply ';
-	document.form.current_page.value='Advanced_LANDiscover_Content.asp';
-	document.form.next_page.value='Advanced_LANDiscover_Content.asp';
-	document.form.submit();
-	return true;
-}
+var timerStatus=null,timerLog=null,timerDevices=null;
+function initial(){show_banner(1);show_menu(8,0,0);show_footer();loadStatus();loadLog();loadDevices();timerStatus=setInterval(loadStatus,2000);timerLog=setInterval(loadLog,1000);timerDevices=setInterval(loadDevices,2000);}
+function checkEnter(e){e=e||window.event;return (e.keyCode||e.which||0)===13;}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function ajax(url,cb){var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState===4&&x.status===200)cb(x.responseText);};x.open('GET',url+'&_='+new Date().getTime(),true);x.send(null);}
+function loadStatus(){ajax('/lan_discovery_status.cgi?',function(t){var o;try{o=JSON.parse(t);}catch(e){return;}document.getElementById('status_iface').innerHTML=esc(o.ifname)+' ('+esc(o.role)+')';document.getElementById('status_ip').innerHTML=esc(o.ip||'-');document.getElementById('status_mac').innerHTML=esc(o.mac||'-');document.getElementById('status_link').innerHTML=esc(o.link||'-');document.getElementById('status_dhcp').innerHTML=esc(o.dhcp||'未检测');document.getElementById('status_state').innerHTML=esc(o.state||'空闲');document.getElementById('status_count').innerHTML=esc(o.count||'0');document.getElementById('status_last').innerHTML=esc(o.last||'-');});}
+function loadLog(){ajax('/lan_discovery_log.cgi?',function(t){var e=document.getElementById('live_log');e.textContent=t||'暂无日志';e.scrollTop=e.scrollHeight;});}
+function loadDevices(){ajax('/lan_discovery_devices.cgi?',function(t){document.getElementById('devices').innerHTML=t||'<tr><td colspan="5">暂无设备</td></tr>';});}
+function clearLog(){ajax('/lan_discovery_log.cgi?clear=1',function(){loadLog();});}
+function save(){if(!login_safe())return false;document.form.action_mode.value=' Apply ';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='Advanced_LANDiscover_Content.asp';document.form.submit();return true;}
+function addCustom(){var box=document.getElementById('custom_list'),n=box.children.length,row=document.createElement('div');row.className='well well-small custom-row';row.innerHTML='<div class="row-fluid"><div class="span2"><input class="span12" name="lan_custom_name_'+n+'" placeholder="名称"></div><div class="span3"><input class="span12" name="lan_custom_addr_'+n+'" placeholder="目标地址/组播地址"></div><div class="span1"><input class="span12" name="lan_custom_port_'+n+'" placeholder="端口"></div><div class="span4"><input class="span12" name="lan_custom_payload_'+n+'" placeholder="Payload"></div><div class="span1"><button type="button" class="btn btn-success" onclick="toggleCustom(this)">启用</button><input type="hidden" name="lan_custom_enable_'+n+'" value="1"></div><div class="span1"><button type="button" class="btn btn-danger" onclick="this.parentNode.parentNode.parentNode.remove()">−</button></div></div>';box.appendChild(row);document.getElementById('lan_custom_count').value=box.children.length;}
+function toggleCustom(b){var i=b.nextSibling||b.nextElementSibling,v=i?i.value:'1';v=v==='1'?'0':'1';if(i)i.value=v;b.innerHTML=v==='1'?'启用':'停用';b.className=v==='1'?'btn btn-success':'btn btn-default';}
 </script>
 </head>
 <body onLoad="initial();">
-<div class="wrapper">
-	<div class="container-fluid" style="padding-right:0px">
-		<div class="row-fluid">
-			<div class="span3"><center><div id="logo"></div></center></div>
-			<div class="span9"><div id="TopBanner"></div></div>
-		</div>
-	</div>
-	<div id="Loading" class="popup_bg"></div>
-	<iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
-
-	<form method="post" name="form" action="apply.cgi" onkeypress="return !checkEnter(event)">
-		<input type="hidden" name="current_page" value="">
-		<input type="hidden" name="next_page" value="">
-		<input type="hidden" name="next_host" value="">
-		<input type="hidden" name="sid_list" value="">
-		<input type="hidden" name="group_id" value="">
-		<input type="hidden" name="action_mode" value="">
-		<input type="hidden" name="action_script" value="">
-
-		<div class="container-fluid">
-			<div class="row-fluid">
-				<div class="span3">
-					<div class="well sidebar-nav side_nav" style="padding:0px;">
-						<ul id="mainMenu" class="clearfix"></ul>
-						<ul class="clearfix"><li><div id="subMenu" class="accordion"></div></li></ul>
-					</div>
-				</div>
-
-				<div class="span9">
-					<div class="row-fluid">
-						<div class="span12">
-							<div class="box well grad_colour_dark_blue">
-								<h2 class="box_head round_top">局域网自动发现</h2>
-								<div class="round_bottom">
-									<div class="row-fluid">
-										<div id="tabMenu" class="submenuBlock"></div>
-										<div class="alert alert-info" style="margin:10px;">LAN口产生 Link Up 事件后，先检测 DHCP，再执行设备发现。默认启用；自身设备地址会自动过滤。</div>
-										<table width="100%" cellpadding="4" cellspacing="0" class="table">
-											<tr><td>LAN事件检测</td><td><select name="lan_discovery_enable" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_enable", "0", "selected"); %>>禁用</option></select></td></tr>
-											<tr><td>检测接口</td><td><input name="lan_discovery_ifname" class="span6" value="<% nvram_get_x("", "lan_discovery_ifname"); %>"></td></tr>
-											<tr><td>DHCP检测</td><td><select name="lan_discovery_dhcp_enable" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_dhcp_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_dhcp_enable", "0", "selected"); %>>禁用</option></select></td></tr>
-											<tr><td>DHCP超时(秒)</td><td><input name="lan_discovery_dhcp_timeout" class="span3" value="<% nvram_get_x("", "lan_discovery_dhcp_timeout"); %>"></td></tr>
-											<tr><td>设备发现</td><td><select name="lan_discovery_discover_enable" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_discover_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_discover_enable", "0", "selected"); %>>禁用</option></select></td></tr>
-											<tr><td>发现超时(秒)</td><td><input name="lan_discovery_timeout" class="span3" value="<% nvram_get_x("", "lan_discovery_timeout"); %>"></td></tr>
-											<tr><td>ONVIF</td><td><select name="lan_discovery_onvif" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_onvif", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_onvif", "0", "selected"); %>>禁用</option></select> 端口 <input name="lan_discovery_onvif_port" class="span2" value="<% nvram_get_x("", "lan_discovery_onvif_port"); %>"></td></tr>
-											<tr><td>SSDP</td><td><select name="lan_discovery_ssdp" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_ssdp", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_ssdp", "0", "selected"); %>>禁用</option></select> 端口 <input name="lan_discovery_ssdp_port" class="span2" value="<% nvram_get_x("", "lan_discovery_ssdp_port"); %>"></td></tr>
-											<tr><td>HIK-SADP</td><td><select name="lan_discovery_hik" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_hik", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_hik", "0", "selected"); %>>禁用</option></select> 端口 <input name="lan_discovery_hik_port" class="span2" value="<% nvram_get_x("", "lan_discovery_hik_port"); %>"></td></tr>
-											<tr><td>DAHUA-DHIP</td><td><select name="lan_discovery_dahua" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_dahua", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_dahua", "0", "selected"); %>>禁用</option></select> 端口 <input name="lan_discovery_dahua_port" class="span2" value="<% nvram_get_x("", "lan_discovery_dahua_port"); %>"></td></tr>
-											<tr><td>ARP/IP被动发现</td><td><select name="lan_discovery_raw" class="span6"><option value="1" <% nvram_match_x("", "lan_discovery_raw", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_raw", "0", "selected"); %>>禁用</option></select></td></tr>
-										</table>
-										<div class="row-fluid"><div class="span12"><button type="button" class="btn btn-primary" onClick="save();">保存设置</button></div></div>
-									</div>
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		</div>
-	</form>
-	<div id="footer"></div>
-</div>
-</body>
-</html>
+<div class="wrapper"><div class="container-fluid" style="padding-right:0"><div class="row-fluid"><div class="span3"><center><div id="logo"></div></center></div><div class="span9"><div id="TopBanner"></div></div></div></div><div id="Loading" class="popup_bg"></div><iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
+<form method="post" name="form" action="apply.cgi" onkeypress="return !checkEnter(event)"><input type="hidden" name="current_page"><input type="hidden" name="next_page"><input type="hidden" name="action_mode"><input type="hidden" name="action_script"><input type="hidden" name="lan_custom_count" id="lan_custom_count" value="0">
+<div class="container-fluid"><div class="row-fluid"><div class="span3"><div class="well sidebar-nav side_nav" style="padding:0"><ul id="mainMenu" class="clearfix"></ul><ul class="clearfix"><li><div id="subMenu" class="accordion"></div></li></ul></div></div><div class="span9"><div class="row-fluid"><div class="span12"><div class="box well grad_colour_dark_blue"><h2 class="box_head round_top">局域网自动发现</h2><div class="round_bottom">
+<div id="tabMenu" class="submenuBlock"></div>
+<div class="row-fluid"><div class="span12"><div class="alert alert-info">LAN事件 → DHCP检测 → 设备发现。自身地址自动过滤。</div></div></div>
+<table class="table table-condensed"><tr><th colspan="4">当前状态</th></tr><tr><td>检测接口</td><td id="status_iface">-</td><td>IPv4</td><td id="status_ip">-</td></tr><tr><td>MAC</td><td id="status_mac">-</td><td>Link</td><td id="status_link">-</td></tr><tr><td>DHCP</td><td id="status_dhcp">-</td><td>发现状态</td><td id="status_state">-</td></tr><tr><td>已发现</td><td id="status_count">0</td><td>最后活动</td><td id="status_last">-</td></tr></table>
+<table class="table"><tr><th>检测接口</th><td><input name="lan_discovery_ifname" class="span6" value="<% nvram_get_x("", "lan_discovery_ifname"); %>" placeholder="eth2.1 / br0"></td></tr><tr><td>LAN事件检测</td><td><select name="lan_discovery_enable"><option value="1" <% nvram_match_x("", "lan_discovery_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_enable", "0", "selected"); %>>禁用</option></select></td></tr><tr><td>DHCP检测</td><td><select name="lan_discovery_dhcp_enable"><option value="1" <% nvram_match_x("", "lan_discovery_dhcp_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_dhcp_enable", "0", "selected"); %>>禁用</option></select> 超时 <input name="lan_discovery_dhcp_timeout" class="span2" value="<% nvram_get_x("", "lan_discovery_dhcp_timeout"); %>"></td></tr><tr><td>设备发现</td><td><select name="lan_discovery_discover_enable"><option value="1" <% nvram_match_x("", "lan_discovery_discover_enable", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_discover_enable", "0", "selected"); %>>禁用</option></select> 超时 <input name="lan_discovery_timeout" class="span2" value="<% nvram_get_x("", "lan_discovery_timeout"); %>"></td></tr><tr><td>ONVIF</td><td><select name="lan_discovery_onvif"><option value="1" <% nvram_match_x("", "lan_discovery_onvif", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_onvif", "0", "selected"); %>>禁用</option></select> <input name="lan_discovery_onvif_port" class="span2" value="<% nvram_get_x("", "lan_discovery_onvif_port"); %>"></td></tr><tr><td>SSDP</td><td><select name="lan_discovery_ssdp"><option value="1" <% nvram_match_x("", "lan_discovery_ssdp", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_ssdp", "0", "selected"); %>>禁用</option></select> <input name="lan_discovery_ssdp_port" class="span2" value="<% nvram_get_x("", "lan_discovery_ssdp_port"); %>"></td></tr><tr><td>HIK-SADP</td><td><select name="lan_discovery_hik"><option value="1" <% nvram_match_x("", "lan_discovery_hik", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_hik", "0", "selected"); %>>禁用</option></select> <input name="lan_discovery_hik_port" class="span2" value="<% nvram_get_x("", "lan_discovery_hik_port"); %>"></td></tr><tr><td>DAHUA-DHIP</td><td><select name="lan_discovery_dahua"><option value="1" <% nvram_match_x("", "lan_discovery_dahua", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_dahua", "0", "selected"); %>>禁用</option></select> <input name="lan_discovery_dahua_port" class="span2" value="<% nvram_get_x("", "lan_discovery_dahua_port"); %>"></td></tr><tr><td>ARP/IP</td><td><select name="lan_discovery_raw"><option value="1" <% nvram_match_x("", "lan_discovery_raw", "1", "selected"); %>>启用</option><option value="0" <% nvram_match_x("", "lan_discovery_raw", "0", "selected"); %>>禁用</option></select></td></tr></table>
+<div class="box"><h4>已发现设备</h4><table class="table table-striped"><thead><tr><th>时间</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th></tr></thead><tbody id="devices"><tr><td colspan="5">暂无设备</td></tr></tbody></table></div>
+<div class="box"><h4>实时发现日志 <button type="button" class="btn btn-mini pull-right" onclick="clearLog()">清空</button></h4><pre id="live_log" style="height:220px;overflow:auto;margin:0">加载中...</pre></div>
+<div class="box"><h4>自定义 UDP 发现协议 <button type="button" class="btn btn-success pull-right" onclick="addCustom()">＋ 添加</button></h4><div class="muted">名称 / 目标地址 / UDP端口 / Payload / 开关 / 删除，不限制 6 条。</div><div id="custom_list"></div></div>
+<div class="row-fluid"><div class="span12"><button type="button" class="btn btn-primary" onClick="save();">保存设置</button></div></div>
+</div></div></div></div></div></div></div></form><div id="footer"></div></div>
+</body></html>
