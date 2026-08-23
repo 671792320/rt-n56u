@@ -34,6 +34,11 @@ function init_itoggle(id,func)
             sync(!obj_f.prop('checked'));
         });
     }
+
+    /* New LAN discovery variables default to enabled until an explicit
+     * 0/1 value has been saved. Existing values are never overwritten. */
+    if(id.indexOf('lan_discovery_')===0 && !obj_0.prop('checked') && !obj_1.prop('checked') && !obj_f.prop('checked'))
+        obj_f.prop('checked',true);
     sync(obj_f.prop('checked'));
 
     if(id.indexOf('lan_discovery_')===0){
@@ -48,7 +53,7 @@ function init_itoggle(id,func)
     }
 }
 
-/* Compatibility helpers for the LAN discovery page. */
+/* Compatibility helpers for the LAN discovery interface list. */
 $j(function(){
     var sel=document.getElementById('lan_ifname');
     function fixInterfaces(){
@@ -58,11 +63,8 @@ $j(function(){
             var text=s.options[i].text||'';
             text=text.replace(/&#10;/g,'\n').replace(/&#13;/g,'\r');
             if(text.indexOf('\n')<0)continue;
-            var parts=text.split('\n'), value=s.options[i].value, first=true;
-            if(first){
-                s.options[i].text=parts[0];
-                first=false;
-            }
+            var parts=text.split('\n');
+            s.options[i].text=parts[0];
             for(var j=1;j<parts.length;j++){
                 if(!parts[j])continue;
                 var m=parts[j].split('|');
