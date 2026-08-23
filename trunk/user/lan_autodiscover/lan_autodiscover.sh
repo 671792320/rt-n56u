@@ -11,7 +11,7 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_dhcp_enable)" ] || nvram set lan_discovery_dhcp_enable=1
     [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
     [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
-    [ -n "$(nv lan_discovery_timeout)" ] || nvram set lan_discovery_timeout=10
+    [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
     [ -n "$(nv lan_discovery_onvif)" ] || nvram set lan_discovery_onvif=1
     [ -n "$(nv lan_discovery_onvif_port)" ] || nvram set lan_discovery_onvif_port=3702
     [ -n "$(nv lan_discovery_ssdp)" ] || nvram set lan_discovery_ssdp=1
@@ -48,7 +48,12 @@ refresh_interfaces() {
         role="LAN"
         if printf '%s\n' "$(nv lan_ifnames)" | tr ' ' '\n' | grep -qx "$iface"; then role="LAN"; fi
         if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
-        case "$iface" in wan*|ppp*|wwan*) role="WAN";; esac
+        case "$iface" in
+            wan*|ppp*|wwan*|eth*.2) role="WAN";;
+            ra*|apcli*|wds*) role="WiFi";;
+            br*) role="LAN";;
+            eth*.1) role="LAN";;
+        esac
         ip="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
         mac="$(cat "$p/address" 2>/dev/null)"
         if [ -r "$p/carrier" ]; then
@@ -56,6 +61,8 @@ refresh_interfaces() {
             [ "$link" = "1" ] && link="UP" || link="DOWN"
         else
             link="$(cat "$p/operstate" 2>/dev/null)"
+            [ "$link" = "up" ] && link="UP"
+            [ "$link" = "down" ] && link="DOWN"
         fi
         line="${iface}|${role}|${ip:--}|${mac:--}|${link:--}"
         if [ -n "$out" ]; then out="$(printf '%s\n%s' "$out" "$line")"; else out="$line"; fi
@@ -69,7 +76,12 @@ set_link_status() {
     mac="$(cat "/sys/class/net/$iface/address" 2>/dev/null)"
     role="LAN"
     if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
-    case "$iface" in wan*|ppp*|wwan*) role="WAN";; esac
+    case "$iface" in
+        wan*|ppp*|wwan*|eth*.2) role="WAN";;
+        ra*|apcli*|wds*) role="WiFi";;
+        br*) role="LAN";;
+        eth*.1) role="LAN";;
+    esac
     nvram set lan_discovery_status_if="$iface"
     nvram set lan_discovery_status_role="$role"
     nvram set lan_discovery_status_ip="${ip:--}"
@@ -77,12 +89,37 @@ set_link_status() {
     nvram set lan_discovery_status_link="$link"
 }
 
+is_link_up() {
+    iface="$1"
+    [ -e "/sys/class/net/$iface" ] || return 1
+    if [ -r "/sys/class/net/$iface/carrier" ]; then
+        [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
+    else
+        [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0
+    fi
+    return 1
+}
+
+append_device() {
+    line="$1"
+    [ -n "$line" ] || return
+    old="$(nv lan_discovery_devices)"
+    if printf '%s\n' "$old" | grep -F -x "$line" >/dev/null 2>&1; then return; fi
+    if [ -n "$old" ]; then
+        nvram set lan_discovery_devices="$(printf '%s\n%s\n' "$old" "$line" | tail -n 80)"
+    else
+        nvram set lan_discovery_devices="$line"
+    fi
+    count="$(printf '%s\n' "$(nv lan_discovery_devices)" | grep -c '^DEVICE ' 2>/dev/null)"
+    nvram set lan_discovery_status_count="${count:-0}"
+}
+
 run_discovery() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
     discover_enable="$(cfg lan_discovery_discover_enable 1)"
-    discover_timeout="$(cfg lan_discovery_timeout 10)"
+    discover_cycle="$(cfg lan_discovery_cycle 10)"
     onvif="$(cfg lan_discovery_onvif 1)"; ssdp="$(cfg lan_discovery_ssdp 1)"
     hik="$(cfg lan_discovery_hik 1)"; dahua="$(cfg lan_discovery_dahua 1)"; raw="$(cfg lan_discovery_raw 1)"
     onvif_port="$(cfg lan_discovery_onvif_port 3702)"; ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
@@ -105,17 +142,24 @@ run_discovery() {
         nvram set lan_discovery_status_dhcp="未启用"
     fi
 
-    if [ "$discover_enable" = "1" ] && [ -x /usr/bin/camdiscover ]; then
-        nvram set lan_discovery_status_state="设备发现"
-        nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"
-        log_line "开始设备发现 $iface"
+    if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then
+        nvram set lan_discovery_status_state="设备发现未启用"
+        return
+    fi
+
+    nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"
+    nvram set lan_discovery_status_state="持续设备发现"
+    log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
+
+    while is_link_up "$iface"; do
         : > /tmp/camdiscover_lan.log
         : > /tmp/camdiscover_custom.conf
         printf '%s\n' "$custom" | while IFS= read -r row; do
             [ -n "$row" ] || continue
             printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf
         done
-        args="-i $iface -t $discover_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"
+
+        args="-i $iface -t $discover_cycle -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"
         [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
         # shellcheck disable=SC2086
         /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 &
@@ -127,11 +171,7 @@ run_discovery() {
                     printf '%s\n' "$current" | while IFS= read -r line; do
                         [ -n "$line" ] || continue
                         case "$line" in
-                            DEVICE\ *)
-                                old="$(nv lan_discovery_devices)"
-                                if [ -n "$old" ]; then nvram set lan_discovery_devices="$(printf '%s\n%s\n' "$old" "$line" | tail -n 40)"; else nvram set lan_discovery_devices="$line"; fi
-                                count="$(printf '%s\n' "$(nv lan_discovery_devices)" | grep -c '^DEVICE ' 2>/dev/null)"
-                                nvram set lan_discovery_status_count="${count:-0}"; log_line "$line" ;;
+                            DEVICE\ *) append_device "$line"; log_line "$line" ;;
                             *probe*|*RX*|*FAILED*|*listen*) log_line "$line" ;;
                         esac
                     done
@@ -141,10 +181,13 @@ run_discovery() {
             sleep 1
         done
         wait "$pid"
-        nvram set lan_discovery_status_state="空闲"; log_line "设备发现完成"
-    else
-        nvram set lan_discovery_status_state="设备发现未启用"
-    fi
+        if ! is_link_up "$iface"; then break; fi
+        log_line "本轮主动探测完成，继续监听，下一轮 ${discover_cycle}s"
+        sleep 1
+    done
+
+    nvram set lan_discovery_status_state="等待接口"
+    log_line "LAN Link DOWN $iface，停止发现"
 }
 
 ensure_defaults
@@ -153,20 +196,31 @@ last_iface=""; last_state="-9"; iface_refresh=0
 while :; do
     iface_refresh=$((iface_refresh + 1)); if [ "$iface_refresh" -ge 5 ]; then refresh_interfaces; iface_refresh=0; fi
     enable="$(cfg lan_discovery_enable 1)"; iface="$(cfg lan_discovery_ifname eth2.1)"
-    if [ "$iface" != "$last_iface" ]; then last_iface="$iface"; last_state="-9"; nvram set lan_discovery_status_state="等待接口"; log_line "检测接口切换为 $iface"; set_link_status "$iface" "WAIT"; fi
+    if [ "$iface" != "$last_iface" ]; then
+        last_iface="$iface"; last_state="-9"
+        nvram set lan_discovery_status_state="等待接口"
+        log_line "检测接口切换为 $iface"
+        if [ -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "WAIT"; else set_link_status "$iface" "不存在"; fi
+    fi
     if [ "$enable" != "1" ]; then
         nvram set lan_discovery_status_state="已禁用"
         if [ -e "/sys/class/net/$iface" ]; then
-            if [ -r "/sys/class/net/$iface/carrier" ]; then link="$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)"; [ "$link" = "1" ] && link="UP" || link="DOWN"; else link="$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)"; fi
-            set_link_status "$iface" "${link:--}"
+            if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi
         fi
         sleep 2; continue
     fi
     if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; sleep 2; continue; fi
-    if [ -r "/sys/class/net/$iface/carrier" ]; then state="$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)"; else state="$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)"; [ "$state" = "up" ] && state=1 || state=0; fi
+    if is_link_up "$iface"; then state=1; else state=0; fi
     if [ "$state" != "$last_state" ]; then
         last_state="$state"
-        if [ "$state" = "1" ]; then set_link_status "$iface" "UP"; sleep 1; run_discovery "$iface" & else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface"; fi
+        if [ "$state" = "1" ]; then
+            set_link_status "$iface" "UP"
+            run_discovery "$iface" &
+        else
+            set_link_status "$iface" "DOWN"
+            nvram set lan_discovery_status_state="等待接口"
+            log_line "LAN Link DOWN $iface"
+        fi
     fi
     sleep 1
 done
