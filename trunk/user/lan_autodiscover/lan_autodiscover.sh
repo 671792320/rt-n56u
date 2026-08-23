@@ -12,6 +12,24 @@ log_line() {
     nvram set lan_discovery_status_last="$(now)"
     logger -t lan-autodiscover "$*"
 }
+refresh_interfaces() {
+    list=""
+    for p in /sys/class/net/*; do
+        [ -d "$p" ] || continue
+        iface="${p##*/}"
+        [ "$iface" = "lo" ] && continue
+        role="LAN"
+        printf '%s\n' "$(nv lan_ifnames)" | tr ' ' '\n' | grep -qx "$iface" && role="LAN"
+        printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface" && role="WAN"
+        case "$iface" in wan*|ppp*|wwan*) role="WAN";; esac
+        ip="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
+        mac="$(cat "$p/address" 2>/dev/null)"
+        if [ -r "$p/carrier" ]; then link="$(sed -n '1p' "$p/carrier" 2>/dev/null)"; [ "$link" = "1" ] && link="UP" || link="DOWN"; else link="$(sed -n '1p' "$p/operstate" 2>/dev/null)"; fi
+        [ -n "$list" ] && list="$list\n"
+        list="${list}${iface}|${role}|${ip:--}|${mac:--}|${link:--}"
+    done
+    nvram set lan_discovery_interfaces="$list"
+}
 set_link_status() {
     iface="$1"
     link="$2"
@@ -98,7 +116,10 @@ run_discovery() {
 }
 
 last_state=-1
+iface_refresh=0
 while :; do
+    iface_refresh=$((iface_refresh + 1))
+    [ "$iface_refresh" -ge 5 ] && refresh_interfaces && iface_refresh=0
     enable="$(cfg lan_discovery_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
     if [ "$enable" != "1" ]; then
