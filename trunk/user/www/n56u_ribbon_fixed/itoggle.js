@@ -34,10 +34,8 @@ function init_itoggle(id,func)
             sync(!obj_f.prop('checked'));
         });
     }
-
     sync(obj_f.prop('checked'));
 
-    /* LAN discovery page uses the normal Padavan start_apply workflow. */
     if(id.indexOf('lan_discovery_')===0){
         var form=document.forms['form'];
         if(form){
@@ -45,6 +43,40 @@ function init_itoggle(id,func)
             form.target='hidden_frame';
             if(form.current_page)form.current_page.value='/Advanced_LANDiscover_Content.asp';
             if(form.next_page)form.next_page.value='/Advanced_LANDiscover_Content.asp';
+            $j(form).off('submit.lanfix').on('submit.lanfix',function(){try{showLoading();}catch(e){}});
         }
     }
 }
+
+/* Compatibility helpers for the LAN discovery page. */
+$j(function(){
+    var sel=document.getElementById('lan_ifname');
+    function fixInterfaces(){
+        var s=document.getElementById('lan_ifname');
+        if(!s)return;
+        for(var i=0;i<s.options.length;i++){
+            var text=s.options[i].text||'';
+            text=text.replace(/&#10;/g,'\n').replace(/&#13;/g,'\r');
+            if(text.indexOf('\n')<0)continue;
+            var parts=text.split('\n'), value=s.options[i].value, first=true;
+            if(first){
+                s.options[i].text=parts[0];
+                first=false;
+            }
+            for(var j=1;j<parts.length;j++){
+                if(!parts[j])continue;
+                var m=parts[j].split('|');
+                var o=document.createElement('option');
+                o.value=m[0]||'';
+                o.text=parts[j];
+                s.appendChild(o);
+            }
+        }
+    }
+    if(sel && typeof MutationObserver!=='undefined'){
+        var mo=new MutationObserver(function(){fixInterfaces();});
+        mo.observe(sel,{childList:true,subtree:true});
+        setTimeout(fixInterfaces,300);
+        setTimeout(fixInterfaces,1000);
+    }
+});
