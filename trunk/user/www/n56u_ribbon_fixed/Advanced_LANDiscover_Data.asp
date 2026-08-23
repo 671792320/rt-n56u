@@ -7,6 +7,7 @@
 |<% nvram_get_x("", "lan_discovery_status_state"); %>
 |<% nvram_get_x("", "lan_discovery_status_count"); %>
 |<% nvram_get_x("", "lan_discovery_status_last"); %>
+|<% nvram_get_x("", "lan_discovery_interfaces"); %>
 |<% nvram_get_x("", "lan_discovery_log"); %>
 ---DEVICES---
 <% nvram_get_x("", "lan_discovery_devices"); %>
