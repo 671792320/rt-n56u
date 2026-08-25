@@ -5,6 +5,41 @@ nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
 
+# Return the first usable IPv4 address for an interface.
+# On Padavan/MT7620 boards, eth*.1 can be a VLAN/LAN member without
+# carrying the LAN address itself; the address commonly lives on br0.
+iface_ipv4() {
+    iface="$1"
+    ip4="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
+    if [ -z "$ip4" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then
+        ip4="$(ip -4 addr show dev br0 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
+    fi
+    if [ -z "$ip4" ]; then
+        ip4="$(nv lan_ipaddr)"
+    fi
+    printf '%s' "${ip4:--}"
+}
+
+# Return the best MAC for a logical LAN interface.
+# Prefer the selected interface, then bridge, then Padavan's lan_hwaddr.
+iface_mac() {
+    iface="$1"
+    mac="$(cat "/sys/class/net/$iface/address" 2>/dev/null)"
+    case "$mac" in
+        ""|00:00:00:00:00:00) mac="";;
+    esac
+    if [ -z "$mac" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then
+        mac="$(cat /sys/class/net/br0/address 2>/dev/null)"
+        case "$mac" in
+            ""|00:00:00:00:00:00) mac="";;
+        esac
+    fi
+    if [ -z "$mac" ]; then
+        mac="$(nv lan_hwaddr)"
+    fi
+    printf '%s' "${mac:--}"
+}
+
 ensure_defaults() {
     [ -n "$(nv lan_discovery_enable)" ] || nvram set lan_discovery_enable=1
     [ -n "$(nv lan_discovery_ifname)" ] || nvram set lan_discovery_ifname=eth2.1
@@ -54,8 +89,8 @@ refresh_interfaces() {
             br*) role="LAN";;
             eth*.1) role="LAN";;
         esac
-        ip="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
-        mac="$(cat "$p/address" 2>/dev/null)"
+        ip4="$(iface_ipv4 "$iface")"
+        mac="$(iface_mac "$iface")"
         if [ -r "$p/carrier" ]; then
             link="$(cat "$p/carrier" 2>/dev/null)"
             [ "$link" = "1" ] && link="UP" || link="DOWN"
@@ -64,7 +99,7 @@ refresh_interfaces() {
             [ "$link" = "up" ] && link="UP"
             [ "$link" = "down" ] && link="DOWN"
         fi
-        line="${iface}|${role}|${ip:--}|${mac:--}|${link:--}"
+        line="${iface}|${role}|${ip4}|${mac}|${link:--}"
         if [ -n "$out" ]; then out="$(printf '%s\n%s' "$out" "$line")"; else out="$line"; fi
     done
     nvram set lan_discovery_interfaces "$out"
@@ -72,8 +107,8 @@ refresh_interfaces() {
 
 set_link_status() {
     iface="$1"; link="$2"
-    ip="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
-    mac="$(cat "/sys/class/net/$iface/address" 2>/dev/null)"
+    ip4="$(iface_ipv4 "$iface")"
+    mac="$(iface_mac "$iface")"
     role="LAN"
     if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
     case "$iface" in
@@ -84,8 +119,8 @@ set_link_status() {
     esac
     nvram set lan_discovery_status_if="$iface"
     nvram set lan_discovery_status_role="$role"
-    nvram set lan_discovery_status_ip="${ip:--}"
-    nvram set lan_discovery_status_mac="${mac:--}"
+    nvram set lan_discovery_status_ip="$ip4"
+    nvram set lan_discovery_status_mac="$mac"
     nvram set lan_discovery_status_link="$link"
 }
 
