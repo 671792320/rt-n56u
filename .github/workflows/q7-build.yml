@@ -84,18 +84,23 @@ jobs:
           grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
 
       - name: Build ZTE_Q7
+        shell: bash
         run: |
           set -e
+          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+          sed -i "s/^FIRMWARE_BUILDS_VER=.*/FIRMWARE_BUILDS_VER=${BUILD_DATE}/" trunk/versions.inc
+          sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${BUILD_DATE}|" trunk/versions.inc
+          echo "Firmware build version: ${BUILD_DATE}"
+          grep '^FIRMWARE_' trunk/versions.inc
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
           fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
-          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
           SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
           cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
           rm -f images/ZTE_Q7.trx
-          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           ls -lh images/*.trx
 
       - name: Upload Q7 firmware
