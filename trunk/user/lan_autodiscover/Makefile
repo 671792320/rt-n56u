@@ -11,6 +11,6 @@ all:
 
 romfs:
 	$(ROMFSINST) -p +x /usr/bin/lan_autodiscover.sh
+	$(ROMFSINST) -p +x /usr/bin/lan_discovery_supervisor.sh
 
 clean:
-
