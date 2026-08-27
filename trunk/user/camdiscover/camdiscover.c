@@ -49,7 +49,7 @@ static int make_udp_receiver(const char*group,int port,unsigned int ifindex){int
 static int make_custom_receiver(int port){int fd,reuse=1;struct sockaddr_in b;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return-1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));memset(&b,0,sizeof(b));b.sin_family=AF_INET;b.sin_port=htons((unsigned short)port);b.sin_addr.s_addr=htonl(INADDR_ANY);if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return-1;}return fd;}
 static int send_to_addr(int fd,const char*addr,int port,const char*data,size_t len){struct sockaddr_in d;ssize_t n;memset(&d,0,sizeof(d));d.sin_family=AF_INET;d.sin_port=htons((unsigned short)port);if(!inet_aton(addr,&d.sin_addr))return-1;n=sendto(fd,data,len,0,(struct sockaddr*)&d,sizeof(d));return n==(ssize_t)len?0:-1;}
 static int send_multicast(int fd,const char*group,int port,const char*data,size_t len){return send_to_addr(fd,group,port,data,len);}
-static int send_onvif_probe(int fd,int port){char p[2048];int n=snprintf(p,sizeof(p),"<?xml version=\"1.0\"?><e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><e:Header><w:MessageID>uuid:camdiscover-%lu</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>",(unsigned long)time(NULL));return(n>0&&n<(int)sizeof(p))?send_multicast(fd,ONVIF_ADDR,port,p,(size_t)n):-1;}
+static int send_onvif_probe(int fd,int port){char p[2048];int n=snprintf(p,sizeof(p),"<?xml version=\"1.0\"?><e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><e:Header><w:MessageID>uuid:camdiscover-%lu</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></w:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>",(unsigned long)time(NULL));return(n>0&&n<(int)sizeof(p))?send_multicast(fd,ONVIF_ADDR,port,p,(size_t)n):-1;}
 static int send_ssdp_probe(int fd,int port){static const char p[]="M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Padavan-camdiscover/1.0\r\n\r\n";return send_multicast(fd,SSDP_ADDR,port,p,strlen(p));}
 static int send_hik_probe(int fd,int port){static const char p[]="<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Probe>\r\n<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n<Types>inquiry</Types>\r\n</Probe>\r\n";return send_multicast(fd,HIK_ADDR,port,p,strlen(p));}
 static int send_dahua_probe(int fd,int port){unsigned char frame[320];unsigned int*u;static const char body[]="{\"method\":\"DHDiscover.search\",\"params\":{\"mac\":\"\",\"uni\":1}}";size_t blen=strlen(body);if(blen+32>sizeof(frame))return-1;u=(unsigned int*)frame;u[0]=32;u[1]=0x50494844;u[2]=0;u[3]=0;u[4]=(unsigned int)blen;u[5]=0;u[6]=(unsigned int)blen;u[7]=0;memcpy(frame+32,body,blen);return send_multicast(fd,DAHUA_ADDR,port,(const char*)frame,32+blen);}
@@ -60,39 +60,19 @@ static void send_custom_probes(struct discover_ctx*c){int fd,i,rc;for(i=0;i<c->c
 static void handle_custom(struct custom_probe*p){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[600];n=recvfrom(p->fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));snprintf(info,sizeof(info),"%s response len=%ld",p->name,(long)n);print_text_device(p->name,ip,info);printf("[camdiscover] custom %s RX %s:%d bytes=%ld\n",p->name,ip,ntohs(s.sin_port),(long)n);fflush(stdout);}
 static void handle_onvif(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],a[1024],t[1024],info[1200];n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));a[0]=t[0]=0;extract_tag(x,"d:XAddrs",a,sizeof(a));if(!a[0])extract_tag(x,"wsd:XAddrs",a,sizeof(a));if(!a[0])extract_tag(x,"XAddrs",a,sizeof(a));extract_tag(x,"d:Types",t,sizeof(t));if(!t[0])extract_tag(x,"wsd:Types",t,sizeof(t));if(a[0]){snprintf(info,sizeof(info),"XAddrs=%s Types=%s",a,t);print_text_device("ONVIF",ip,info);}else print_text_device("ONVIF",ip,t);}
 static void handle_ssdp(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512];const char*p;n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));info[0]=0;p=strstr(x,"Server:");if(!p)p=strstr(x,"SERVER:");if(p){p+=7;while(*p==' '||*p=='\t')p++;snprintf(info,sizeof(info),"SSDP Server=%.*s",200,p);}else if(strstr(x,"NOTIFY"))snprintf(info,sizeof(info),"SSDP NOTIFY");else snprintf(info,sizeof(info),"SSDP response");print_text_device("SSDP",ip,info);}
-static void handle_hik(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512],desc[256],serial[256],dtype[128];n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));desc[0]=serial[0]=dtype[0]=0;extract_tag(x,"DeviceDescription",desc,sizeof(desc));extract_tag(x,"DeviceSN",serial,sizeof(serial));extract_tag(x,"DeviceType",dtype,sizeof(dtype));snprintf(info,sizeof(info),"%s%s%s%s%s",desc[0]?"Description=":"",desc[0]?desc:"",serial[0]?" SN=":"",serial[0]?serial:"",dtype[0]?" Type=":"",dtype[0]?dtype:"");print_text_device("HIK-SADP",ip,info);}
+static void handle_hik(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512],desc[256],serial[256],dtype[128];n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));desc[0]=serial[0]=dtype[0]=0;extract_tag(x,"DeviceDescription",desc,sizeof(desc));extract_tag(x,"DeviceSN",serial,sizeof(serial));extract_tag(x,"DeviceType",dtype,sizeof(dtype));snprintf(info,sizeof(info),"%s%s%s%s%s%s",desc[0]?"Description=":"",desc[0]?desc:"",serial[0]?" SN=":"",serial[0]?serial:"",dtype[0]?" Type=":"",dtype[0]?dtype:"");print_text_device("HIK-SADP",ip,info);}
+
+static void mac_to_text(const unsigned char*m,char*out,size_t n){if(!m||!out||!n)return;snprintf(out,n,"%02x:%02x:%02x:%02x:%02x:%02x",m[0],m[1],m[2],m[3],m[4],m[5]);}
 
 static int handle_raw(int fd){
-    unsigned char buf[4096];
-    ssize_t n;
-    struct sockaddr_ll from;
-    socklen_t fl=sizeof(from);
-    unsigned short proto;
-    unsigned int ipoff;
-    char mac[32],ip[INET_ADDRSTRLEN];
-    struct iphdr*ih;
-    struct arphdr*ah;
-    n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl);
-    if(n<(ssize_t)sizeof(struct ethhdr))return 0;
-    proto=ntohs(*(unsigned short*)(buf+12)); ipoff=sizeof(struct ethhdr);
-    if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}
-    mac_to_text(buf+6,mac,sizeof(mac));
-    if(self_mac[0]&&!strcasecmp(mac,self_mac))return 0;
+    unsigned char buf[4096]; ssize_t n; struct sockaddr_ll from; socklen_t fl=sizeof(from); unsigned short proto; unsigned int ipoff; char mac[32],ip[INET_ADDRSTRLEN]; struct iphdr*ih; struct arphdr*ah;
+    n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl); if(n<(ssize_t)sizeof(struct ethhdr))return 0;
+    proto=ntohs(*(unsigned short*)(buf+12)); ipoff=sizeof(struct ethhdr); if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}
+    mac_to_text(buf+6,mac,sizeof(mac)); if(self_mac[0]&&!strcasecmp(mac,self_mac))return 0;
     if(proto==ETH_P_ARP&&n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){
-        ah=(struct arphdr*)(buf+ipoff);
-        if(ntohs(ah->ar_pro)==ETH_P_IP&&ah->ar_hln==6&&ah->ar_pln==4){
-            unsigned char *arp=buf+ipoff+sizeof(struct arphdr); char srcip[INET_ADDRSTRLEN];
-            if(inet_ntop(AF_INET,arp+6,srcip,sizeof(srcip))){
-                if(ah->ar_op==htons(ARPOP_REPLY)||ah->ar_op==htons(ARPOP_REQUEST))print_ipv4_device("ARP",srcip,mac);
-            }
-        }
-        return 1;
+        ah=(struct arphdr*)(buf+ipoff); if(ntohs(ah->ar_pro)==ETH_P_IP&&ah->ar_hln==6&&ah->ar_pln==4){unsigned char *arp=buf+ipoff+sizeof(struct arphdr); char srcip[INET_ADDRSTRLEN]; if(inet_ntop(AF_INET,arp+6,srcip,sizeof(srcip))){if(ah->ar_op==htons(ARPOP_REPLY)||ah->ar_op==htons(ARPOP_REQUEST))print_ipv4_device("ARP",srcip,mac);}} return 1;
     }
-    if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){
-        ih=(struct iphdr*)(buf+ipoff);
-        if(ih->version!=4||ih->ihl<5)return 1;
-        if(inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip))&&strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1"))print_ipv4_device("IP",ip,mac);
-    }
+    if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){ih=(struct iphdr*)(buf+ipoff);if(ih->version!=4||ih->ihl<5)return 1;if(inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip))&&strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1"))print_ipv4_device("IP",ip,mac);}
     return 1;
 }
 
