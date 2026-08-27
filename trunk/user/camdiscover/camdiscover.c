@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <errno.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
@@ -31,44 +32,374 @@
 #define CUSTOM_NAME 64
 #define CUSTOM_ADDR 64
 #define CUSTOM_PAYLOAD 1024
+#define MAX_RANGES 16
+#define ARP_BATCH 128
+#define ARP_WAIT_US 500
 
 struct custom_probe { int fd; int port; char name[CUSTOM_NAME]; char addr[CUSTOM_ADDR]; char payload[CUSTOM_PAYLOAD]; };
-struct discover_ctx { int fd_onvif,fd_ssdp,fd_hik,fd_dahua,fd_raw; const char *ifname; unsigned int ifindex; struct custom_probe custom[MAX_CUSTOM]; int custom_count; };
+struct ip_range { unsigned int first; unsigned int last; };
+struct discover_ctx {
+    int fd_onvif, fd_ssdp, fd_hik, fd_dahua, fd_raw;
+    const char *ifname; unsigned int ifindex;
+    struct custom_probe custom[MAX_CUSTOM]; int custom_count;
+    struct ip_range ranges[MAX_RANGES]; int range_count;
+    unsigned int arp_next, arp_end; int arp_active;
+    unsigned char target_mac[6]; int have_target_mac;
+};
 struct seen_entry { char key[96]; };
-static struct seen_entry seen[MAX_DEVICES]; static int seen_count; static char self_mac[32]; static char self_ips[16][INET_ADDRSTRLEN]; static int self_ip_count;
+static struct seen_entry seen[MAX_DEVICES];
+static int seen_count;
+static char self_mac[32];
+static unsigned char self_mac_bin[6];
+static char self_ips[16][INET_ADDRSTRLEN];
+static int self_ip_count;
+static unsigned int self_if_ip;
 
-static unsigned int get_ifindex(const char *ifname){int fd;struct ifreq ifr;if(!ifname||!*ifname)return 0;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return 0;memset(&ifr,0,sizeof(ifr));strncpy(ifr.ifr_name,ifname,IFNAMSIZ-1);if(ioctl(fd,SIOCGIFINDEX,&ifr)<0){close(fd);return 0;}close(fd);return (unsigned int)ifr.ifr_ifindex;}
-static int seen_add(const char *key){int i;if(!key||!*key)return 0;for(i=0;i<seen_count;i++)if(!strcmp(seen[i].key,key))return 0;if(seen_count<MAX_DEVICES){strncpy(seen[seen_count].key,key,sizeof(seen[seen_count].key)-1);seen[seen_count].key[sizeof(seen[seen_count].key)-1]=0;seen_count++;}return 1;}
-static void extract_tag(const char *x,const char *tag,char *o,size_t n){char a[96],b[96];const char*p,*q;size_t l;if(!x||!tag||!o||!n)return;snprintf(a,sizeof(a),"<%s>",tag);snprintf(b,sizeof(b),"</%s>",tag);p=strstr(x,a);if(!p)return;p+=strlen(a);q=strstr(p,b);if(!q)return;l=(size_t)(q-p);if(l>=n)l=n-1;memcpy(o,p,l);o[l]=0;}
-static int is_self_ip(const char *ip){int i;if(!ip||!*ip)return 0;for(i=0;i<self_ip_count;i++)if(!strcmp(self_ips[i],ip))return 1;return 0;}
-static void load_self_addresses(void){int fd;char buf[4096];struct ifconf ifc;struct ifreq*ifr;int i,n;self_ip_count=0;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return;memset(&ifc,0,sizeof(ifc));ifc.ifc_len=sizeof(buf);ifc.ifc_buf=buf;if(ioctl(fd,SIOCGIFCONF,&ifc)==0){n=ifc.ifc_len/(int)sizeof(struct ifreq);ifr=ifc.ifc_req;for(i=0;i<n&&self_ip_count<16;i++){struct sockaddr_in*sa=(struct sockaddr_in*)&ifr[i].ifr_addr;if(sa->sin_family==AF_INET&&inet_ntop(AF_INET,&sa->sin_addr,self_ips[self_ip_count],INET_ADDRSTRLEN))self_ip_count++;}}close(fd);}
-static void load_self_mac(const char *ifname){int fd;struct ifreq ifr;unsigned char*m;if(!ifname)return;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return;memset(&ifr,0,sizeof(ifr));strncpy(ifr.ifr_name,ifname,IFNAMSIZ-1);if(ioctl(fd,SIOCGIFHWADDR,&ifr)==0){m=(unsigned char*)ifr.ifr_hwaddr.sa_data;snprintf(self_mac,sizeof(self_mac),"%02x:%02x:%02x:%02x:%02x:%02x",m[0],m[1],m[2],m[3],m[4],m[5]);}close(fd);}
-static void print_ipv4_device(const char*kind,const char*ip,const char*mac){char key[96];if(is_self_ip(ip))return;snprintf(key,sizeof(key),"%s:%s:%s",kind,ip?ip:"",mac?mac:"");if(!seen_add(key))return;printf("DEVICE type=%s IP=%s",kind,ip?ip:"-");if(mac&&*mac)printf(" MAC=%s",mac);printf("\n");fflush(stdout);}
-static void print_text_device(const char*kind,const char*ip,const char*text){char key[96];if(is_self_ip(ip))return;snprintf(key,sizeof(key),"%s:%s",kind,ip?ip:"");if(!seen_add(key))return;printf("DEVICE type=%s IP=%s",kind,ip?ip:"-");if(text&&*text)printf(" INFO=%s",text);printf("\n");fflush(stdout);}
-static int make_udp_receiver(const char*group,int port,unsigned int ifindex){int fd,reuse=1,ttl=2;struct sockaddr_in b;struct ip_mreqn m,mi;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return-1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));memset(&b,0,sizeof(b));b.sin_family=AF_INET;b.sin_port=htons((unsigned short)port);b.sin_addr.s_addr=htonl(INADDR_ANY);if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return-1;}memset(&mi,0,sizeof(mi));mi.imr_ifindex=(int)ifindex;setsockopt(fd,IPPROTO_IP,IP_MULTICAST_IF,&mi,sizeof(mi));setsockopt(fd,IPPROTO_IP,IP_MULTICAST_TTL,&ttl,sizeof(ttl));memset(&m,0,sizeof(m));if(!inet_aton(group,&m.imr_multiaddr)){close(fd);return-1;}m.imr_ifindex=(int)ifindex;if(setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))<0){close(fd);return-1;}return fd;}
-static int make_custom_receiver(int port){int fd,reuse=1;struct sockaddr_in b;fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)return-1;setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));memset(&b,0,sizeof(b));b.sin_family=AF_INET;b.sin_port=htons((unsigned short)port);b.sin_addr.s_addr=htonl(INADDR_ANY);if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return-1;}return fd;}
-static int send_to_addr(int fd,const char*addr,int port,const char*data,size_t len){struct sockaddr_in d;ssize_t n;memset(&d,0,sizeof(d));d.sin_family=AF_INET;d.sin_port=htons((unsigned short)port);if(!inet_aton(addr,&d.sin_addr))return-1;n=sendto(fd,data,len,0,(struct sockaddr*)&d,sizeof(d));return n==(ssize_t)len?0:-1;}
+static unsigned int get_ifindex(const char *ifname){
+    int fd; struct ifreq ifr;
+    if(!ifname||!*ifname)return 0;
+    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return 0;
+    memset(&ifr,0,sizeof(ifr)); strncpy(ifr.ifr_name,ifname,IFNAMSIZ-1);
+    if(ioctl(fd,SIOCGIFINDEX,&ifr)<0){close(fd);return 0;}
+    close(fd); return (unsigned int)ifr.ifr_ifindex;
+}
+
+static int seen_add(const char *key){
+    int i;
+    if(!key||!*key)return 0;
+    for(i=0;i<seen_count;i++) if(!strcmp(seen[i].key,key)) return 0;
+    if(seen_count<MAX_DEVICES){
+        strncpy(seen[seen_count].key,key,sizeof(seen[seen_count].key)-1);
+        seen[seen_count].key[sizeof(seen[seen_count].key)-1]=0; seen_count++;
+    }
+    return 1;
+}
+
+static void extract_tag(const char *x,const char *tag,char *o,size_t n){
+    char a[96],b[96]; const char*p,*q; size_t l;
+    if(!x||!tag||!o||!n)return;
+    snprintf(a,sizeof(a),"<%s>",tag); snprintf(b,sizeof(b),"</%s>",tag);
+    p=strstr(x,a); if(!p)return; p+=strlen(a); q=strstr(p,b); if(!q)return;
+    l=(size_t)(q-p); if(l>=n)l=n-1; memcpy(o,p,l); o[l]=0;
+}
+
+static int is_self_ip(const char *ip){
+    int i; if(!ip||!*ip)return 0;
+    for(i=0;i<self_ip_count;i++) if(!strcmp(self_ips[i],ip))return 1;
+    return 0;
+}
+
+static void load_self_addresses(const char *ifname){
+    int fd; char buf[4096]; struct ifconf ifc; struct ifreq *ifr; int i,n;
+    struct ifreq one;
+    self_ip_count=0; self_if_ip=0;
+    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return;
+    memset(&ifc,0,sizeof(ifc)); ifc.ifc_len=sizeof(buf); ifc.ifc_buf=buf;
+    if(ioctl(fd,SIOCGIFCONF,&ifc)==0){
+        n=ifc.ifc_len/(int)sizeof(struct ifreq); ifr=ifc.ifc_req;
+        for(i=0;i<n&&self_ip_count<16;i++){
+            struct sockaddr_in *sa=(struct sockaddr_in*)&ifr[i].ifr_addr;
+            if(sa->sin_family==AF_INET&&inet_ntop(AF_INET,&sa->sin_addr,self_ips[self_ip_count],INET_ADDRSTRLEN))
+                self_ip_count++;
+        }
+    }
+    memset(&one,0,sizeof(one)); strncpy(one.ifr_name,ifname,IFNAMSIZ-1);
+    if(ioctl(fd,SIOCGIFADDR,&one)==0){
+        struct sockaddr_in *sa=(struct sockaddr_in*)&one.ifr_addr; self_if_ip=ntohl(sa->sin_addr.s_addr);
+    }
+    close(fd);
+}
+
+static void load_self_mac(const char *ifname){
+    int fd; struct ifreq ifr; unsigned char*m;
+    if(!ifname)return;
+    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return;
+    memset(&ifr,0,sizeof(ifr)); strncpy(ifr.ifr_name,ifname,IFNAMSIZ-1);
+    if(ioctl(fd,SIOCGIFHWADDR,&ifr)==0){
+        m=(unsigned char*)ifr.ifr_hwaddr.sa_data;
+        memcpy(self_mac_bin,m,6);
+        snprintf(self_mac,sizeof(self_mac),"%02x:%02x:%02x:%02x:%02x:%02x",m[0],m[1],m[2],m[3],m[4],m[5]);
+    }
+    close(fd);
+}
+
+static void print_ipv4_device(const char*kind,const char*ip,const char*mac){
+    char key[96]; if(is_self_ip(ip))return;
+    snprintf(key,sizeof(key),"%s:%s:%s",kind,ip?ip:"",mac?mac:"");
+    if(!seen_add(key))return;
+    printf("DEVICE type=%s IP=%s",kind,ip?ip:"-"); if(mac&&*mac)printf(" MAC=%s",mac); printf("\n"); fflush(stdout);
+}
+
+static void print_text_device(const char*kind,const char*ip,const char*text){
+    char key[96]; if(is_self_ip(ip))return;
+    snprintf(key,sizeof(key),"%s:%s",kind,ip?ip:""); if(!seen_add(key))return;
+    printf("DEVICE type=%s IP=%s",kind,ip?ip:"-"); if(text&&*text)printf(" INFO=%s",text); printf("\n"); fflush(stdout);
+}
+
+static int make_udp_receiver(const char*group,int port,unsigned int ifindex){
+    int fd,reuse=1,ttl=2; struct sockaddr_in b; struct ip_mreqn m,mi;
+    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return-1;
+    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
+    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port); b.sin_addr.s_addr=htonl(INADDR_ANY);
+    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return-1;}
+    memset(&mi,0,sizeof(mi)); mi.imr_ifindex=(int)ifindex;
+    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_IF,&mi,sizeof(mi)); setsockopt(fd,IPPROTO_IP,IP_MULTICAST_TTL,&ttl,sizeof(ttl));
+    memset(&m,0,sizeof(m)); if(!inet_aton(group,&m.imr_multiaddr)){close(fd);return-1;}
+    m.imr_ifindex=(int)ifindex;
+    if(setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))<0){close(fd);return-1;}
+    return fd;
+}
+
+static int make_custom_receiver(int port){
+    int fd,reuse=1; struct sockaddr_in b;
+    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return-1;
+    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
+    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port); b.sin_addr.s_addr=htonl(INADDR_ANY);
+    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return-1;} return fd;
+}
+
+static int send_to_addr(int fd,const char*addr,int port,const char*data,size_t len){
+    struct sockaddr_in d; ssize_t n; memset(&d,0,sizeof(d)); d.sin_family=AF_INET; d.sin_port=htons((unsigned short)port);
+    if(!inet_aton(addr,&d.sin_addr))return-1; n=sendto(fd,data,len,0,(struct sockaddr*)&d,sizeof(d)); return n==(ssize_t)len?0:-1;
+}
 static int send_multicast(int fd,const char*group,int port,const char*data,size_t len){return send_to_addr(fd,group,port,data,len);}
-static int send_onvif_probe(int fd,int port){char p[2048];int n=snprintf(p,sizeof(p),"<?xml version=\"1.0\"?><e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><e:Header><w:MessageID>uuid:camdiscover-%lu</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>",(unsigned long)time(NULL));return(n>0&&n<(int)sizeof(p))?send_multicast(fd,ONVIF_ADDR,port,p,(size_t)n):-1;}
-static int send_ssdp_probe(int fd,int port){static const char p[]="M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Padavan-camdiscover/1.0\r\n\r\n";return send_multicast(fd,SSDP_ADDR,port,p,strlen(p));}
-static int send_hik_probe(int fd,int port){static const char p[]="<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Probe>\r\n<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n<Types>inquiry</Types>\r\n</Probe>\r\n";return send_multicast(fd,HIK_ADDR,port,p,strlen(p));}
-static int send_dahua_probe(int fd,int port){unsigned char frame[320];unsigned int*u;static const char body[]="{\"method\":\"DHDiscover.search\",\"params\":{\"mac\":\"\",\"uni\":1}}";size_t blen=strlen(body);if(blen+32>sizeof(frame))return-1;u=(unsigned int*)frame;u[0]=32;u[1]=0x50494844;u[2]=0;u[3]=0;u[4]=(unsigned int)blen;u[5]=0;u[6]=(unsigned int)blen;u[7]=0;memcpy(frame+32,body,blen);return send_multicast(fd,DAHUA_ADDR,port,(const char*)frame,32+blen);}
+
+static int send_onvif_probe(int fd,int port){
+    char p[2048]; int n=snprintf(p,sizeof(p),"<?xml version=\"1.0\"?><e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><e:Header><w:MessageID>uuid:camdiscover-%lu</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></w:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>",(unsigned long)time(NULL));
+    return(n>0&&n<(int)sizeof(p))?send_multicast(fd,ONVIF_ADDR,port,p,(size_t)n):-1;
+}
+static int send_ssdp_probe(int fd,int port){
+    static const char p[]="M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Padavan-camdiscover/1.1\r\n\r\n";
+    return send_multicast(fd,SSDP_ADDR,port,p,strlen(p));
+}
+static int send_hik_probe(int fd,int port){
+    static const char p[]="<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Probe>\r\n<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n<Types>inquiry</Types>\r\n</Probe>\r\n";
+    return send_multicast(fd,HIK_ADDR,port,p,strlen(p));
+}
+static int send_dahua_probe(int fd,int port){
+    unsigned char frame[320]; unsigned int*u; static const char body[]={"{\"method\":\"DHDiscover.search\",\"params\":{\"mac\":\"\",\"uni\":1}}"}; size_t blen=strlen(body);
+    if(blen+32>sizeof(frame))return-1; memset(frame,0,32); u=(unsigned int*)frame; u[0]=32; u[1]=0x50494844; u[4]=(unsigned int)blen; u[6]=(unsigned int)blen; memcpy(frame+32,body,blen);
+    return send_multicast(fd,DAHUA_ADDR,port,(const char*)frame,32+blen);
+}
+
 static int hexval(int c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;}
-static size_t url_decode(char*out,size_t n,const char*in){size_t i=0,j=0;while(in&&in[i]&&j+1<n){if(in[i]=='%'&&in[i+1]&&in[i+2]){int a=hexval(in[i+1]),b=hexval(in[i+2]);if(a>=0&&b>=0){out[j++]=(char)((a<<4)|b);i+=3;continue;}}if(in[i]=='+')out[j++]=' ';else out[j++]=in[i];i++;}out[j]=0;return j;}
-static int load_custom(const char*path,struct discover_ctx*c){FILE*f;char line[1800],*a,*b,*d,*e;int i;f=fopen(path,"r");if(!f)return 0;while(fgets(line,sizeof(line),f)&&c->custom_count<MAX_CUSTOM){line[strcspn(line,"\r\n")]=0;if(!line[0])continue;a=strchr(line,'|');if(!a)continue;*a++=0;b=strchr(a,'|');if(!b)continue;*b++=0;d=strchr(b,'|');if(!d)continue;*d++=0;e=strchr(d,'|');if(!e)continue;*e++=0;if(strcmp(e,"1"))continue;i=c->custom_count;url_decode(c->custom[i].name,sizeof(c->custom[i].name),line);url_decode(c->custom[i].addr,sizeof(c->custom[i].addr),a);c->custom[i].port=atoi(b);url_decode(c->custom[i].payload,sizeof(c->custom[i].payload),d);c->custom[i].fd=make_custom_receiver(c->custom[i].port);if(c->custom[i].fd<0)fprintf(stderr,"[camdiscover] custom %s listen UDP/%d FAILED\n",c->custom[i].name,c->custom[i].port);else{printf("[camdiscover] custom %s listen %s:%d\n",c->custom[i].name,c->custom[i].addr,c->custom[i].port);fflush(stdout);}c->custom_count++;}fclose(f);return c->custom_count;}
-static void send_custom_probes(struct discover_ctx*c){int fd,i,rc;for(i=0;i<c->custom_count;i++){fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)continue;rc=send_to_addr(fd,c->custom[i].addr,c->custom[i].port,c->custom[i].payload,strlen(c->custom[i].payload));printf("[camdiscover] custom %s probe %s\n",c->custom[i].name,rc==0?"sent":"FAILED");fflush(stdout);close(fd);}}
-static void handle_custom(struct custom_probe*p){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[600];n=recvfrom(p->fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));snprintf(info,sizeof(info),"%s response len=%ld",p->name,(long)n);print_text_device(p->name,ip,info);printf("[camdiscover] custom %s RX %s:%d bytes=%ld\n",p->name,ip,ntohs(s.sin_port),(long)n);fflush(stdout);}
-static void handle_onvif(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],a[1024],t[1024],info[1200];n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));a[0]=t[0]=0;extract_tag(x,"d:XAddrs",a,sizeof(a));if(!a[0])extract_tag(x,"wsd:XAddrs",a,sizeof(a));if(!a[0])extract_tag(x,"XAddrs",a,sizeof(a));extract_tag(x,"d:Types",t,sizeof(t));if(!t[0])extract_tag(x,"wsd:Types",t,sizeof(t));if(a[0]){snprintf(info,sizeof(info),"XAddrs=%s Types=%s",a,t);print_text_device("ONVIF",ip,info);}else print_text_device("ONVIF",ip,t);}
-static void handle_ssdp(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512];const char*p;n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));info[0]=0;p=strstr(x,"Server:");if(!p)p=strstr(x,"SERVER:");if(p){p+=7;while(*p==' '||*p=='\t')p++;snprintf(info,sizeof(info),"SSDP Server=%.*s",200,p);}else if(strstr(x,"NOTIFY"))snprintf(info,sizeof(info),"SSDP NOTIFY");else snprintf(info,sizeof(info),"SSDP response");print_text_device("SSDP",ip,info);}
-static void handle_hik(int fd){char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512],desc[256],serial[256],dtype[128];n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));desc[0]=serial[0]=dtype[0]=0;extract_tag(x,"DeviceDescription",desc,sizeof(desc));extract_tag(x,"DeviceSN",serial,sizeof(serial));extract_tag(x,"DeviceType",dtype,sizeof(dtype));snprintf(info,sizeof(info),"Model=%s SN=%s DeviceType=%s",desc,serial,dtype);print_text_device("HIK-SADP",ip,info);}
-static void handle_dahua(int fd){unsigned char x[BUF_SIZE];struct sockaddr_in s;socklen_t sl=sizeof(s);ssize_t n;char ip[INET_ADDRSTRLEN],info[512];const char*p,*q;size_t l;n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl);if(n<=0)return;x[n]=0;inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));p=(const char*)x;q=strstr(p,"deviceInfo");if(q){l=(size_t)(q-p);if(l>250)l=250;snprintf(info,sizeof(info),"DHIP response %.*s",(int)l,q);}else snprintf(info,sizeof(info),"DHIP discovery response len=%ld",(long)n);print_text_device("DAHUA-DHIP",ip,info);}
+static size_t url_decode(char*out,size_t n,const char*in){
+    size_t i=0,j=0; while(in&&in[i]&&j+1<n){
+        if(in[i]=='%'&&in[i+1]&&in[i+2]){int a=hexval(in[i+1]),b=hexval(in[i+2]);if(a>=0&&b>=0){out[j++]=(char)((a<<4)|b);i+=3;continue;}}
+        if(in[i]=='+')out[j++]=' ';else out[j++]=in[i]; i++;
+    } out[j]=0; return j;
+}
+
+static int load_custom(const char*path,struct discover_ctx*c){
+    FILE*f; char line[1800],*a,*b,*d,*e; int i;
+    f=fopen(path,"r"); if(!f)return 0;
+    while(fgets(line,sizeof(line),f)&&c->custom_count<MAX_CUSTOM){
+        line[strcspn(line,"\r\n")]=0; if(!line[0])continue;
+        a=strchr(line,'|'); if(!a)continue; *a++=0; b=strchr(a,'|'); if(!b)continue; *b++=0; d=strchr(b,'|'); if(!d)continue; *d++=0; e=strchr(d,'|'); if(!e)continue; *e++=0;
+        if(strcmp(e,"1"))continue; i=c->custom_count;
+        url_decode(c->custom[i].name,sizeof(c->custom[i].name),line); url_decode(c->custom[i].addr,sizeof(c->custom[i].addr),a);
+        c->custom[i].port=atoi(b); url_decode(c->custom[i].payload,sizeof(c->custom[i].payload),d); c->custom[i].fd=make_custom_receiver(c->custom[i].port);
+        if(c->custom[i].fd<0)fprintf(stderr,"[camdiscover] custom %s listen UDP/%d FAILED\n",c->custom[i].name,c->custom[i].port);
+        else{printf("[camdiscover] custom %s listen %s:%d\n",c->custom[i].name,c->custom[i].addr,c->custom[i].port);fflush(stdout);} c->custom_count++;
+    }
+    fclose(f); return c->custom_count;
+}
+static void send_custom_probes(struct discover_ctx*c){
+    int fd,i,rc; for(i=0;i<c->custom_count;i++){fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)continue;rc=send_to_addr(fd,c->custom[i].addr,c->custom[i].port,c->custom[i].payload,strlen(c->custom[i].payload));printf("[camdiscover] custom %s probe %s\n",c->custom[i].name,rc==0?"sent":"FAILED");fflush(stdout);close(fd);}
+}
+static void handle_custom(struct custom_probe*p){
+    char x[BUF_SIZE]; struct sockaddr_in s; socklen_t sl=sizeof(s); ssize_t n; char ip[INET_ADDRSTRLEN],info[600];
+    n=recvfrom(p->fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl); if(n<=0)return; x[n]=0; inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));
+    snprintf(info,sizeof(info),"%s response len=%ld",p->name,(long)n); print_text_device(p->name,ip,info);
+    printf("[camdiscover] custom %s RX %s:%d bytes=%ld\n",p->name,ip,ntohs(s.sin_port),(long)n); fflush(stdout);
+}
+static void handle_onvif(int fd){
+    char x[BUF_SIZE]; struct sockaddr_in s; socklen_t sl=sizeof(s); ssize_t n; char ip[INET_ADDRSTRLEN],a[1024],t[1024],info[1200];
+    n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl); if(n<=0)return; x[n]=0; inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip)); a[0]=t[0]=0;
+    extract_tag(x,"d:XAddrs",a,sizeof(a)); if(!a[0])extract_tag(x,"wsd:XAddrs",a,sizeof(a)); if(!a[0])extract_tag(x,"XAddrs",a,sizeof(a));
+    extract_tag(x,"d:Types",t,sizeof(t)); if(!t[0])extract_tag(x,"wsd:Types",t,sizeof(t));
+    if(a[0]){snprintf(info,sizeof(info),"XAddrs=%s Types=%s",a,t);print_text_device("ONVIF",ip,info);} else print_text_device("ONVIF",ip,t);
+}
+static void handle_ssdp(int fd){
+    char x[BUF_SIZE]; struct sockaddr_in s; socklen_t sl=sizeof(s); ssize_t n; char ip[INET_ADDRSTRLEN],info[512]; const char*p;
+    n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl); if(n<=0)return; x[n]=0; inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip)); info[0]=0;
+    p=strstr(x,"Server:"); if(!p)p=strstr(x,"SERVER:");
+    if(p){p+=7;while(*p==' '||*p=='\t')p++;snprintf(info,sizeof(info),"SSDP Server=%.*s",200,p);} else if(strstr(x,"NOTIFY"))snprintf(info,sizeof(info),"SSDP NOTIFY"); else snprintf(info,sizeof(info),"SSDP response");
+    print_text_device("SSDP",ip,info);
+}
+static void handle_hik(int fd){
+    char x[BUF_SIZE]; struct sockaddr_in s; socklen_t sl=sizeof(s); ssize_t n; char ip[INET_ADDRSTRLEN],info[512],desc[256],serial[256],dtype[128];
+    n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl); if(n<=0)return; x[n]=0; inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip)); desc[0]=serial[0]=dtype[0]=0;
+    extract_tag(x,"DeviceDescription",desc,sizeof(desc)); extract_tag(x,"DeviceSN",serial,sizeof(serial)); extract_tag(x,"DeviceType",dtype,sizeof(dtype));
+    snprintf(info,sizeof(info),"Model=%s SN=%s DeviceType=%s",desc,serial,dtype); print_text_device("HIK-SADP",ip,info);
+}
+static void handle_dahua(int fd){
+    unsigned char x[BUF_SIZE]; struct sockaddr_in s; socklen_t sl=sizeof(s); ssize_t n; char ip[INET_ADDRSTRLEN],info[512]; const char*p,*q; size_t l;
+    n=recvfrom(fd,x,sizeof(x)-1,0,(struct sockaddr*)&s,&sl); if(n<=0)return; x[n]=0; inet_ntop(AF_INET,&s.sin_addr,ip,sizeof(ip));
+    p=(const char*)x; q=strstr(p,"deviceInfo"); if(q){l=(size_t)(q-p);if(l>250)l=250;snprintf(info,sizeof(info),"DHIP response %.*s",(int)l,q);} else snprintf(info,sizeof(info),"DHIP discovery response len=%ld",(long)n);
+    print_text_device("DAHUA-DHIP",ip,info);
+}
+
 static void mac_to_text(const unsigned char*m,char*out,size_t n){snprintf(out,n,"%02x:%02x:%02x:%02x:%02x:%02x",m[0],m[1],m[2],m[3],m[4],m[5]);}
-static void handle_raw(int fd){unsigned char buf[4096];struct sockaddr_ll from;socklen_t fl=sizeof(from);ssize_t n;unsigned short proto;unsigned int ipoff;char mac[32],ip[INET_ADDRSTRLEN];struct iphdr*ih;struct arphdr*ah;n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl);if(n<(ssize_t)sizeof(struct ethhdr))return;proto=ntohs(*(unsigned short*)(buf+12));ipoff=sizeof(struct ethhdr);if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}mac_to_text(buf+6,mac,sizeof(mac));if(self_mac[0]&&!strcasecmp(mac,self_mac))return;if(proto==ETH_P_ARP&&n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){ah=(struct arphdr*)(buf+ipoff);if(ntohs(ah->ar_hrd)==ARPHRD_ETHER&&ntohs(ah->ar_pro)==ETH_P_IP){unsigned char*arp=buf+ipoff+sizeof(struct arphdr);inet_ntop(AF_INET,arp+6,ip,sizeof(ip));print_ipv4_device("ARP",ip,mac);}return;}if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){ih=(struct iphdr*)(buf+ipoff);if(ih->version!=4||ih->ihl<5)return;inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip));if(strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1"))print_ipv4_device("IP",ip,mac);}}
-static void usage(const char*p){printf("Usage: %s [-i if] [-t sec] [-C custom-file] [-o onvif] [-s ssdp] [-k hik] [-d dahua] [-O 0|1] [-S 0|1] [-H 0|1] [-D 0|1] [-A 0|1]\n",p);}
-int main(int argc,char**argv){const char*ifname=NULL;const char*custom_file=NULL;int timeout=10,onvif_port=ONVIF_PORT,ssdp_port=SSDP_PORT,hik_port=HIK_PORT,dahua_port=DAHUA_PORT;int enable_onvif=1,enable_ssdp=1,enable_hik=1,enable_dahua=1,enable_raw=1,opt,i,rc;struct discover_ctx c;time_t end;memset(&c,0,sizeof(c));c.fd_onvif=c.fd_ssdp=c.fd_hik=c.fd_dahua=c.fd_raw=-1;while((opt=getopt(argc,argv,"i:t:C:o:s:k:d:O:S:H:D:A:h"))!=-1){if(opt=='i')ifname=optarg;else if(opt=='t'){timeout=atoi(optarg);if(timeout<1)timeout=1;if(timeout>60)timeout=60;}else if(opt=='C')custom_file=optarg;else if(opt=='o')onvif_port=atoi(optarg);else if(opt=='s')ssdp_port=atoi(optarg);else if(opt=='k')hik_port=atoi(optarg);else if(opt=='d')dahua_port=atoi(optarg);else if(opt=='O')enable_onvif=atoi(optarg)?1:0;else if(opt=='S')enable_ssdp=atoi(optarg)?1:0;else if(opt=='H')enable_hik=atoi(optarg)?1:0;else if(opt=='D')enable_dahua=atoi(optarg)?1:0;else if(opt=='A')enable_raw=atoi(optarg)?1:0;else{usage(argv[0]);return opt=='h'?0:1;}}
-if(!ifname)ifname="br0";c.ifname=ifname;c.ifindex=get_ifindex(ifname);load_self_addresses();load_self_mac(ifname);if(!c.ifindex){fprintf(stderr,"camdiscover: interface %s not found\n",ifname);return 1;}printf("[camdiscover] interface=%s ifindex=%u timeout=%d ports=%d/%d/%d/%d protocols=%d%d%d%d raw=%d\n",c.ifname,c.ifindex,timeout,onvif_port,ssdp_port,hik_port,dahua_port,enable_onvif,enable_ssdp,enable_hik,enable_dahua,enable_raw);fflush(stdout);
-if(enable_onvif)c.fd_onvif=make_udp_receiver(ONVIF_ADDR,onvif_port,c.ifindex);if(enable_ssdp)c.fd_ssdp=make_udp_receiver(SSDP_ADDR,ssdp_port,c.ifindex);if(enable_hik)c.fd_hik=make_udp_receiver(HIK_ADDR,hik_port,c.ifindex);if(enable_dahua)c.fd_dahua=make_udp_receiver(DAHUA_ADDR,dahua_port,c.ifindex);c.fd_raw=enable_raw?socket(AF_PACKET,SOCK_RAW,htons(ETH_P_ALL)):-1;if(c.fd_raw>=0){struct sockaddr_ll sll;memset(&sll,0,sizeof(sll));sll.sll_family=AF_PACKET;sll.sll_ifindex=(int)c.ifindex;sll.sll_protocol=htons(ETH_P_ALL);if(bind(c.fd_raw,(struct sockaddr*)&sll,sizeof(sll))<0){close(c.fd_raw);c.fd_raw=-1;}}
-if(custom_file)load_custom(custom_file,&c);
-if(c.fd_onvif>=0){rc=send_onvif_probe(c.fd_onvif,onvif_port);printf("[camdiscover] ONVIF probe %s\n",rc==0?"sent":"FAILED");}if(c.fd_ssdp>=0){rc=send_ssdp_probe(c.fd_ssdp,ssdp_port);printf("[camdiscover] SSDP probe %s\n",rc==0?"sent":"FAILED");}if(c.fd_hik>=0){rc=send_hik_probe(c.fd_hik,hik_port);printf("[camdiscover] HIK-SADP probe %s\n",rc==0?"sent":"FAILED");}if(c.fd_dahua>=0){rc=send_dahua_probe(c.fd_dahua,dahua_port);printf("[camdiscover] DAHUA-DHIP probe %s\n",rc==0?"sent":"FAILED");}send_custom_probes(&c);fflush(stdout);
-end=time(NULL)+timeout;while(time(NULL)<end){fd_set rfds;struct timeval tv;int maxfd=-1,left=(int)(end-time(NULL));FD_ZERO(&rfds);if(c.fd_onvif>=0){FD_SET(c.fd_onvif,&rfds);if(c.fd_onvif>maxfd)maxfd=c.fd_onvif;}if(c.fd_ssdp>=0){FD_SET(c.fd_ssdp,&rfds);if(c.fd_ssdp>maxfd)maxfd=c.fd_ssdp;}if(c.fd_hik>=0){FD_SET(c.fd_hik,&rfds);if(c.fd_hik>maxfd)maxfd=c.fd_hik;}if(c.fd_dahua>=0){FD_SET(c.fd_dahua,&rfds);if(c.fd_dahua>maxfd)maxfd=c.fd_dahua;}if(c.fd_raw>=0){FD_SET(c.fd_raw,&rfds);if(c.fd_raw>maxfd)maxfd=c.fd_raw;}for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0){FD_SET(c.custom[i].fd,&rfds);if(c.custom[i].fd>maxfd)maxfd=c.custom[i].fd;}if(maxfd<0)break;if(left<1)left=1;tv.tv_sec=left>1?1:left;tv.tv_usec=0;if(select(maxfd+1,&rfds,NULL,NULL,&tv)<0)continue;if(c.fd_onvif>=0&&FD_ISSET(c.fd_onvif,&rfds))handle_onvif(c.fd_onvif);if(c.fd_ssdp>=0&&FD_ISSET(c.fd_ssdp,&rfds))handle_ssdp(c.fd_ssdp);if(c.fd_hik>=0&&FD_ISSET(c.fd_hik,&rfds))handle_hik(c.fd_hik);if(c.fd_dahua>=0&&FD_ISSET(c.fd_dahua,&rfds))handle_dahua(c.fd_dahua);if(c.fd_raw>=0&&FD_ISSET(c.fd_raw,&rfds))handle_raw(c.fd_raw);for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0&&FD_ISSET(c.custom[i].fd,&rfds))handle_custom(&c.custom[i]);}
-if(c.fd_onvif>=0)close(c.fd_onvif);if(c.fd_ssdp>=0)close(c.fd_ssdp);if(c.fd_hik>=0)close(c.fd_hik);if(c.fd_dahua>=0)close(c.fd_dahua);if(c.fd_raw>=0)close(c.fd_raw);for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0)close(c.custom[i].fd);return 0;}
+static int mac_parse(const char*s,unsigned char*m){
+    unsigned int v[6]; if(!s||sscanf(s,"%02x:%02x:%02x:%02x:%02x:%02x",&v[0],&v[1],&v[2],&v[3],&v[4],&v[5])!=6)return -1;
+    m[0]=(unsigned char)v[0];m[1]=(unsigned char)v[1];m[2]=(unsigned char)v[2];m[3]=(unsigned char)v[3];m[4]=(unsigned char)v[4];m[5]=(unsigned char)v[5];return 0;
+}
+static int mac_equal(const unsigned char*a,const unsigned char*b){return !memcmp(a,b,6);}
+
+/* Parse x.x.x.x[/prefix]. Host bits are removed and usable hosts exclude network/broadcast for prefix < 31. */
+static int parse_cidr(const char*s,unsigned int*first,unsigned int*last){
+    char b[64]; char *slash; struct in_addr a; int p; unsigned int ip,mask;
+    if(!s||strlen(s)>=sizeof(b)||!first||!last)return -1; strcpy(b,s); slash=strchr(b,'/'); p=32;
+    if(slash){*slash++=0;p=atoi(slash);if(p<0||p>32)return -1;}
+    if(inet_aton(b,&a)==0)return -1; ip=ntohl(a.s_addr); mask=p==0?0:0xffffffffU<<(32-p); ip&=mask;
+    if(p>=31){*first=ip;*last=ip+(p==31?1:0);} else {*first=ip+1;*last=ip+((~mask)-1);}
+    return *last>=*first?0:-1;
+}
+static int add_range(struct discover_ctx*c,const char*s){
+    unsigned int a,b; if(c->range_count>=MAX_RANGES)return -1; if(parse_cidr(s,&a,&b)<0)return -1;
+    c->ranges[c->range_count].first=a; c->ranges[c->range_count].last=b; c->range_count++; return 0;
+}
+static void add_default_ranges(struct discover_ctx*c){
+    char s[64];
+    if(self_if_ip){ struct in_addr a; unsigned int net=self_if_ip&0xffffff00U; a.s_addr=htonl(net); snprintf(s,sizeof(s),"%s/24",inet_ntoa(a)); if(c->range_count<MAX_RANGES)add_range(c,s); }
+    /* The user's common factory-reset camera subnet is also scanned by default. */
+    if(c->range_count<MAX_RANGES)add_range(c,"192.168.1.0/24");
+}
+
+static int build_arp_request(unsigned char *frame,const unsigned char *src_mac,unsigned int spa,unsigned int tpa){
+    struct ethhdr *eth=(struct ethhdr*)frame; struct arphdr *ah; unsigned char *p;
+    memset(frame,0,42); memset(eth->h_dest,0xff,6); memcpy(eth->h_source,src_mac,6); eth->h_proto=htons(ETH_P_ARP);
+    ah=(struct arphdr*)(frame+sizeof(struct ethhdr)); ah->ar_hrd=htons(ARPHRD_ETHER); ah->ar_pro=htons(ETH_P_IP); ah->ar_hln=6; ah->ar_pln=4; ah->ar_op=htons(ARPOP_REQUEST);
+    p=frame+sizeof(struct ethhdr)+sizeof(struct arphdr); memcpy(p,src_mac,6); memcpy(p+6,&spa,4); memset(p+10,0,6); memcpy(p+16,&tpa,4); return 42;
+}
+static int send_arp_request(int fd,unsigned int ifindex,const unsigned char*src_mac,unsigned int spa,unsigned int tpa){
+    unsigned char frame[64]; struct sockaddr_ll dst; int n=build_arp_request(frame,src_mac,spa,tpa); ssize_t rc;
+    memset(&dst,0,sizeof(dst)); dst.sll_family=AF_PACKET; dst.sll_ifindex=(int)ifindex; dst.sll_halen=6; memset(dst.sll_addr,0xff,6);
+    rc=sendto(fd,frame,n,0,(struct sockaddr*)&dst,sizeof(dst)); return rc==n?0:-1;
+}
+
+static void arp_scan_kick(struct discover_ctx*c){
+    int burst=0; unsigned int ip;
+    if(c->fd_raw<0||!c->arp_active)return;
+    while(c->range_count>0 && burst<ARP_BATCH){
+        if(c->arp_next>c->arp_end){ c->range_count--; if(c->range_count==0){c->arp_active=0;break;} c->arp_next=c->ranges[MAX_RANGES-c->range_count].first; c->arp_end=c->ranges[MAX_RANGES-c->range_count].last; continue; }
+        ip=c->arp_next++; send_arp_request(c->fd_raw,c->ifindex,self_mac_bin,self_if_ip,htonl(ip)); burst++;
+    }
+}
+
+static void handle_raw(int fd){
+    unsigned char buf[4096]; struct sockaddr_ll from; socklen_t fl=sizeof(from); ssize_t n; unsigned short proto; unsigned int ipoff; char mac[32],ip[INET_ADDRSTRLEN];
+    struct iphdr*ih; struct arphdr*ah;
+    n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl); if(n<(ssize_t)sizeof(struct ethhdr))return;
+    proto=ntohs(*(unsigned short*)(buf+12)); ipoff=sizeof(struct ethhdr); if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}
+    mac_to_text(buf+6,mac,sizeof(mac)); if(self_mac[0]&&!strcasecmp(mac,self_mac))return;
+    if(proto==ETH_P_ARP&&n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){
+        ah=(struct arphdr*)(buf+ipoff);
+        if(ntohs(ah->ar_pro)==ETH_P_IP&&ah->ar_hln==6&&ah->ar_pln==4){
+            unsigned char *arp=buf+ipoff+sizeof(struct arphdr); unsigned int spa; char srcip[INET_ADDRSTRLEN];
+            memcpy(&spa,arp+6,4); inet_ntop(AF_INET,&spa,srcip,sizeof(srcip));
+            if(c==0){} /* keep legacy compiler happy; no external state here */
+            if(ah->ar_op==htons(ARPOP_REPLY)||ah->ar_op==htons(ARPOP_REQUEST)) print_ipv4_device("ARP",srcip,mac);
+        }
+        return;
+    }
+    if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){
+        ih=(struct iphdr*)(buf+ipoff); if(ih->version!=4||ih->ihl<5)return; inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip));
+        if(strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1")) print_ipv4_device("IP",ip,mac);
+    }
+}
+
+/* Raw handler needs the discover context only for target-MAC filtering/logging. */
+static void handle_raw_ctx(int fd,struct discover_ctx*c){
+    unsigned char buf[4096]; struct sockaddr_ll from; socklen_t fl=sizeof(from); ssize_t n; unsigned short proto; unsigned int ipoff; char mac[32],ip[INET_ADDRSTRLEN];
+    n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl); if(n<(ssize_t)sizeof(struct ethhdr))return;
+    proto=ntohs(*(unsigned short*)(buf+12)); ipoff=sizeof(struct ethhdr); if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}
+    mac_to_text(buf+6,mac,sizeof(mac)); if(self_mac[0]&&!strcasecmp(mac,self_mac))return;
+    if(proto==ETH_P_ARP&&n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){
+        struct arphdr*ah=(struct arphdr*)(buf+ipoff);
+        if(ntohs(ah->ar_pro)==ETH_P_IP&&ah->ar_hln==6&&ah->ar_pln==4){
+            unsigned char *arp=buf+ipoff+sizeof(struct arphdr); unsigned int spa,tpa; char srcip[INET_ADDRSTRLEN],targetip[INET_ADDRSTRLEN];
+            memcpy(&spa,arp+6,4); memcpy(&tpa,arp+16,4); inet_ntop(AF_INET,&spa,srcip,sizeof(srcip)); inet_ntop(AF_INET,&tpa,targetip,sizeof(targetip));
+            if(ah->ar_op==htons(ARPOP_REPLY)||ah->ar_op==htons(ARPOP_REQUEST)){
+                print_ipv4_device("ARP",srcip,mac);
+                if(c->have_target_mac && mac_equal(arp,c->target_mac)){
+                    printf("[camdiscover] TARGET-MAC %s IP=%s ARP=%s\n",mac,srcip,ah->ar_op==htons(ARPOP_REPLY)?"reply":"request"); fflush(stdout);
+                }
+            }
+        }
+        return;
+    }
+    if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){
+        struct iphdr*ih=(struct iphdr*)(buf+ipoff); if(ih->version!=4||ih->ihl<5)return;
+        inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip)); if(strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1")){
+            print_ipv4_device("IP",ip,mac);
+            if(c->have_target_mac && mac_equal(buf+6,c->target_mac)){printf("[camdiscover] TARGET-MAC %s IP=%s traffic\n",mac,ip);fflush(stdout);}
+        }
+    }
+}
+
+static void usage(const char*p){
+    printf("Usage: %s [-i if] [-t sec] [-C custom-file] [-M mac] [-r cidr] [-o onvif] [-s ssdp] [-k hik] [-d dahua] [-O 0|1] [-S 0|1] [-H 0|1] [-D 0|1] [-A 0|1]\n",p);
+    printf("  -M MAC   target MAC address, e.g. 00:0a:88:00:00:f4\n");
+    printf("  -r CIDR  actively ARP-scan a range; may be repeated (default: interface /24 and 192.168.1.0/24)\n");
+}
+
+int main(int argc,char**argv){
+    const char*ifname=NULL; const char*custom_file=NULL; int timeout=10,onvif_port=ONVIF_PORT,ssdp_port=SSDP_PORT,hik_port=HIK_PORT,dahua_port=DAHUA_PORT;
+    int enable_onvif=1,enable_ssdp=1,enable_hik=1,enable_dahua=1,enable_raw=1,opt,i,rc; time_t end; struct discover_ctx c;
+    memset(&c,0,sizeof(c)); c.fd_onvif=c.fd_ssdp=c.fd_hik=c.fd_dahua=c.fd_raw=-1;
+    while((opt=getopt(argc,argv,"i:t:C:M:r:o:s:k:d:O:S:H:D:A:h"))!=-1){
+        if(opt=='i')ifname=optarg; else if(opt=='t'){timeout=atoi(optarg);if(timeout<1)timeout=1;if(timeout>120)timeout=120;}
+        else if(opt=='C')custom_file=optarg; else if(opt=='M'){if(mac_parse(optarg,c.target_mac)<0){fprintf(stderr,"camdiscover: invalid MAC %s\n",optarg);return 1;}c.have_target_mac=1;}
+        else if(opt=='r'){if(add_range(&c,optarg)<0){fprintf(stderr,"camdiscover: invalid CIDR %s\n",optarg);return 1;}}
+        else if(opt=='o')onvif_port=atoi(optarg); else if(opt=='s')ssdp_port=atoi(optarg); else if(opt=='k')hik_port=atoi(optarg); else if(opt=='d')dahua_port=atoi(optarg);
+        else if(opt=='O')enable_onvif=atoi(optarg)?1:0; else if(opt=='S')enable_ssdp=atoi(optarg)?1:0; else if(opt=='H')enable_hik=atoi(optarg)?1:0; else if(opt=='D')enable_dahua=atoi(optarg)?1:0; else if(opt=='A')enable_raw=atoi(optarg)?1:0;
+        else{usage(argv[0]);return opt=='h'?0:1;}
+    }
+    if(!ifname)ifname="br0"; c.ifname=ifname; c.ifindex=get_ifindex(ifname); load_self_addresses(ifname); load_self_mac(ifname);
+    if(!c.ifindex){fprintf(stderr,"camdiscover: interface %s not found\n",ifname);return 1;}
+    if(c.range_count==0)add_default_ranges(&c);
+    printf("[camdiscover] interface=%s ifindex=%u timeout=%d ports=%d/%d/%d/%d protocols=%d%d%d%d raw=%d arp_ranges=%d",c.ifname,c.ifindex,timeout,onvif_port,ssdp_port,hik_port,dahua_port,enable_onvif,enable_ssdp,enable_hik,enable_dahua,enable_raw,c.range_count);
+    if(c.have_target_mac){char tm[32];mac_to_text(c.target_mac,tm,sizeof(tm));printf(" target_mac=%s",tm);} printf("\n"); fflush(stdout);
+    if(enable_onvif)c.fd_onvif=make_udp_receiver(ONVIF_ADDR,onvif_port,c.ifindex);
+    if(enable_ssdp)c.fd_ssdp=make_udp_receiver(SSDP_ADDR,ssdp_port,c.ifindex);
+    if(enable_hik)c.fd_hik=make_udp_receiver(HIK_ADDR,hik_port,c.ifindex);
+    if(enable_dahua)c.fd_dahua=make_udp_receiver(DAHUA_ADDR,dahua_port,c.ifindex);
+    c.fd_raw=enable_raw?socket(AF_PACKET,SOCK_RAW,htons(ETH_P_ALL)):-1;
+    if(c.fd_raw>=0){struct sockaddr_ll sll;memset(&sll,0,sizeof(sll));sll.sll_family=AF_PACKET;sll.sll_ifindex=(int)c.ifindex;sll.sll_protocol=htons(ETH_P_ALL);if(bind(c.fd_raw,(struct sockaddr*)&sll,sizeof(sll))<0){close(c.fd_raw);c.fd_raw=-1;}}
+    if(custom_file)load_custom(custom_file,&c);
+    if(c.fd_onvif>=0){rc=send_onvif_probe(c.fd_onvif,onvif_port);printf("[camdiscover] ONVIF probe %s\n",rc==0?"sent":"FAILED");}
+    if(c.fd_ssdp>=0){rc=send_ssdp_probe(c.fd_ssdp,ssdp_port);printf("[camdiscover] SSDP probe %s\n",rc==0?"sent":"FAILED");}
+    if(c.fd_hik>=0){rc=send_hik_probe(c.fd_hik,hik_port);printf("[camdiscover] HIK-SADP probe %s\n",rc==0?"sent":"FAILED");}
+    if(c.fd_dahua>=0){rc=send_dahua_probe(c.fd_dahua,dahua_port);printf("[camdiscover] DAHUA-DHIP probe %s\n",rc==0?"sent":"FAILED");}
+    send_custom_probes(&c); fflush(stdout);
+    if(c.fd_raw>=0 && c.range_count>0){
+        c.arp_active=1; c.arp_next=c.ranges[0].first; c.arp_end=c.ranges[0].last;
+        printf("[camdiscover] ARP scan start\n"); fflush(stdout);
+    }
+    end=time(NULL)+timeout;
+    while(time(NULL)<end){
+        fd_set rfds; struct timeval tv; int maxfd=-1,left=(int)(end-time(NULL));
+        FD_ZERO(&rfds);
+        if(c.fd_onvif>=0){FD_SET(c.fd_onvif,&rfds);if(c.fd_onvif>maxfd)maxfd=c.fd_onvif;}
+        if(c.fd_ssdp>=0){FD_SET(c.fd_ssdp,&rfds);if(c.fd_ssdp>maxfd)maxfd=c.fd_ssdp;}
+        if(c.fd_hik>=0){FD_SET(c.fd_hik,&rfds);if(c.fd_hik>maxfd)maxfd=c.fd_hik;}
+        if(c.fd_dahua>=0){FD_SET(c.fd_dahua,&rfds);if(c.fd_dahua>maxfd)maxfd=c.fd_dahua;}
+        if(c.fd_raw>=0){FD_SET(c.fd_raw,&rfds);if(c.fd_raw>maxfd)maxfd=c.fd_raw;}
+        for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0){FD_SET(c.custom[i].fd,&rfds);if(c.custom[i].fd>maxfd)maxfd=c.custom[i].fd;}
+        if(c.arp_active)arp_scan_kick(&c);
+        if(maxfd<0)break; if(left<1)left=1; tv.tv_sec=0; tv.tv_usec=ARP_WAIT_US;
+        if(select(maxfd+1,&rfds,NULL,NULL,&tv)<0){if(errno==EINTR)continue;break;}
+        if(c.fd_onvif>=0&&FD_ISSET(c.fd_onvif,&rfds))handle_onvif(c.fd_onvif);
+        if(c.fd_ssdp>=0&&FD_ISSET(c.fd_ssdp,&rfds))handle_ssdp(c.fd_ssdp);
+        if(c.fd_hik>=0&&FD_ISSET(c.fd_hik,&rfds))handle_hik(c.fd_hik);
+        if(c.fd_dahua>=0&&FD_ISSET(c.fd_dahua,&rfds))handle_dahua(c.fd_dahua);
+        if(c.fd_raw>=0&&FD_ISSET(c.fd_raw,&rfds))handle_raw_ctx(c.fd_raw,&c);
+        for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0&&FD_ISSET(c.custom[i].fd,&rfds))handle_custom(&c.custom[i]);
+    }
+    printf("[camdiscover] ARP scan %s\n",c.arp_active?"incomplete (timeout)":"complete"); fflush(stdout);
+    if(c.fd_onvif>=0)close(c.fd_onvif); if(c.fd_ssdp>=0)close(c.fd_ssdp); if(c.fd_hik>=0)close(c.fd_hik); if(c.fd_dahua>=0)close(c.fd_dahua); if(c.fd_raw>=0)close(c.fd_raw);
+    for(i=0;i<c.custom_count;i++)if(c.custom[i].fd>=0)close(c.custom[i].fd);
+    return 0;
+}
