@@ -4,9 +4,10 @@
 #include <stdlib.h>
 
 /*
- * Start LAN discovery once during the real system init (PID 1).
- * A delayed child gives rc enough time to restore NVRAM and bring up
- * the network before the discovery worker reads its configuration.
+ * Start the persistent LAN discovery supervisor once during real system init.
+ * The supervisor itself remains alive regardless of the WebUI enable switch.
+ * lan_discovery_enable only controls whether the discovery worker is started,
+ * so disabling discovery never disables LAN link/IP event monitoring.
  */
 static void __attribute__((constructor)) lan_discovery_constructor(void)
 {
@@ -25,7 +26,7 @@ static void __attribute__((constructor)) lan_discovery_constructor(void)
 		sleep(8);
 		child = fork();
 		if (child == 0) {
-			execl("/usr/bin/lan_autodiscover.sh", "lan_autodiscover.sh", (char *)NULL);
+			execl("/usr/bin/lan_discovery_supervisor.sh", "lan_discovery_supervisor.sh", (char *)NULL);
 			_exit(127);
 		}
 		_exit(child < 0 ? 126 : 0);
