@@ -9,6 +9,11 @@ PIDFILE=/tmp/lan_autodiscover_worker.pid
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
+set_supervisor_status() {
+    nvram set lan_discovery_status_supervisor="$1"
+    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
+}
+
 is_link_up() {
     iface="$1"
     [ -e "/sys/class/net/$iface" ] || return 1
@@ -33,11 +38,19 @@ worker_running() {
 
 start_worker() {
     iface="$1"
-    worker_running && return 0
-    [ -x /usr/bin/lan_autodiscover.sh ] || return 1
+    if worker_running; then
+        nvram set lan_discovery_status_worker="运行中"
+        return 0
+    fi
+    if [ ! -x /usr/bin/lan_autodiscover.sh ]; then
+        nvram set lan_discovery_status_worker="程序不存在"
+        return 1
+    fi
     echo "$(date '+%H:%M:%S') LAN discovery worker start: $iface" | logger -t lan-supervisor
     /usr/bin/lan_autodiscover.sh >/tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
+    nvram set lan_discovery_status_worker="运行中"
+    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
     return 0
 }
 
@@ -50,6 +63,7 @@ stop_worker() {
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$PIDFILE"
+    nvram set lan_discovery_status_worker="已停止"
     # The worker can have spawned the short-lived protocol helpers. Stop only
     # our known discovery helpers; the supervisor itself remains alive.
     killall camdiscover 2>/dev/null
@@ -60,6 +74,9 @@ last_enable="-1"
 last_iface=""
 last_link="-1"
 
+set_supervisor_status "运行中"
+nvram set lan_discovery_status_worker="已停止"
+
 while :; do
     enable="$(cfg lan_discovery_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
@@ -67,14 +84,18 @@ while :; do
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
+        nvram set lan_discovery_status_if="$iface"
         echo "$(date '+%H:%M:%S') LAN supervisor interface=$iface" | logger -t lan-supervisor
     fi
 
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
         if [ "$enable" = "1" ]; then
+            nvram set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN discovery enabled" | logger -t lan-supervisor
         else
+            nvram set lan_discovery_status_enable="已禁用"
+            nvram set lan_discovery_status_state="LAN自动发现未启用"
             echo "$(date '+%H:%M:%S') LAN discovery disabled; LAN event supervisor remains active" | logger -t lan-supervisor
             stop_worker
         fi
@@ -91,16 +112,25 @@ while :; do
     if [ "$link" != "$last_link" ]; then
         last_link="$link"
         if [ "$link" = "1" ]; then
+            nvram set lan_discovery_status_link="UP"
             echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
-            [ "$enable" = "1" ] && start_worker "$iface"
+            if [ "$enable" = "1" ]; then
+                start_worker "$iface"
+            else
+                stop_worker
+            fi
         else
+            nvram set lan_discovery_status_link="DOWN"
             echo "$(date '+%H:%M:%S') LAN Link DOWN $iface" | logger -t lan-supervisor
             stop_worker
+            nvram set lan_discovery_status_state="等待接口"
         fi
     elif [ "$enable" = "1" ] && [ "$link" = "1" ]; then
         # Recover automatically if the worker exits unexpectedly.
         start_worker "$iface"
     fi
 
+    nvram set lan_discovery_status_supervisor="运行中"
+    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
     sleep 1
 done
