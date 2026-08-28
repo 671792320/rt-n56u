@@ -78,7 +78,7 @@ set_supervisor_status "运行中"
 nvram set lan_discovery_status_worker="已停止"
 
 while :; do
-    enable="$(cfg lan_discovery_enable 1)"
+    enable="$(cfg lan_discovery_enable 0)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
 
     if [ "$iface" != "$last_iface" ]; then
