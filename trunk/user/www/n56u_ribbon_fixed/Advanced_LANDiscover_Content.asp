@@ -53,7 +53,7 @@ $j(document).ready(function(){
 
 function has_value(v){ return v !== undefined && v !== null && String(v) !== '' && String(v) !== '-'; }
 function value_or(v,d){ return has_value(v) ? String(v) : d; }
-function esc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }
 function norm(v){ return String(v||'').replace(/\r/g,''); }
 function section(data,a,b){
     var p=data.indexOf(a); if(p<0) return '';
@@ -234,6 +234,7 @@ function initial(){
 <form method="post" name="form" id="ruleForm" action="/start_apply.htm" target="hidden_frame">
 <input type="hidden" name="current_page" value="Advanced_LANDiscover_Content.asp">
 <input type="hidden" name="next_page" value="">
+<input type="hidden" name="sid_list" value="LANHostConfig;">
 <input type="hidden" name="action_mode" value="">
 <input type="hidden" name="action_script" value="">
 <input type="hidden" name="lan_discovery_log" id="lan_discovery_log" value="<% nvram_get_x("", "lan_discovery_log"); %>">
