@@ -14,6 +14,7 @@ CFLAGS += -I$(USERDIR)/wireless_tools
 LDFLAGS += -L. -lm
 LDFLAGS += -L$(SHDIR) -lshared
 LDFLAGS += -L$(USERDIR)/wireless_tools -liw
+LDFLAGS += -Wl,--wrap=GetVariables
 ifeq ($(STORAGE_ENABLED),y)
 CFLAGS  += -I$(USERDIR)/libdisk
 LDFLAGS += -L$(USERDIR)/libdisk -ldisk
@@ -23,7 +24,7 @@ LDFLAGS += -L$(STAGEDIR)/lib -lssl -lcrypto
 endif
 
 EXEC = httpd
-OBJS = httpd.o ej.o cgi.o web_ex.o common.o nvram_x.o ralink.o crc32.o base64.o aspbw.o initial_web_hook.o variables.o
+OBJS = httpd.o ej.o cgi.o web_ex.o common.o nvram_x.o ralink.o crc32.o base64.o aspbw.o initial_web_hook.o variables.o lan_discovery_vars.o
 OBJS += tdate_parse.o upload.o
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_HTTPS),y)
 OBJS += https.o
