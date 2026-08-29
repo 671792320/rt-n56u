@@ -54,15 +54,24 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_status_state)" ] || nvram set lan_discovery_status_state="空闲"
     [ -n "$(nv lan_discovery_status_count)" ] || nvram set lan_discovery_status_count=0
     [ -n "$(nv lan_discovery_status_last)" ] || nvram set lan_discovery_status_last="-"
-    # Clear stale log entries left by older duplicate worker processes.
+    # Clear stale log/device data left by older duplicate worker processes.
     nvram set lan_discovery_log=""
     nvram set lan_discovery_devices=""
     nvram set lan_discovery_status_count="0"
 }
 
 log_line() {
-    line="$(now) $*"; old="$(nv lan_discovery_log)"
-    if [ -n "$old" ]; then nvram set lan_discovery_log="$(printf '%s\n%s\n' "$old" "$line" | tail -n 40)"; else nvram set lan_discovery_log="$line"; fi
+    line="$(now) $*"
+    old="$(nv lan_discovery_log)"
+    # U+2028 LINE SEPARATOR is deliberately used instead of LF. Padavan's
+    # nvram_get_x() HTML-escapes control characters, which previously made
+    # CR/LF appear as literal '&#13;&#10;' in the AJAX WebUI log.
+    sep="$(printf '\342\200\250')"
+    if [ -n "$old" ]; then
+        nvram set lan_discovery_log="$(printf '%s%s%s' "$old" "$sep" "$line" | tail -c 12000)"
+    else
+        nvram set lan_discovery_log="$line"
+    fi
     nvram set lan_discovery_status_last="$(now)"; logger -t lan-autodiscover "$*"
 }
 
