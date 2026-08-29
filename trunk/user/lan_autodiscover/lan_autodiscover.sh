@@ -6,7 +6,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
     echo "LAN autodiscovery already running" | logger -t lan-autodiscover
     exit 0
 fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
@@ -54,6 +54,10 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_status_state)" ] || nvram set lan_discovery_status_state="空闲"
     [ -n "$(nv lan_discovery_status_count)" ] || nvram set lan_discovery_status_count=0
     [ -n "$(nv lan_discovery_status_last)" ] || nvram set lan_discovery_status_last="-"
+    # Clear stale log entries left by older duplicate worker processes.
+    nvram set lan_discovery_log=""
+    nvram set lan_discovery_devices=""
+    nvram set lan_discovery_status_count="0"
 }
 
 log_line() {
@@ -80,7 +84,7 @@ refresh_interfaces() {
 set_link_status() {
     iface="$1"; link="$2"; ip4="$(iface_ipv4 "$iface")"; mac="$(iface_mac "$iface")"; role="LAN"
     if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
-    case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*|eth*.1) role="LAN";; esac
+    case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*) role="LAN";; eth*.1) role="LAN";; esac
     nvram set lan_discovery_status_if="$iface"; nvram set lan_discovery_status_role="$role"; nvram set lan_discovery_status_ip="$ip4"; nvram set lan_discovery_status_mac="$mac"; nvram set lan_discovery_status_link="$link"
 }
 
