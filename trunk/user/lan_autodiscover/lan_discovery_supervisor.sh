@@ -5,6 +5,7 @@
 # discovery worker is started.
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
+LOCKDIR=/var/run/lan_autodiscover.lock
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
@@ -46,6 +47,7 @@ start_worker() {
         nvram set lan_discovery_status_worker="程序不存在"
         return 1
     fi
+    rm -rf "$LOCKDIR" 2>/dev/null
     echo "$(date '+%H:%M:%S') LAN discovery worker start: $iface" | logger -t lan-supervisor
     /usr/bin/lan_autodiscover.sh >/tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
@@ -63,9 +65,10 @@ stop_worker() {
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$PIDFILE"
+    rm -rf "$LOCKDIR" 2>/dev/null
     nvram set lan_discovery_status_worker="已停止"
-    # The worker can have spawned the short-lived protocol helpers. Stop only
-    # our known discovery helpers; the supervisor itself remains alive.
+    # Only terminate our known discovery helpers. The LAN event supervisor
+    # itself remains alive.
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
 }
@@ -99,7 +102,6 @@ while :; do
             echo "$(date '+%H:%M:%S') LAN discovery disabled; LAN event supervisor remains active" | logger -t lan-supervisor
             stop_worker
         fi
-        # Force a fresh link evaluation whenever the program enable state changes.
         last_link="-1"
     fi
 
