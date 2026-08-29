@@ -108,10 +108,10 @@ static int send_discover(int fd, int ifindex, const unsigned char mac[6], unsign
 
 static int parse_reply(const unsigned char *buf, int len, unsigned int xid,
                        const unsigned char mac[6], char *server, size_t sn,
-                       char *offer, size_t on)
+                       char *gateway, size_t gn, char *offer, size_t on)
 {
     const struct ethhdr *eth; const unsigned char *ip, *udp, *p, *end;
-    const struct dhcp_packet *d; unsigned int cookie, server_addr = 0;
+    const struct dhcp_packet *d; unsigned int cookie, server_addr = 0, gateway_addr = 0;
     int ihl, dhcplen, type = 0;
     if (len < ETH_HLEN + 20 + 8 + 240) return 0;
     eth = (const struct ethhdr *)buf;
@@ -134,9 +134,11 @@ static int parse_reply(const unsigned char *buf, int len, unsigned int xid,
         if (p >= end) break; olen = *p++; if (p + olen > end) break;
         if (code == 53 && olen >= 1) type = p[0];
         else if (code == 54 && olen == 4) memcpy(&server_addr, p, 4);
+        else if (code == 3 && olen >= 4) memcpy(&gateway_addr, p, 4);
         p += olen;
     }
     if (server && sn && server_addr) inet_ntop(AF_INET, &server_addr, server, sn);
+    if (gateway && gn && gateway_addr) inet_ntop(AF_INET, &gateway_addr, gateway, gn);
     if (offer && on) inet_ntop(AF_INET, &d->yiaddr, offer, on);
     return type;
 }
@@ -152,7 +154,7 @@ int main(int argc, char **argv)
 {
     const char *ifname = "eth2.1"; int timeout = 3, opt, ifindex, fd, i;
     unsigned char mac[6], buf[2048]; unsigned int xid; struct sockaddr_ll ba;
-    time_t end; char server[INET_ADDRSTRLEN] = "-", offer[INET_ADDRSTRLEN] = "-";
+    time_t end; char server[INET_ADDRSTRLEN] = "-", gateway[INET_ADDRSTRLEN] = "-", offer[INET_ADDRSTRLEN] = "-";
     while ((opt = getopt(argc, argv, "i:t:h")) != -1) {
         if (opt == 'i') ifname = optarg;
         else if (opt == 't') { timeout = atoi(optarg); if (timeout < 1) timeout = 1; if (timeout > 10) timeout = 10; }
@@ -175,10 +177,10 @@ int main(int argc, char **argv)
         FD_ZERO(&rfds); FD_SET(fd, &rfds); n = select(fd + 1, &rfds, NULL, NULL, &tv);
         if (n <= 0) continue; n = recv(fd, buf, sizeof(buf), 0); if (n <= 0) continue;
         for (i = 0; i < 2; i++) {
-            int type = parse_reply(buf, n, xid + i, mac, server, sizeof(server), offer, sizeof(offer));
+            int type = parse_reply(buf, n, xid + i, mac, server, sizeof(server), gateway, sizeof(gateway), offer, sizeof(offer));
             if (type == DHCP_OFFER || type == DHCP_ACK) {
-                printf("[dhcpdetect] DHCP server found type=%s server=%s offer=%s\n",
-                       type == DHCP_OFFER ? "OFFER" : "ACK", server, offer);
+                printf("[dhcpdetect] DHCP server found type=%s server=%s gateway=%s offer=%s\n",
+                       type == DHCP_OFFER ? "OFFER" : "ACK", server, gateway, offer);
                 close(fd); return 0;
             }
         }
