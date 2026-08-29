@@ -1,6 +1,13 @@
 #!/bin/sh
 # LAN discovery event watcher with WebUI status/log/device feed.
 
+LOCKDIR=/var/run/lan_autodiscover.lock
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "LAN autodiscovery already running" | logger -t lan-autodiscover
+    exit 0
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
@@ -98,14 +105,11 @@ run_discovery() {
             gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
             server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
             if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="网关 $gateway"
-                log_line "上级DHCP：网关 $gateway"
+                nvram set lan_discovery_status_dhcp="网关 $gateway"; log_line "上级DHCP：网关 $gateway"
             elif [ -n "$server" ] && [ "$server" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
-                log_line "上级DHCP：服务器 $server，未提供网关"
+                nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"; log_line "上级DHCP：服务器 $server，未提供网关"
             else
-                nvram set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"
-                log_line "上级DHCP已发现，但报文未提供网关"
+                nvram set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"; log_line "上级DHCP已发现，但报文未提供网关"
             fi
         else
             nvram set lan_discovery_status_dhcp="未发现DHCP"; log_line "未发现DHCP"
@@ -137,6 +141,6 @@ while :; do
     if [ "$enable" != "1" ]; then nvram set lan_discovery_status_state="已禁用"; if [ -e "/sys/class/net/$iface" ]; then if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi; fi; sleep 2; continue; fi
     if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; sleep 2; continue; fi
     if is_link_up "$iface"; then state=1; else state=0; fi
-    if [ "$state" != "$last_state" ]; then last_state="$state"; if [ "$state" = "1" ]; then set_link_status "$iface" "UP"; run_discovery "$iface" & else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface"; fi; fi
+    if [ "$state" != "$last_state" ]; then last_state="$state"; if [ "$state" = "1" ]; then set_link_status "$iface" "UP"; run_discovery "$iface"; else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface"; fi; fi
     sleep 1
 done
