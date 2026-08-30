@@ -1,8 +1,8 @@
 #!/bin/sh
 # Persistent LAN event supervisor.
 # This process is always running. It never disables the LAN interface or
-# its link/IP handling. lan_discovery_enable only controls whether the
-# discovery worker is started.
+# its link/IP handling. lan_discovery_enable controls the discovery worker,
+# while lan_discovery_discover_enable controls whether camdiscover is active.
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
@@ -74,6 +74,7 @@ stop_worker() {
 }
 
 last_enable="-1"
+last_discover="-1"
 last_iface=""
 last_link="-1"
 
@@ -82,6 +83,7 @@ nvram set lan_discovery_status_worker="已停止"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
+    discover_enable="$(cfg lan_discovery_discover_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
 
     if [ "$iface" != "$last_iface" ]; then
@@ -93,6 +95,7 @@ while :; do
 
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
+        last_discover="-1"
         if [ "$enable" = "1" ]; then
             nvram set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN discovery enabled" | logger -t lan-supervisor
@@ -111,12 +114,28 @@ while :; do
         link=0
     fi
 
+    # Device discovery is a runtime switch independent of the LAN event
+    # supervisor. When it changes, stop/start the worker so the running
+    # camdiscover process is actually terminated/recreated.
+    if [ "$enable" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
+        last_discover="$discover_enable"
+        if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
+            nvram set lan_discovery_status_state="等待接口"
+            echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
+            start_worker "$iface"
+        else
+            nvram set lan_discovery_status_state="设备发现未启用"
+            echo "$(date '+%H:%M:%S') Device discovery disabled" | logger -t lan-supervisor
+            stop_worker
+        fi
+    fi
+
     if [ "$link" != "$last_link" ]; then
         last_link="$link"
         if [ "$link" = "1" ]; then
             nvram set lan_discovery_status_link="UP"
             echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
-            if [ "$enable" = "1" ]; then
+            if [ "$enable" = "1" ] && [ "$discover_enable" = "1" ]; then
                 start_worker "$iface"
             else
                 stop_worker
@@ -127,7 +146,7 @@ while :; do
             stop_worker
             nvram set lan_discovery_status_state="等待接口"
         fi
-    elif [ "$enable" = "1" ] && [ "$link" = "1" ]; then
+    elif [ "$enable" = "1" ] && [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
         # Recover automatically if the worker exits unexpectedly.
         start_worker "$iface"
     fi
