@@ -9,6 +9,15 @@ LOCKDIR=/var/run/lan_autodiscover.lock
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
+dhcp_found() {
+    dhcp="$(nv lan_discovery_status_dhcp)"
+    case "$dhcp" in
+        网关\ *|DHCP服务器\ *|已发现DHCP\ (*)|已发现DHCP\ *) return 0 ;;
+    esac
+    [ "$dhcp" = "已发现DHCP（无网关信息）" ] && return 0
+    return 1
+}
+
 set_supervisor_status() {
     nvram set lan_discovery_status_supervisor="$1"
     nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
@@ -48,6 +57,11 @@ access_running() {
 }
 
 start_access() {
+    # NAT is strictly a no-DHCP mode feature.
+    if dhcp_found; then
+        stop_access
+        return 0
+    fi
     if access_running; then
         nvram set lan_access_status="运行中"
         return 0
@@ -73,7 +87,11 @@ stop_access() {
     if [ -x /usr/bin/lanaccess.sh ]; then
         /usr/bin/lanaccess.sh cleanup >/dev/null 2>&1
     fi
-    nvram set lan_access_status="已停止"
+    if dhcp_found; then
+        nvram set lan_access_status="上级DHCP已存在"
+    else
+        nvram set lan_access_status="已停止"
+    fi
     nvram set lan_access_count=0
 }
 
@@ -116,6 +134,7 @@ last_enable="-1"
 last_discover="-1"
 last_iface=""
 last_link="-1"
+last_dhcp=""
 
 set_supervisor_status "运行中"
 nvram set lan_discovery_status_worker="已停止"
@@ -130,6 +149,7 @@ while :; do
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
+        last_dhcp=""
         nvram set lan_discovery_status_if="$iface"
         echo "$(date '+%H:%M:%S') LAN supervisor interface=$iface" | logger -t lan-supervisor
     fi
@@ -155,13 +175,25 @@ while :; do
         link=0
     fi
 
+    dhcp="$(nv lan_discovery_status_dhcp)"
+    if [ "$dhcp" != "$last_dhcp" ]; then
+        last_dhcp="$dhcp"
+        if dhcp_found; then
+            stop_access
+            nvram set lan_access_status="上级DHCP已存在"
+            echo "$(date '+%H:%M:%S') Upstream DHCP detected; NAT mode disabled" | logger -t lan-supervisor
+        else
+            nvram set lan_access_status="等待目标设备"
+        fi
+    fi
+
     if [ "$enable" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
             nvram set lan_discovery_status_state="等待接口"
             echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
             start_worker "$iface"
-            start_access
+            if dhcp_found; then stop_access; else start_access; fi
         else
             nvram set lan_discovery_status_state="设备发现未启用"
             echo "$(date '+%H:%M:%S') Device discovery disabled" | logger -t lan-supervisor
@@ -176,7 +208,7 @@ while :; do
             echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
             if [ "$enable" = "1" ] && [ "$discover_enable" = "1" ]; then
                 start_worker "$iface"
-                start_access
+                if dhcp_found; then stop_access; else start_access; fi
             else
                 stop_worker
             fi
@@ -188,7 +220,7 @@ while :; do
         fi
     elif [ "$enable" = "1" ] && [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
         start_worker "$iface"
-        start_access
+        if dhcp_found; then stop_access; else start_access; fi
     fi
 
     nvram set lan_discovery_status_supervisor="运行中"
