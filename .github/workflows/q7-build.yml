@@ -62,11 +62,60 @@ jobs:
           test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lanaccess/lanaccess.sh
+          test -f trunk/user/lanaccess/Makefile
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
           grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+
+      - name: Integrate LAN access status into WebUI
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text()
+
+          s = s.replace(
+              "last:'<% nvram_get_x(\"\", \"lan_discovery_status_last\"); %>'\n};",
+              "last:'<% nvram_get_x(\"\", \"lan_discovery_status_last\"); %>',\n access:'<% nvram_get_x(\"\", \"lan_access_status\"); %>',\n access_count:'<% nvram_get_x(\"\", \"lan_access_count\"); %>'\n};",
+              1,
+          )
+
+          old_return = "last:value_or(first[9],value_or(initial_status.last,'-')),interfaces:section(data,'---IFACES---','---LOG---')"
+          new_return = "last:value_or(first[9],value_or(initial_status.last,'-')),access:value_or(first[10],value_or(initial_status.access,'等待目标设备')),access_count:value_or(first[11],value_or(initial_status.access_count,'0')),interfaces:section(data,'---IFACES---','---LOG---')"
+          if old_return not in s:
+              raise SystemExit('parse_data anchor not found')
+          s = s.replace(old_return, new_return, 1)
+
+          old_render = "$j('#status_last').text(o.last);"
+          new_render = "$j('#status_last').text(o.last);$j('#status_access').text(o.access);$j('#status_access_count').text(o.access_count);"
+          if old_render not in s:
+              raise SystemExit('render_status anchor not found')
+          s = s.replace(old_render, new_render, 1)
+
+          old_initial = "last:value_or(initial_status.last,'-')");refresh_data();"
+          new_initial = "last:value_or(initial_status.last,'-'),access:value_or(initial_status.access,'等待目标设备'),access_count:value_or(initial_status.access_count,'0')});refresh_data();"
+          if old_initial not in s:
+              raise SystemExit('initial anchor not found')
+          s = s.replace(old_initial, new_initial, 1)
+
+          old_row = "<tr><td>已发现</td><td id=\"status_count\">0</td><td>最后活动</td><td id=\"status_last\">-</td></tr></table>"
+          new_row = "<tr><td>已发现</td><td id=\"status_count\">0</td><td>最后活动</td><td id=\"status_last\">-</td></tr><tr><td>目标访问</td><td id=\"status_access\">等待目标设备</td><td>已建立通道</td><td id=\"status_access_count\">0</td></tr></table>"
+          if old_row not in s:
+              raise SystemExit('status table anchor not found')
+          s = s.replace(old_row, new_row, 1)
+
+          p.write_text(s)
+
+          check = p.read_text()
+          for needle in ('lan_access_status', 'lan_access_count', 'status_access', 'status_access_count'):
+              if needle not in check:
+                  raise SystemExit(f'WebUI LAN access patch missing: {needle}')
+          print('LAN access WebUI integration OK')
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
