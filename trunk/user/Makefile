@@ -71,31 +71,14 @@ endif
 ifeq ($(CONFIG_FIRMWARE_INCLUDE_NTFS_3G),y)
 FS_NTFS_ENABLED=y
 endif
-ifeq ($(CONFIG_FIRMWARE_INCLUDE_SMBD),y)
+ifeq ($(CONFIG_FIRMWARE_INCLUDE_WINS),y)
 SAMBA_ENABLED=y
 endif
-endif
-
-ifneq ($(filter y,$(CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_CMD) $(CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_CLIENT) $(CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_SERVER)),)
-SOFTETHERVPN_ENABLE=y
-endif
-
-ifneq ($(filter y,$(CONFIG_FIRMWARE_INCLUDE_SSSERVER) $(CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS)),)
-SHADOWSOCKS_ENABLE=y
-endif
-
-ifneq ($(filter y,$(CONFIG_FIRMWARE_INCLUDE_FRPC) $(CONFIG_FIRMWARE_INCLUDE_FRPS)),)
-FRP_ENABLE=y
-endif
-
-ifneq ($(filter y,$(CONFIG_FIRMWARE_INCLUDE_WING) $(CONFIG_FIRMWARE_INCLUDE_TROJAN)),)
-TROJAN_ENABLE=y
 endif
 
 dir_y =
 dir_n =
 dir_  =
-
 dir_y += busybox
 dir_y += iptables
 dir_y += coremark
@@ -114,9 +97,6 @@ dir_y += networkmap
 dir_y += httpd
 dir_y += www
 dir_y += rc
-dir_$(CONFIG_FIRMWARE_INCLUDE_ANTFS) += antfs
-dir_$(CONFIG_FIRMWARE_INCLUDE_NAPT66) += napt66
-dir_$(CONFIG_FIRMWARE_INCLUDE_SFE) += shortcut-fe
 dir_y += infosvr
 dir_y += inadyn
 dir_y += miniupnpd
@@ -133,7 +113,7 @@ dir_y += xl2tpd
 dir_y += rp-l2tp
 dir_y += lldt
 dir_y += scripts
-dir_$(CONFIG_FIRMWARE_INCLUDE_SMARTDNS) += smartdns
+dir_$(CONFIG_FIRMWARE_INCLUDE_IPSET) += ipset
 dir_$(OPENSSH_ENABLED) += openssh
 dir_$(DROPBEAR_ENABLED) += dropbear
 dir_$(CONFIG_FIRMWARE_INCLUDE_HTOP) += htop
@@ -216,6 +196,7 @@ endif
 
 dir_y += camdiscover
 dir_y += lan_autodiscover
+dir_y += lanaccess
 dir_y += netmgr
 
 all:
@@ -238,7 +219,7 @@ romfs:
 	done
 
 clean:
-	for i in `ls -d *` ; do \
+	for i in $(dir_y) ; do \
 		[ ! -d $$i ] || \
 		$(MAKE) -C $$i clean ; \
 	done
