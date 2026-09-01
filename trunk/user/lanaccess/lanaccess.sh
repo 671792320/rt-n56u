@@ -1,7 +1,6 @@
 #!/bin/sh
 # LAN access manager for the no-DHCP target-network mode.
-# IMPORTANT: DHCP detection is a mode switch. When an upstream DHCP server is
-# present, this module MUST NOT create any temporary address, route or SNAT.
+# NAT is enabled only when the discovery supervisor explicitly reports NO DHCP.
 
 PIDFILE=/tmp/lanaccess.pid
 STATEFILE=/tmp/lanaccess.state
@@ -29,19 +28,13 @@ valid_ipv4() {
     printf '%s\n' "$1" | awk -F. 'NF==4 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 {ok=1} END{exit ok?0:1}'
 }
 
-same_phone_subnet() {
-    target="$1"
-    phone_prefix="$(printf '%s' "$PHONE_IP" | awk -F. '{print $1"."$2"."$3}')"
-    target_prefix="$(printf '%s' "$target" | awk -F. '{print $1"."$2"."$3}')"
-    [ "$phone_prefix" = "$target_prefix" ]
-}
-
 cleanup_target() {
     target="$1"; source="$2"
     [ -n "$target" ] || return 0
     if [ "$source" != "DIRECT" ]; then
         iptables -t nat -D POSTROUTING -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j SNAT --to-source "$source" 2>/dev/null
         iptables -D FORWARD -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j ACCEPT 2>/dev/null
+        iptables -D FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
         iptables -D FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
         ip route del "$target/32" dev "$IFACE" 2>/dev/null
         ip addr del "$source/32" dev "$IFACE" 2>/dev/null
@@ -67,10 +60,15 @@ if [ "$1" = "cleanup" ]; then
     exit 0
 fi
 
+if dhcp_found; then
+    cleanup_all
+    nvram set lan_access_status="上级DHCP已存在"
+    exit 0
+fi
+
 if ! mkdir "$LOCKDIR" 2>/dev/null; then exit 0; fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null; rm -f "$PIDFILE"' EXIT INT TERM HUP
 echo $$ > "$PIDFILE"
-
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 
 candidate_ips() {
@@ -78,7 +76,7 @@ candidate_ips() {
     set -- $(printf '%s\n' "$ip" | awk -F. '{print $1,$2,$3,$4}')
     a="$1"; b="$2"; c="$3"; d="$4"
     n=1
-    while [ "$n" -le 32 ]; do
+    while [ "$n" -le 64 ]; do
         x=$((d+n)); y=$((d-n))
         [ "$x" -le 254 ] && printf '%s.%s.%s.%s\n' "$a" "$b" "$c" "$x"
         [ "$y" -ge 1 ] && printf '%s.%s.%s.%s\n' "$a" "$b" "$c" "$y"
@@ -93,63 +91,89 @@ source_used() {
     awk -F'|' -v s="$source" '$2==s {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null
 }
 
-source_test() {
+install_source_route() {
     source="$1"; target="$2"
     ip addr add "$source/32" dev "$IFACE" 2>/dev/null || return 1
     ip route replace "$target/32" dev "$IFACE" src "$source" 2>/dev/null || {
         ip addr del "$source/32" dev "$IFACE" 2>/dev/null
         return 1
     }
-    if ping -I "$source" -c 1 -W 1 "$target" >/dev/null 2>&1; then return 0; fi
+    # Verify neighbor resolution. ICMP is deliberately NOT required here.
+    if arping -I "$IFACE" -c 2 -w 2 "$target" >/dev/null 2>&1; then
+        return 0
+    fi
+    # Some network devices answer IP traffic without arping replies.
+    if ping -I "$source" -c 1 -W 1 "$target" >/dev/null 2>&1; then
+        return 0
+    fi
     ip route del "$target/32" dev "$IFACE" 2>/dev/null
     ip addr del "$source/32" dev "$IFACE" 2>/dev/null
     return 1
 }
 
+rule_present() {
+    iptables -t nat -S POSTROUTING 2>/dev/null | grep -F -- "-s $PHONE_NET -d $1/32 -o $IFACE -j SNAT --to-source $2" >/dev/null 2>&1
+}
+
 install_target() {
     target="$1"
     valid_ipv4 "$target" || return 1
+    dhcp_found && return 2
     if awk -F'|' -v t="$target" '$1==t {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null; then return 0; fi
 
-    # Never establish LAN access NAT while an upstream DHCP server exists.
-    if dhcp_found; then
-        nvram set lan_access_status="上级DHCP已存在"
-        return 2
-    fi
-
-    # Same phone-side subnet is directly reachable and needs no NAT.
-    if same_phone_subnet "$target"; then
+    phone_prefix="$(printf '%s' "$PHONE_IP" | awk -F. '{print $1"."$2"."$3}')"
+    target_prefix="$(printf '%s' "$target" | awk -F. '{print $1"."$2"."$3}')"
+    if [ "$phone_prefix" = "$target_prefix" ]; then
         printf '%s|DIRECT\n' "$target" >> "$STATEFILE"
-        log "目标 $target 与手机侧同网段，直接访问，无需SNAT"
+        log "目标 $target 与手机侧同 /24，直接访问"
         return 0
     fi
 
     for candidate in $(candidate_ips "$target"); do
+        dhcp_found && return 2
         [ "$candidate" = "$target" ] && continue
         [ "$candidate" = "$PHONE_IP" ] && continue
         source_used "$candidate" && continue
         if arping -I "$IFACE" -c 1 -w 1 "$candidate" >/dev/null 2>&1; then continue; fi
-        if source_test "$candidate" "$target"; then
-            iptables -A FORWARD -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j ACCEPT 2>/dev/null
-            iptables -A FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
-            iptables -t nat -A POSTROUTING -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j SNAT --to-source "$candidate" 2>/dev/null
+        if install_source_route "$candidate" "$target"; then
+            dhcp_found && {
+                cleanup_target "$target" "$candidate"
+                return 2
+            }
+
+            if ! iptables -A FORWARD -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j ACCEPT 2>/dev/null; then
+                log "目标 $target 建立失败：FORWARD 出站规则添加失败"
+                cleanup_target "$target" "$candidate"
+                return 1
+            fi
+
+            if ! iptables -A FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; then
+                iptables -A FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
+            fi
+
+            if ! iptables -t nat -A POSTROUTING -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j SNAT --to-source "$candidate" 2>/dev/null; then
+                log "目标 $target 建立失败：SNAT规则添加失败"
+                cleanup_target "$target" "$candidate"
+                return 1
+            fi
+
+            if ! rule_present "$target" "$candidate"; then
+                log "目标 $target 建立失败：SNAT规则未生效"
+                cleanup_target "$target" "$candidate"
+                return 1
+            fi
+
             printf '%s|%s\n' "$target" "$candidate" >> "$STATEFILE"
-            log "目标 $target 已建立访问通道，源地址 $candidate，SNAT=ON"
+            log "目标 $target 已建立访问通道，源地址 $candidate，ROUTE=ON SNAT=ON"
             return 0
         fi
     done
-    log "目标 $target 无法建立访问通道"
+    log "目标 $target 无法建立访问通道：目标无ARP/IP响应或空闲源地址不可用"
     return 1
 }
 
 sync_targets() {
-    # DHCP mode wins over NAT mode and immediately removes any stale NAT state.
-    if dhcp_found; then
-        cleanup_all
-        nvram set lan_access_status="上级DHCP已存在"
-        return 0
-    fi
-
+    dhcp_found && { cleanup_all; nvram set lan_access_status="上级DHCP已存在"; return 0; }
     tmp="/tmp/lanaccess.targets.$$"
     current="/tmp/lanaccess.current.$$"
     : > "$tmp"
@@ -168,12 +192,8 @@ sync_targets() {
         while IFS='|' read -r target source; do
             [ -n "$target" ] || continue
             if ! grep -F -x "$target" "$current" >/dev/null 2>&1; then
-                if [ "$source" = "DIRECT" ]; then
-                    log "目标 $target 已从发现列表移除，清理直接访问状态"
-                else
-                    cleanup_target "$target" "$source"
-                    log "目标 $target 已从发现列表移除，访问通道已清理"
-                fi
+                cleanup_target "$target" "$source"
+                log "目标 $target 已从发现列表移除，访问通道已清理"
             fi
         done < "$STATEFILE"
         : > /tmp/lanaccess.state.new.$$
@@ -194,7 +214,9 @@ sync_targets() {
     rm -f "$tmp" "$current"
     count="$(awk -F'|' 'NF==2 && $1!="" {n++} END{print n+0}' "$STATEFILE" 2>/dev/null)"
     nvram set lan_access_count="${count:-0}"
-    if [ "${count:-0}" = "0" ]; then
+    if dhcp_found; then
+        nvram set lan_access_status="上级DHCP已存在"
+    elif [ "${count:-0}" = "0" ]; then
         nvram set lan_access_status="等待目标设备"
     else
         nvram set lan_access_status="已建立 ${count} 个目标通道"
@@ -210,18 +232,6 @@ while :; do
     IFACE="$(cfg lan_discovery_ifname eth2.1)"
     link="$(nv lan_discovery_status_link)"
     devices="$(nv lan_discovery_devices)"
-    dhcp="$(nv lan_discovery_status_dhcp)"
-
-    if [ "$dhcp" != "$last_dhcp" ]; then
-        last_dhcp="$dhcp"
-        if dhcp_found; then
-            cleanup_all
-            nvram set lan_access_status="上级DHCP已存在"
-            log "检测到上级DHCP，停止NAT访问模式"
-        else
-            nvram set lan_access_status="等待目标设备"
-        fi
-    fi
 
     if [ "$link" != "UP" ]; then
         if [ "$last_link" = "UP" ]; then cleanup_all; log "LAN Link DOWN，已清理目标通道"; fi
@@ -232,8 +242,17 @@ while :; do
     last_link="$link"
 
     if dhcp_found; then
+        if [ -s "$STATEFILE" ]; then cleanup_all; fi
+        nvram set lan_access_status="上级DHCP已存在"
+        last_dhcp="1"
+        last_devices="$devices"
         sleep 2
         continue
+    fi
+    if [ "$last_dhcp" = "1" ]; then
+        last_dhcp="0"
+        last_devices=""
+        log "上级DHCP消失，进入无DHCP NAT访问模式"
     fi
 
     if [ "$devices" != "$last_devices" ]; then
