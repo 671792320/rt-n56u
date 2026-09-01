@@ -1,6 +1,6 @@
 #!/bin/sh
 # LAN access manager for the no-DHCP target-network mode.
-# NAT is enabled only when the discovery supervisor explicitly reports NO DHCP.
+# DHCP is a transparent mode; NAT is used only after DHCP is absent.
 
 PIDFILE=/tmp/lanaccess.pid
 STATEFILE=/tmp/lanaccess.state
@@ -28,6 +28,13 @@ valid_ipv4() {
     printf '%s\n' "$1" | awk -F. 'NF==4 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 {ok=1} END{exit ok?0:1}'
 }
 
+same_phone_subnet() {
+    target="$1"
+    phone_prefix="$(printf '%s' "$PHONE_IP" | awk -F. '{print $1"."$2"."$3}')"
+    target_prefix="$(printf '%s' "$target" | awk -F. '{print $1"."$2"."$3}')"
+    [ "$phone_prefix" = "$target_prefix" ]
+}
+
 cleanup_target() {
     target="$1"; source="$2"
     [ -n "$target" ] || return 0
@@ -49,6 +56,11 @@ cleanup_all() {
         done < "$STATEFILE"
     fi
     : > "$STATEFILE"
+
+    # Remove legacy self-NAT rules left by pre-SNAT experiments.
+    while iptables -t nat -D POSTROUTING -s "$PHONE_NET" -d "$PHONE_NET" -o br0 -j SNAT --to-source "$PHONE_IP" 2>/dev/null; do :; done
+    while iptables -t nat -D POSTROUTING -s "$PHONE_NET" -o br0 -j SNAT --to-source "$PHONE_IP" 2>/dev/null; do :; done
+
     nvram set lan_access_status="已清理"
     nvram set lan_access_count=0
 }
@@ -57,12 +69,6 @@ if [ "$1" = "cleanup" ]; then
     cleanup_all
     rm -f "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
-    exit 0
-fi
-
-if dhcp_found; then
-    cleanup_all
-    nvram set lan_access_status="上级DHCP已存在"
     exit 0
 fi
 
@@ -98,11 +104,9 @@ install_source_route() {
         ip addr del "$source/32" dev "$IFACE" 2>/dev/null
         return 1
     }
-    # Verify neighbor resolution. ICMP is deliberately NOT required here.
     if arping -I "$IFACE" -c 2 -w 2 "$target" >/dev/null 2>&1; then
         return 0
     fi
-    # Some network devices answer IP traffic without arping replies.
     if ping -I "$source" -c 1 -W 1 "$target" >/dev/null 2>&1; then
         return 0
     fi
@@ -121,9 +125,7 @@ install_target() {
     dhcp_found && return 2
     if awk -F'|' -v t="$target" '$1==t {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null; then return 0; fi
 
-    phone_prefix="$(printf '%s' "$PHONE_IP" | awk -F. '{print $1"."$2"."$3}')"
-    target_prefix="$(printf '%s' "$target" | awk -F. '{print $1"."$2"."$3}')"
-    if [ "$phone_prefix" = "$target_prefix" ]; then
+    if same_phone_subnet "$target"; then
         printf '%s|DIRECT\n' "$target" >> "$STATEFILE"
         log "目标 $target 与手机侧同 /24，直接访问"
         return 0
@@ -232,27 +234,49 @@ while :; do
     IFACE="$(cfg lan_discovery_ifname eth2.1)"
     link="$(nv lan_discovery_status_link)"
     devices="$(nv lan_discovery_devices)"
+    dhcp="$(nv lan_discovery_status_dhcp)"
+
+    # LAN Link state always has priority. Do not let DHCP/NAT state swallow
+    # the physical plug/unplug transition.
+    if [ "$link" != "$last_link" ]; then
+        last_link="$link"
+        if [ "$link" != "UP" ]; then
+            cleanup_all
+            nvram set lan_access_status="LAN已断开"
+            log "LAN Link DOWN，已清理目标通道"
+            last_devices=""
+            last_dhcp=""
+            sleep 2
+            continue
+        fi
+        log "LAN Link UP，开始重新检测目标网络"
+        last_devices=""
+        last_dhcp=""
+    fi
 
     if [ "$link" != "UP" ]; then
-        if [ "$last_link" = "UP" ]; then cleanup_all; log "LAN Link DOWN，已清理目标通道"; fi
-        last_link="$link"
         sleep 2
         continue
     fi
-    last_link="$link"
+
+    # DHCP is evaluated only after the physical link transition has been
+    # handled, so plug/unplug detection remains reliable in both modes.
+    if [ "$dhcp" != "$last_dhcp" ]; then
+        last_dhcp="$dhcp"
+        if dhcp_found; then
+            cleanup_all
+            nvram set lan_access_status="上级DHCP已存在"
+            log "检测到上级DHCP，进入透明桥接模式，停止NAT访问模式"
+        else
+            nvram set lan_access_status="等待目标设备"
+            log "上级DHCP不存在，进入无DHCP访问模式"
+            last_devices=""
+        fi
+    fi
 
     if dhcp_found; then
-        if [ -s "$STATEFILE" ]; then cleanup_all; fi
-        nvram set lan_access_status="上级DHCP已存在"
-        last_dhcp="1"
-        last_devices="$devices"
         sleep 2
         continue
-    fi
-    if [ "$last_dhcp" = "1" ]; then
-        last_dhcp="0"
-        last_devices=""
-        log "上级DHCP消失，进入无DHCP NAT访问模式"
     fi
 
     if [ "$devices" != "$last_devices" ]; then
