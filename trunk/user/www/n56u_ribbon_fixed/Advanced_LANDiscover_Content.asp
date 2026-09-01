@@ -34,26 +34,32 @@ var initial_status={
 };
 <% login_state_hook(); %>
 function value_or(v,d){return(v!==undefined&&v!==null&&String(v)!==''&&String(v)!=='-')?String(v):d;}
-function norm(v){return String(v||'').replace(/\r/g,'');}
+function norm(v){return String(v||'').replace(/\r/g,'').replace(/&#13;/g,'').replace(/&#10;/g,'\n').replace(/&#8232;/g,'\u2028').replace(/&#x2028;/gi,'\u2028');}
+function lines(v){return norm(v).split(/\n|\u2028/).map(function(x){return String(x).replace(/^\s+|\s+$/g,'');}).filter(function(x){return x!=='';});}
 function esc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}
+function mac_norm(v){var m=String(v==null?'':v).replace(/&(?:#10|#13);/gi,'').replace(/\\/g,'').replace(/\s+/g,'').toUpperCase();return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(m)?m:'-';}
 function section(data,a,b){var p=data.indexOf(a);if(p<0)return '';p+=a.length;var q=b?data.indexOf(b,p):-1;return data.substring(p,q<0?data.length:q).replace(/^\n+|\n+$/g,'');}
 function parse_data(data){
  data=norm(data);
  var first=(data.split('\n')[0]||'').split('|');
- return {iface:value_or(first[1],value_or(initial_status.iface,'eth2.1')),role:value_or(first[2],value_or(initial_status.role,'LAN')),ip:value_or(first[3],value_or(initial_status.ip,'-')),mac:value_or(first[4],value_or(initial_status.mac,'-')),link:value_or(first[5],value_or(initial_status.link,'-')),dhcp:value_or(first[6],value_or(initial_status.dhcp,'未检测')),state:value_or(first[7],value_or(initial_status.state,'空闲')),count:value_or(first[8],value_or(initial_status.count,'0')),last:value_or(first[9],value_or(initial_status.last,'-')),interfaces:section(data,'---IFACES---','---LOG---'),log:section(data,'---LOG---','---DEVICES---'),devices:section(data,'---DEVICES---','---CUSTOM---'),custom:section(data,'---CUSTOM---','')};
+ return {iface:value_or(first[1],value_or(initial_status.iface,'eth2.1')),role:value_or(first[2],value_or(initial_status.role,'LAN')),ip:value_or(first[3],value_or(initial_status.ip,'-')),mac:mac_norm(value_or(first[4],value_or(initial_status.mac,'-'))),link:value_or(first[5],value_or(initial_status.link,'-')),dhcp:value_or(first[6],value_or(initial_status.dhcp,'未检测')),state:value_or(first[7],value_or(initial_status.state,'空闲')),count:value_or(first[8],value_or(initial_status.count,'0')),last:value_or(first[9],value_or(initial_status.last,'-')),interfaces:section(data,'---IFACES---','---LOG---'),log:section(data,'---LOG---','---DEVICES---'),devices:section(data,'---DEVICES---','---CUSTOM---'),custom:section(data,'---CUSTOM---','')};
 }
-function render_status(o){$j('#status_iface').text(o.iface);$j('#status_role').text(o.role);$j('#status_ip').text(o.ip);$j('#status_mac').text(o.mac);$j('#status_link').text(o.link);$j('#status_dhcp').text(o.dhcp);$j('#status_state').text(o.state);$j('#status_count').text(o.count);$j('#status_last').text(o.last);}
+function render_status(o){$j('#status_iface').text(o.iface);$j('#status_role').text(o.role);$j('#status_ip').text(o.ip);$j('#status_mac').text(mac_norm(o.mac));$j('#status_link').text(o.link);$j('#status_dhcp').text(o.dhcp);$j('#status_state').text(o.state);$j('#status_count').text(o.count);$j('#status_last').text(o.last);}
 function render_interfaces(s){
- var sel=document.getElementById('lan_ifname');if(!sel)return;var wanted='<% nvram_get_x("", "lan_discovery_ifname"); %>';var lines=norm(s).split('\n');var found=false;sel.innerHTML='';
- for(var i=0;i<lines.length;i++){var f=lines[i].split('|');if(f.length<5||!f[0]||f[1]!=='LAN'||/^(lo|br|ra|wds|apcli)/.test(f[0]))continue;var opt=document.createElement('option');opt.value=f[0];opt.text=f[0]+' | '+f[1]+' | '+(f[2]||'-')+' | '+(f[4]||'-');if(f[0]===wanted){opt.selected=true;found=true;}sel.appendChild(opt);}
+ var sel=document.getElementById('lan_ifname');if(!sel)return;var wanted='<% nvram_get_x("", "lan_discovery_ifname"); %>';var ls=lines(s);var found=false;sel.innerHTML='';
+ for(var i=0;i<ls.length;i++){var f=ls[i].split('|');if(f.length<5||!f[0]||f[1]!=='LAN'||/^(lo|br|ra|wds|apcli)/.test(f[0]))continue;var opt=document.createElement('option');opt.value=f[0];opt.text=f[0]+' | '+f[1]+' | '+(f[2]||'-')+' | '+(f[4]||'-');if(f[0]===wanted){opt.selected=true;found=true;}sel.appendChild(opt);}
  if(!sel.options.length){var o=document.createElement('option');o.value=wanted||'eth2.1';o.text=(wanted||'eth2.1')+' | LAN';o.selected=true;sel.appendChild(o);}else if(!found)sel.selectedIndex=0;
 }
 function render_devices(s){
- var body=document.getElementById('devices');if(!body)return;body.innerHTML='';var lines=norm(s).split('\n');
- for(var i=0;i<lines.length;i++){var z=lines[i];if(z.indexOf('DEVICE ')!==0)continue;var type=(z.match(/type=([^ ]+)/)||[])[1]||'-';var ip=(z.match(/IP=([^ ]+)/)||[])[1]||'-';var mac=(z.match(/MAC=([^ ]+)/)||[])[1]||'-';var info=(z.match(/INFO=(.*)$/)||[])[1]||'-';var tr=document.createElement('tr');tr.innerHTML='<td>-</td><td>'+esc(type)+'</td><td>'+esc(ip)+'</td><td>'+esc(mac)+'</td><td>'+esc(info)+'</td>';body.appendChild(tr);}
+ var body=document.getElementById('devices');if(!body)return;body.innerHTML='';var ls=lines(s),seen={};
+ for(var i=0;i<ls.length;i++){var z=ls[i];if(z.indexOf('DEVICE ')!==0)continue;var type=(z.match(/type=([^ ]+)/)||[])[1]||'-';var ip=(z.match(/IP=([^ ]+)/)||[])[1]||'-';var mac=mac_norm((z.match(/MAC=([^ ]+)/)||[])[1]||'-');var info=(z.match(/INFO=(.*)$/)||[])[1]||'-';var key=type+'|'+ip+'|'+mac+'|'+info;if(seen[key])continue;seen[key]=1;var tr=document.createElement('tr');tr.innerHTML='<td>-</td><td>'+esc(type)+'</td><td>'+esc(ip)+'</td><td>'+esc(mac)+'</td><td>'+esc(info)+'</td>';body.appendChild(tr);}
  if(!body.children.length)body.innerHTML='<tr><td colspan="5" class="muted">暂无设备</td></tr>';
 }
-function render_log(s){var lg=document.getElementById('live_log');if(!lg)return;var t=norm(s);t=t.replace(/&#13;&#10;/g,'\n').replace(/&#10;/g,'\n').replace(/&#13;/g,'\n').replace(/\u2028/g,'\n');lg.textContent=t||'暂无日志';lg.scrollTop=lg.scrollHeight;}
+function render_log(s){
+ var lg=document.getElementById('live_log');if(!lg)return;var ls=lines(s),out=[];
+ for(var i=0;i<ls.length;i++){var t=ls[i].replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'');if(/^\d{2}:\d{2}:\d{2} /.test(t))out.push(t);}
+ lg.textContent=out.join('\n')||'暂无日志';lg.scrollTop=lg.scrollHeight;
+}
 function refresh_data(){
  var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState!==4||x.status!==200)return;var o=parse_data(x.responseText);render_status(o);render_interfaces(o.interfaces);render_devices(o.devices);render_log(o.log);};
  x.open('GET','Advanced_LANDiscover_Data.asp?_='+new Date().getTime(),true);x.send(null);
@@ -72,7 +78,7 @@ function initial(){
  show_banner(1);
  show_menu(5,3,1);
  show_footer();
- render_status({iface:value_or(initial_status.iface,'eth2.1'),role:value_or(initial_status.role,'LAN'),ip:value_or(initial_status.ip,'-'),mac:value_or(initial_status.mac,'-'),link:value_or(initial_status.link,'-'),dhcp:value_or(initial_status.dhcp,'未检测'),state:value_or(initial_status.state,'空闲'),count:value_or(initial_status.count,'0'),last:value_or(initial_status.last,'-')});
+ render_status({iface:value_or(initial_status.iface,'eth2.1'),role:value_or(initial_status.role,'LAN'),ip:value_or(initial_status.ip,'-'),mac:mac_norm(value_or(initial_status.mac,'-')),link:value_or(initial_status.link,'-'),dhcp:value_or(initial_status.dhcp,'未检测'),state:value_or(initial_status.state,'空闲'),count:value_or(initial_status.count,'0'),last:value_or(initial_status.last,'-')});
  refresh_data();
  if(refresh_timer)clearInterval(refresh_timer);
  refresh_timer=setInterval(refresh_data,1000);
