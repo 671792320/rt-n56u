@@ -1,5 +1,5 @@
 #!/bin/sh
-# LAN discovery event watcher with WebUI status/log/device feed.
+# LAN discovery event watcher with WebUI status/device feed.
 
 LOCKDIR=/var/run/lan_autodiscover.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
@@ -13,7 +13,6 @@ cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
 
 sanitize_text() {
-    # Strip ASCII C0 controls, DEL, and backslash-escaped hex artifacts.
     printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'
 }
 sanitize_mac() {
@@ -152,7 +151,7 @@ run_discovery() {
         args="-i $iface -t $discover_cycle -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"; [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
         /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 & pid=$!; last_tail=""
         while kill -0 "$pid" 2>/dev/null; do
-            if [ -f /tmp/camdiscover_lan.log ]; then current="$(tail -n 25 /tmp/camdiscover_lan.log 2>/dev/null)"; if [ "$current" != "$last_tail" ]; then printf '%s\n' "$current" | while IFS= read -r line; do [ -n "$line" ] || continue; case "$line" in DEVICE\ *) append_device "$line"; log_line "$line";; *probe*|*RX*|*FAILED*|*listen*) log_line "$line";; esac; done; last_tail="$current"; fi; fi
+            if [ -f /tmp/camdiscover_lan.log ]; then current="$(tail -n 25 /tmp/camdiscover_lan.log 2>/dev/null)"; if [ "$current" != "$last_tail" ]; then printf '%s\n' "$current" | while IFS= read -r line; do [ -n "$line" ] || continue; case "$line" in DEVICE\ *) append_device "$line"; log_line "$line";; *probe\ sent*|*probe\ FAILED*) log_line "$line";; *listen\ *FAILED*) log_line "$line";; esac; done; last_tail="$current"; fi; fi
             sleep 1
         done
         wait "$pid"; if ! is_link_up "$iface"; then break; fi; log_line "本轮主动探测完成，继续监听，下一轮 ${discover_cycle}s"; sleep 1
