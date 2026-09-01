@@ -1,6 +1,8 @@
 #!/bin/sh
-# LAN access manager for unknown/no-DHCP target networks.
+# LAN access manager for discovered target networks.
 # Creates per-target /32 routes and SNAT using a temporary unused source IP.
+# DHCP detection is informational only; NAT is still required whenever the
+# phone-side LAN and target device are on different IPv4 networks.
 
 PIDFILE=/tmp/lanaccess.pid
 STATEFILE=/tmp/lanaccess.state
@@ -19,6 +21,13 @@ valid_ipv4() {
     printf '%s\n' "$1" | awk -F. 'NF==4 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 {ok=1} END{exit ok?0:1}'
 }
 
+same_phone_subnet() {
+    target="$1"
+    phone_prefix="$(printf '%s' "$PHONE_IP" | awk -F. '{print $1"."$2"."$3}')"
+    target_prefix="$(printf '%s' "$target" | awk -F. '{print $1"."$2"."$3}')"
+    [ "$phone_prefix" = "$target_prefix" ]
+}
+
 cleanup_target() {
     target="$1"; source="$2"
     [ -n "$target" ] || return 0
@@ -32,8 +41,10 @@ cleanup_all() {
     if [ -r "$STATEFILE" ]; then
         while IFS='|' read -r target source; do
             [ -n "$target" ] || continue
-            cleanup_target "$target" "$source"
-            ip addr del "$source/32" dev "$IFACE" 2>/dev/null
+            if [ "$source" != "DIRECT" ]; then
+                cleanup_target "$target" "$source"
+                ip addr del "$source/32" dev "$IFACE" 2>/dev/null
+            fi
         done < "$STATEFILE"
     fi
     : > "$STATEFILE"
@@ -52,8 +63,6 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then exit 0; fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null; rm -f "$PIDFILE"' EXIT INT TERM HUP
 echo $$ > "$PIDFILE"
 
-# Padavan normally has forwarding enabled, but this worker must be safe when
-# started independently after a custom firewall change.
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 
 candidate_ips() {
@@ -94,6 +103,13 @@ install_target() {
     valid_ipv4 "$target" || return 1
     if awk -F'|' -v t="$target" '$1==t {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null; then return 0; fi
 
+    # A target already inside the phone-side /24 does not need SNAT.
+    if same_phone_subnet "$target"; then
+        printf '%s|DIRECT\n' "$target" >> "$STATEFILE"
+        log "目标 $target 与手机侧同网段，直接访问，无需SNAT"
+        return 0
+    fi
+
     for candidate in $(candidate_ips "$target"); do
         [ "$candidate" = "$target" ] && continue
         [ "$candidate" = "$PHONE_IP" ] && continue
@@ -104,7 +120,7 @@ install_target() {
             iptables -A FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
             iptables -t nat -A POSTROUTING -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j SNAT --to-source "$candidate" 2>/dev/null
             printf '%s|%s\n' "$target" "$candidate" >> "$STATEFILE"
-            log "目标 $target 已建立访问通道，源地址 $candidate"
+            log "目标 $target 已建立访问通道，源地址 $candidate，SNAT=ON"
             return 0
         fi
     done
@@ -131,9 +147,13 @@ sync_targets() {
         while IFS='|' read -r target source; do
             [ -n "$target" ] || continue
             if ! grep -F -x "$target" "$current" >/dev/null 2>&1; then
-                cleanup_target "$target" "$source"
-                ip addr del "$source/32" dev "$IFACE" 2>/dev/null
-                log "目标 $target 已从发现列表移除，访问通道已清理"
+                if [ "$source" = "DIRECT" ]; then
+                    log "目标 $target 已从发现列表移除，清理直接访问状态"
+                else
+                    cleanup_target "$target" "$source"
+                    ip addr del "$source/32" dev "$IFACE" 2>/dev/null
+                    log "目标 $target 已从发现列表移除，访问通道已清理"
+                fi
             fi
         done < "$STATEFILE"
         : > /tmp/lanaccess.state.new.$$
@@ -158,12 +178,11 @@ sync_targets() {
 }
 
 cleanup_all
-nvram set lan_access_status="等待无DHCP目标网络"
+nvram set lan_access_status="等待目标设备"
 last_link="-"
 last_devices=""
 while :; do
     IFACE="$(cfg lan_discovery_ifname eth2.1)"
-    dhcp="$(nv lan_discovery_status_dhcp)"
     link="$(nv lan_discovery_status_link)"
     devices="$(nv lan_discovery_devices)"
 
@@ -174,15 +193,6 @@ while :; do
         continue
     fi
     last_link="$link"
-
-    case "$dhcp" in
-        网关\ *|DHCP服务器\ *|已发现DHCP*)
-            if [ -s "$STATEFILE" ]; then cleanup_all; log "检测到上级DHCP，停止无DHCP目标访问模式"; fi
-            nvram set lan_access_status="上级DHCP已存在"
-            sleep 2
-            continue
-            ;;
-    esac
 
     if [ "$devices" != "$last_devices" ]; then
         last_devices="$devices"
