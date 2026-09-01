@@ -12,6 +12,19 @@ nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
 
+sanitize_text() {
+    # Strip ASCII C0 controls, DEL, and backslash-escaped hex artifacts.
+    printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'
+}
+sanitize_mac() {
+    m="$(sanitize_text "$1")"
+    m="$(printf '%s' "$m" | sed 's/\\//g')"
+    case "$m" in
+        [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]) printf '%s' "$m";;
+        *) printf '%s' "-";;
+    esac
+}
+
 iface_ipv4() {
     iface="$1"
     ip4="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
@@ -24,13 +37,11 @@ iface_ipv4() {
 
 iface_mac() {
     iface="$1"
-    mac="$(cat "/sys/class/net/$iface/address" 2>/dev/null)"
-    case "$mac" in ""|00:00:00:00:00:00) mac="";; esac
-    if [ -z "$mac" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then
-        mac="$(cat /sys/class/net/br0/address 2>/dev/null)"
-        case "$mac" in ""|00:00:00:00:00:00) mac="";; esac
+    mac="$(sanitize_mac "$(cat "/sys/class/net/$iface/address" 2>/dev/null)")"
+    if [ "$mac" = "-" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then
+        mac="$(sanitize_mac "$(cat /sys/class/net/br0/address 2>/dev/null)")"
     fi
-    if [ -z "$mac" ]; then mac="$(nv lan_hwaddr)"; fi
+    if [ "$mac" = "-" ]; then mac="$(sanitize_mac "$(nv lan_hwaddr)")"; fi
     printf '%s' "${mac:--}"
 }
 
@@ -54,25 +65,22 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_status_state)" ] || nvram set lan_discovery_status_state="空闲"
     [ -n "$(nv lan_discovery_status_count)" ] || nvram set lan_discovery_status_count=0
     [ -n "$(nv lan_discovery_status_last)" ] || nvram set lan_discovery_status_last="-"
-    # Clear stale log/device data left by older duplicate worker processes.
     nvram set lan_discovery_log=""
     nvram set lan_discovery_devices=""
     nvram set lan_discovery_status_count="0"
 }
 
 log_line() {
-    line="$(now) $*"
+    line="$(sanitize_text "$(now) $*")"
     old="$(nv lan_discovery_log)"
-    # U+2028 LINE SEPARATOR is deliberately used instead of LF. Padavan's
-    # nvram_get_x() HTML-escapes control characters, which previously made
-    # CR/LF appear as literal '&#13;&#10;' in the AJAX WebUI log.
     sep="$(printf '\342\200\250')"
     if [ -n "$old" ]; then
         nvram set lan_discovery_log="$(printf '%s%s%s' "$old" "$sep" "$line" | tail -c 12000)"
     else
         nvram set lan_discovery_log="$line"
     fi
-    nvram set lan_discovery_status_last="$(now)"; logger -t lan-autodiscover "$*"
+    nvram set lan_discovery_status_last="$(now)"
+    logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
 
 refresh_interfaces() {
@@ -100,7 +108,13 @@ set_link_status() {
 is_link_up() { iface="$1"; [ -e "/sys/class/net/$iface" ] || return 1; if [ -r "/sys/class/net/$iface/carrier" ]; then [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0; else [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0; fi; return 1; }
 
 append_device() {
-    line="$1"; [ -n "$line" ] || return; old="$(nv lan_discovery_devices)"
+    line="$(sanitize_text "$1")"; [ -n "$line" ] || return
+    mac="$(printf '%s\n' "$line" | sed -n 's/.* MAC=//p' | awk '{print $1}')"
+    if [ -n "$mac" ]; then
+        mac="$(sanitize_mac "$mac")"
+        line="$(printf '%s\n' "$line" | sed "s/ MAC=[^ ]*/ MAC=$mac/")"
+    fi
+    old="$(nv lan_discovery_devices)"
     if printf '%s\n' "$old" | grep -F -x "$line" >/dev/null 2>&1; then return; fi
     if [ -n "$old" ]; then nvram set lan_discovery_devices="$(printf '%s\n%s\n' "$old" "$line" | tail -n 80)"; else nvram set lan_discovery_devices="$line"; fi
     count="$(printf '%s\n' "$(nv lan_discovery_devices)" | grep -c '^DEVICE ' 2>/dev/null)"; nvram set lan_discovery_status_count="${count:-0}"
