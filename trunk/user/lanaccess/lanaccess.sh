@@ -52,6 +52,10 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then exit 0; fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null; rm -f "$PIDFILE"' EXIT INT TERM HUP
 echo $$ > "$PIDFILE"
 
+# Padavan normally has forwarding enabled, but this worker must be safe when
+# started independently after a custom firewall change.
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+
 candidate_ips() {
     ip="$1"
     set -- $(printf '%s\n' "$ip" | awk -F. '{print $1,$2,$3,$4}')
@@ -67,6 +71,11 @@ candidate_ips() {
     printf '%s.%s.%s.253\n' "$a" "$b" "$c"
 }
 
+source_used() {
+    source="$1"
+    awk -F'|' -v s="$source" '$2==s {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null
+}
+
 source_test() {
     source="$1"; target="$2"
     ip addr add "$source/32" dev "$IFACE" 2>/dev/null || return 1
@@ -80,31 +89,15 @@ source_test() {
     return 1
 }
 
-existing_source() {
-    target="$1"
-    awk -F'|' -v t="$target" '$1!=t && $2!="" {print $2}' "$STATEFILE" 2>/dev/null
-}
-
 install_target() {
     target="$1"
     valid_ipv4 "$target" || return 1
-    while IFS= read -r source; do
-        [ -n "$source" ] || continue
-        if source_test "$source" "$target"; then
-            iptables -A FORWARD -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j ACCEPT 2>/dev/null
-            iptables -A FORWARD -s "$target/32" -d "$PHONE_NET" -i "$IFACE" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
-            iptables -t nat -A POSTROUTING -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j SNAT --to-source "$source" 2>/dev/null
-            printf '%s|%s\n' "$target" "$source" >> "$STATEFILE"
-            log "目标 $target 已建立访问通道，复用源地址 $source"
-            return 0
-        fi
-    done <<EOF
-$(existing_source "$target")
-EOF
+    if awk -F'|' -v t="$target" '$1==t {found=1} END{exit found?0:1}' "$STATEFILE" 2>/dev/null; then return 0; fi
 
     for candidate in $(candidate_ips "$target"); do
         [ "$candidate" = "$target" ] && continue
         [ "$candidate" = "$PHONE_IP" ] && continue
+        source_used "$candidate" && continue
         if arping -I "$IFACE" -c 1 -w 1 "$candidate" >/dev/null 2>&1; then continue; fi
         if source_test "$candidate" "$target"; then
             iptables -A FORWARD -s "$PHONE_NET" -d "$target/32" -o "$IFACE" -j ACCEPT 2>/dev/null
