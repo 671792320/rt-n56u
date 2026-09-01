@@ -1,29 +1,22 @@
 #!/bin/sh
 # LAN discovery event watcher with WebUI status/device feed.
-
 LOCKDIR=/var/run/lan_autodiscover.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    echo "LAN autodiscovery already running" | logger -t lan-autodiscover
+    logger -t lan-autodiscover "LAN autodiscovery already running"
     exit 0
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
-
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
-
-sanitize_text() {
-    printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'
-}
+sanitize_text() { printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'; }
 sanitize_mac() {
-    m="$(sanitize_text "$1")"
-    m="$(printf '%s' "$m" | sed 's/\\//g')"
+    m="$(sanitize_text "$1")"; m="$(printf '%s' "$m" | sed 's/\\//g')"
     case "$m" in
         [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]) printf '%s' "$m";;
         *) printf '%s' "-";;
     esac
 }
-
 iface_ipv4() {
     iface="$1"
     ip4="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
@@ -33,17 +26,12 @@ iface_ipv4() {
     if [ -z "$ip4" ]; then ip4="$(nv lan_ipaddr)"; fi
     printf '%s' "${ip4:--}"
 }
-
 iface_mac() {
-    iface="$1"
-    mac="$(sanitize_mac "$(cat "/sys/class/net/$iface/address" 2>/dev/null)")"
-    if [ "$mac" = "-" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then
-        mac="$(sanitize_mac "$(cat /sys/class/net/br0/address 2>/dev/null)")"
-    fi
+    iface="$1"; mac="$(sanitize_mac "$(cat "/sys/class/net/$iface/address" 2>/dev/null)")"
+    if [ "$mac" = "-" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then mac="$(sanitize_mac "$(cat /sys/class/net/br0/address 2>/dev/null)")"; fi
     if [ "$mac" = "-" ]; then mac="$(sanitize_mac "$(nv lan_hwaddr)")"; fi
     printf '%s' "${mac:--}"
 }
-
 ensure_defaults() {
     [ -n "$(nv lan_discovery_enable)" ] || nvram set lan_discovery_enable=1
     [ -n "$(nv lan_discovery_ifname)" ] || nvram set lan_discovery_ifname=eth2.1
@@ -68,20 +56,18 @@ ensure_defaults() {
     nvram set lan_discovery_devices=""
     nvram set lan_discovery_status_count="0"
 }
-
 log_line() {
-    line="$(sanitize_text "$(now) $*")"
-    old="$(nv lan_discovery_log)"
-    sep="$(printf '\342\200\250')"
+    line="$(sanitize_text "$(now) $*")"; old="$(nv lan_discovery_log)"
+    sep='&#10;'
     if [ -n "$old" ]; then
-        nvram set lan_discovery_log="$(printf '%s%s%s' "$old" "$sep" "$line" | tail -c 12000)"
+        old="$(printf '%s' "$old" | sed 's/&#13;/ /g; s/&#10;/\n/g; s/&#8232;/\n/g; s/&#x2028;/\n/g')"
+        nvram set lan_discovery_log="$(printf '%s\n%s\n' "$old" "$line" | tail -n 100 | awk 'BEGIN{ORS="&#10;"} {print}')"
     else
         nvram set lan_discovery_log="$line"
     fi
     nvram set lan_discovery_status_last="$(now)"
     logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
-
 refresh_interfaces() {
     out=""
     for p in /sys/class/net/*; do
@@ -96,16 +82,13 @@ refresh_interfaces() {
     done
     nvram set lan_discovery_interfaces "$out"
 }
-
 set_link_status() {
     iface="$1"; link="$2"; ip4="$(iface_ipv4 "$iface")"; mac="$(iface_mac "$iface")"; role="LAN"
     if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
     case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*) role="LAN";; eth*.1) role="LAN";; esac
     nvram set lan_discovery_status_if="$iface"; nvram set lan_discovery_status_role="$role"; nvram set lan_discovery_status_ip="$ip4"; nvram set lan_discovery_status_mac="$mac"; nvram set lan_discovery_status_link="$link"
 }
-
 is_link_up() { iface="$1"; [ -e "/sys/class/net/$iface" ] || return 1; if [ -r "/sys/class/net/$iface/carrier" ]; then [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0; else [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0; fi; return 1; }
-
 append_device() {
     line="$(sanitize_text "$1")"; [ -n "$line" ] || return
     mac="$(printf '%s\n' "$line" | sed -n 's/.* MAC=//p' | awk '{print $1}')"
@@ -113,12 +96,15 @@ append_device() {
         mac="$(sanitize_mac "$mac")"
         line="$(printf '%s\n' "$line" | sed "s/ MAC=[^ ]*/ MAC=$mac/")"
     fi
+    ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+    [ -n "$ip" ] || return
     old="$(nv lan_discovery_devices)"
-    if printf '%s\n' "$old" | grep -F -x "$line" >/dev/null 2>&1; then return; fi
+    # One row per IP. If a new protocol reports the same IP, replace the old
+    # row instead of keeping IP/ARP/ONVIF duplicates.
+    old="$(printf '%s\n' "$old" | awk -v ip="$ip" 'index($0," IP=" ip " ")==0 && index($0," IP=" ip)==0 {print}')"
     if [ -n "$old" ]; then nvram set lan_discovery_devices="$(printf '%s\n%s\n' "$old" "$line" | tail -n 80)"; else nvram set lan_discovery_devices="$line"; fi
     count="$(printf '%s\n' "$(nv lan_discovery_devices)" | grep -c '^DEVICE ' 2>/dev/null)"; nvram set lan_discovery_status_count="${count:-0}"
 }
-
 run_discovery() {
     iface="$1"; dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"; dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"; discover_enable="$(cfg lan_discovery_discover_enable 1)"; discover_cycle="$(cfg lan_discovery_cycle 10)"
     onvif="$(cfg lan_discovery_onvif 1)"; ssdp="$(cfg lan_discovery_ssdp 1)"; hik="$(cfg lan_discovery_hik 1)"; dahua="$(cfg lan_discovery_dahua 1)"; raw="$(cfg lan_discovery_raw 1)"
@@ -130,19 +116,11 @@ run_discovery() {
             line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
             gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
             server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
-            if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="网关 $gateway"; log_line "上级DHCP：网关 $gateway"
-            elif [ -n "$server" ] && [ "$server" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"; log_line "上级DHCP：服务器 $server，未提供网关"
-            else
-                nvram set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"; log_line "上级DHCP已发现，但报文未提供网关"
-            fi
-        else
-            nvram set lan_discovery_status_dhcp="未发现DHCP"; log_line "未发现DHCP"
-        fi
-    else
-        nvram set lan_discovery_status_dhcp="未启用"
-    fi
+            if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then nvram set lan_discovery_status_dhcp="网关 $gateway"; log_line "上级DHCP：网关 $gateway"
+            elif [ -n "$server" ] && [ "$server" != "-" ]; then nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"; log_line "上级DHCP：服务器 $server，未提供网关"
+            else nvram set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"; log_line "上级DHCP已发现，但报文未提供网关"; fi
+        else nvram set lan_discovery_status_dhcp="未发现DHCP"; log_line "未发现DHCP"; fi
+    else nvram set lan_discovery_status_dhcp="未启用"; fi
     if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then nvram set lan_discovery_status_state="设备发现未启用"; return; fi
     nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"; nvram set lan_discovery_status_state="持续设备发现"; log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
     while is_link_up "$iface"; do
@@ -158,7 +136,6 @@ run_discovery() {
     done
     nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface，停止发现"
 }
-
 ensure_defaults; refresh_interfaces; last_iface=""; last_state="-9"; iface_refresh=0
 while :; do
     iface_refresh=$((iface_refresh + 1)); if [ "$iface_refresh" -ge 5 ]; then refresh_interfaces; iface_refresh=0; fi
