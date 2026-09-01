@@ -130,8 +130,16 @@ stop_worker() {
     stop_access
 }
 
+worker_needed() {
+    enable="$1"
+    dhcp_enable="$2"
+    discover_enable="$3"
+    [ "$enable" = "1" ] && { [ "$dhcp_enable" = "1" ] || [ "$discover_enable" = "1" ]; }
+}
+
 last_enable="-1"
 last_discover="-1"
+last_dhcp_enable="-1"
 last_iface=""
 last_link="-1"
 last_dhcp=""
@@ -140,9 +148,14 @@ set_supervisor_status "运行中"
 nvram set lan_discovery_status_worker="已停止"
 nvram set lan_access_status="已停止"
 nvram set lan_access_count=0
+nvram set lan_discovery_status_dhcp="未检测"
+nvram set lan_discovery_devices=""
+nvram set lan_discovery_status_count=0
+nvram set lan_discovery_status_state="等待接口"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
+    dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     discover_enable="$(cfg lan_discovery_discover_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
 
@@ -157,13 +170,19 @@ while :; do
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
         last_discover="-1"
+        last_dhcp_enable="-1"
         if [ "$enable" = "1" ]; then
             nvram set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN discovery enabled" | logger -t lan-supervisor
         else
             nvram set lan_discovery_status_enable="已禁用"
             nvram set lan_discovery_status_state="LAN自动发现未启用"
-            echo "$(date '+%H:%M:%S') LAN discovery disabled; LAN event supervisor remains active" | logger -t lan-supervisor
+            nvram set lan_discovery_status_dhcp="未检测"
+            nvram set lan_discovery_devices=""
+            nvram set lan_discovery_status_count=0
+            nvram set lan_access_status="已停止"
+            nvram set lan_access_count=0
+            echo "$(date '+%H:%M:%S') LAN discovery disabled" | logger -t lan-supervisor
             stop_worker
         fi
         last_link="-1"
@@ -175,6 +194,22 @@ while :; do
         link=0
     fi
 
+    if [ "$dhcp_enable" != "$last_dhcp_enable" ]; then
+        last_dhcp_enable="$dhcp_enable"
+        if [ "$dhcp_enable" = "1" ]; then
+            echo "$(date '+%H:%M:%S') DHCP detection enabled" | logger -t lan-supervisor
+            if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "1" ]; then
+                start_worker "$iface"
+            fi
+        else
+            nvram set lan_discovery_status_dhcp="未检测"
+            last_dhcp=""
+            if [ "$discover_enable" != "1" ]; then
+                stop_worker
+            fi
+        fi
+    fi
+
     dhcp="$(nv lan_discovery_status_dhcp)"
     if [ "$dhcp" != "$last_dhcp" ]; then
         last_dhcp="$dhcp"
@@ -182,7 +217,7 @@ while :; do
             stop_access
             nvram set lan_access_status="上级DHCP已存在"
             echo "$(date '+%H:%M:%S') Upstream DHCP detected; NAT mode disabled" | logger -t lan-supervisor
-        else
+        elif [ "$enable" = "1" ]; then
             nvram set lan_access_status="等待目标设备"
         fi
     fi
@@ -191,13 +226,21 @@ while :; do
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
             nvram set lan_discovery_status_state="等待接口"
+            nvram set lan_discovery_devices=""
+            nvram set lan_discovery_status_count=0
             echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
             start_worker "$iface"
             if dhcp_found; then stop_access; else start_access; fi
         else
             nvram set lan_discovery_status_state="设备发现未启用"
+            nvram set lan_discovery_devices=""
+            nvram set lan_discovery_status_count=0
             echo "$(date '+%H:%M:%S') Device discovery disabled" | logger -t lan-supervisor
-            stop_worker
+            if [ "$dhcp_enable" = "1" ] && [ "$link" = "1" ]; then
+                start_worker "$iface"
+            else
+                stop_worker
+            fi
         fi
     fi
 
@@ -206,7 +249,7 @@ while :; do
         if [ "$link" = "1" ]; then
             nvram set lan_discovery_status_link="UP"
             echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
-            if [ "$enable" = "1" ] && [ "$discover_enable" = "1" ]; then
+            if worker_needed "$enable" "$dhcp_enable" "$discover_enable"; then
                 start_worker "$iface"
                 if dhcp_found; then stop_access; else start_access; fi
             else
@@ -215,10 +258,13 @@ while :; do
         else
             nvram set lan_discovery_status_link="DOWN"
             echo "$(date '+%H:%M:%S') LAN Link DOWN $iface" | logger -t lan-supervisor
+            nvram set lan_discovery_status_dhcp="未检测"
+            nvram set lan_discovery_devices=""
+            nvram set lan_discovery_status_count=0
             stop_worker
             nvram set lan_discovery_status_state="等待接口"
         fi
-    elif [ "$enable" = "1" ] && [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
+    elif worker_needed "$enable" "$dhcp_enable" "$discover_enable" && [ "$link" = "1" ]; then
         start_worker "$iface"
         if dhcp_found; then stop_access; else start_access; fi
     fi
