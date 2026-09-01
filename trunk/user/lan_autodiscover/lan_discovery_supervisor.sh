@@ -1,10 +1,9 @@
 #!/bin/sh
 # Persistent LAN event supervisor.
-# This process is always running. It never disables the LAN interface or
-# its link/IP handling. lan_discovery_enable controls the discovery worker,
-# while lan_discovery_discover_enable controls whether camdiscover is active.
+# Controls the discovery worker and the no-DHCP LAN access worker.
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
+ACCESS_PIDFILE=/tmp/lanaccess.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
 
 nv() { nvram get "$1" 2>/dev/null; }
@@ -37,6 +36,47 @@ worker_running() {
     return 1
 }
 
+access_running() {
+    [ -r "$ACCESS_PIDFILE" ] || return 1
+    pid="$(cat "$ACCESS_PIDFILE" 2>/dev/null)"
+    case "$pid" in
+        ''|*[!0-9]*) rm -f "$ACCESS_PIDFILE"; return 1;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+    rm -f "$ACCESS_PIDFILE"
+    return 1
+}
+
+start_access() {
+    if access_running; then
+        nvram set lan_access_status="运行中"
+        return 0
+    fi
+    if [ ! -x /usr/bin/lanaccess.sh ]; then
+        nvram set lan_access_status="程序不存在"
+        return 1
+    fi
+    /usr/bin/lanaccess.sh >/tmp/lanaccess.log 2>&1 &
+    nvram set lan_access_status="启动中"
+    return 0
+}
+
+stop_access() {
+    if access_running; then
+        pid="$(cat "$ACCESS_PIDFILE" 2>/dev/null)"
+        kill "$pid" 2>/dev/null
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
+    fi
+    rm -f "$ACCESS_PIDFILE"
+    rm -rf /var/run/lanaccess.lock 2>/dev/null
+    if [ -x /usr/bin/lanaccess.sh ]; then
+        /usr/bin/lanaccess.sh cleanup >/dev/null 2>&1
+    fi
+    nvram set lan_access_status="已停止"
+    nvram set lan_access_count=0
+}
+
 start_worker() {
     iface="$1"
     if worker_running; then
@@ -67,10 +107,9 @@ stop_worker() {
     rm -f "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
     nvram set lan_discovery_status_worker="已停止"
-    # Only terminate our known discovery helpers. The LAN event supervisor
-    # itself remains alive.
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
+    stop_access
 }
 
 last_enable="-1"
@@ -80,6 +119,8 @@ last_link="-1"
 
 set_supervisor_status "运行中"
 nvram set lan_discovery_status_worker="已停止"
+nvram set lan_access_status="已停止"
+nvram set lan_access_count=0
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
@@ -114,15 +155,13 @@ while :; do
         link=0
     fi
 
-    # Device discovery is a runtime switch independent of the LAN event
-    # supervisor. When it changes, stop/start the worker so the running
-    # camdiscover process is actually terminated/recreated.
     if [ "$enable" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
             nvram set lan_discovery_status_state="等待接口"
             echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
             start_worker "$iface"
+            start_access
         else
             nvram set lan_discovery_status_state="设备发现未启用"
             echo "$(date '+%H:%M:%S') Device discovery disabled" | logger -t lan-supervisor
@@ -137,6 +176,7 @@ while :; do
             echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
             if [ "$enable" = "1" ] && [ "$discover_enable" = "1" ]; then
                 start_worker "$iface"
+                start_access
             else
                 stop_worker
             fi
@@ -147,8 +187,8 @@ while :; do
             nvram set lan_discovery_status_state="等待接口"
         fi
     elif [ "$enable" = "1" ] && [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
-        # Recover automatically if the worker exits unexpectedly.
         start_worker "$iface"
+        start_access
     fi
 
     nvram set lan_discovery_status_supervisor="运行中"
