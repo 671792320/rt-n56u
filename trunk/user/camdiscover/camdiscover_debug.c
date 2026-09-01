@@ -11,6 +11,15 @@
  * so the wrapper can provide realtime RX diagnostics without changing the
  * discovery parser itself.
  */
+static void print_safe_rx(const char *ip, unsigned int port, int fd, ssize_t n)
+{
+    if (ip && *ip)
+        fprintf(stdout, "[camdiscover] RX fd=%d src=%s:%u bytes=%ld\n", fd, ip, port, (long)n);
+    else
+        fprintf(stdout, "[camdiscover] RX fd=%d bytes=%ld\n", fd, (long)n);
+    fflush(stdout);
+}
+
 ssize_t camdiscover_recvfrom(int fd, void *buf, size_t len, int flags,
                              struct sockaddr *src, socklen_t *srclen)
 {
@@ -49,12 +58,7 @@ ssize_t camdiscover_recvfrom(int fd, void *buf, size_t len, int flags,
         }
     }
 
-    if (ip[0])
-        fprintf(stdout, "[camdiscover] RX fd=%d src=%s:%u bytes=%ld\n",
-                fd, ip, port, (long)n);
-    else
-        fprintf(stdout, "[camdiscover] RX fd=%d bytes=%ld\n", fd, (long)n);
-    fflush(stdout);
-
+    /* Never dump packet contents or arbitrary bytes to stdout. */
+    print_safe_rx(ip, port, fd, n);
     return n;
 }
