@@ -72,54 +72,20 @@ jobs:
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
 
       - name: Integrate LAN access status into WebUI
-        shell: python3 {0}
+        shell: bash
         run: |
-          from pathlib import Path
-
-          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
-          s = p.read_text()
-
-          old = '''last:'<% nvram_get_x("", "lan_discovery_status_last"); %>'
-};'''
-          new = '''last:'<% nvram_get_x("", "lan_discovery_status_last"); %>',
- access:'<% nvram_get_x("", "lan_access_status"); %>',
- access_count:'<% nvram_get_x("", "lan_access_count"); %>'
-};'''
-          if old not in s:
-              raise SystemExit('initial_status anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = "last:value_or(first[9],value_or(initial_status.last,'-')),interfaces:section(data,'---IFACES---','---LOG---')"
-          new = "last:value_or(first[9],value_or(initial_status.last,'-')),access:value_or(first[10],value_or(initial_status.access,'等待目标设备')),access_count:value_or(first[11],value_or(initial_status.access_count,'0')),interfaces:section(data,'---IFACES---','---LOG---')"
-          if old not in s:
-              raise SystemExit('parse_data anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = "$j('#status_last').text(o.last);"
-          new = "$j('#status_last').text(o.last);$j('#status_access').text(o.access);$j('#status_access_count').text(o.access_count);"
-          if old not in s:
-              raise SystemExit('render_status anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = "last:value_or(initial_status.last,'-')});refresh_data();"
-          new = "last:value_or(initial_status.last,'-'),access:value_or(initial_status.access,'等待目标设备'),access_count:value_or(initial_status.access_count,'0')});refresh_data();"
-          if old not in s:
-              raise SystemExit('initial render anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '<tr><td>已发现</td><td id="status_count">0</td><td>最后活动</td><td id="status_last">-</td></tr></table>'
-          new = '<tr><td>已发现</td><td id="status_count">0</td><td>最后活动</td><td id="status_last">-</td></tr><tr><td>目标访问</td><td id="status_access">等待目标设备</td><td>已建立通道</td><td id="status_access_count">0</td></tr></table>'
-          if old not in s:
-              raise SystemExit('status table anchor not found')
-          s = s.replace(old, new, 1)
-
-          p.write_text(s)
-
-          check = p.read_text()
-          for needle in ('lan_access_status', 'lan_access_count', 'status_access', 'status_access_count'):
-              if needle not in check:
-                  raise SystemExit(f'WebUI LAN access patch missing: {needle}')
-          print('LAN access WebUI integration OK')
+          set -e
+          P=trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          sed -i '/last:'"'"'<% nvram_get_x("", "lan_discovery_status_last"); %>'"'"'/a\ access:'"'"'<% nvram_get_x("", "lan_access_status"); %>'"'"',\n access_count:'"'"'<% nvram_get_x("", "lan_access_count"); %>'"'"'' "$P"
+          sed -i "s/last:value_or(first\[9\],value_or(initial_status.last,'-')),interfaces:/last:value_or(first[9],value_or(initial_status.last,'-')),access:value_or(first[10],value_or(initial_status.access,'等待目标设备')),access_count:value_or(first[11],value_or(initial_status.access_count,'0')),interfaces:/" "$P"
+          sed -i "s/\$j('#status_last').text(o.last);/\$j('#status_last').text(o.last);\$j('#status_access').text(o.access);\$j('#status_access_count').text(o.access_count);/" "$P"
+          sed -i "s/last:value_or(initial_status.last,'-')});refresh_data();/last:value_or(initial_status.last,'-'),access:value_or(initial_status.access,'等待目标设备'),access_count:value_or(initial_status.access_count,'0')});refresh_data();/" "$P"
+          sed -i 's#<tr><td>已发现</td><td id="status_count">0</td><td>最后活动</td><td id="status_last">-</td></tr></table>#<tr><td>已发现</td><td id="status_count">0</td><td>最后活动</td><td id="status_last">-</td></tr><tr><td>目标访问</td><td id="status_access">等待目标设备</td><td>已建立通道</td><td id="status_access_count">0</td></tr></table>#' "$P"
+          grep -q 'lan_access_status' "$P"
+          grep -q 'lan_access_count' "$P"
+          grep -q 'status_access' "$P"
+          grep -q 'status_access_count' "$P"
+          echo 'LAN access WebUI integration OK'
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
@@ -128,8 +94,13 @@ jobs:
           from pathlib import Path
           p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
           s = p.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS
+\tbool "Register multiple callbacks to ct events"
+\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS
+\tbool "Register multiple callbacks to ct events"
+\tdefault n
+\tselect NF_CONNTRACK_EVENTS'''
           if old not in s:
               raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
