@@ -89,15 +89,12 @@ jobs:
           set -e
           BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
           VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
-          VERSION_DATE=${VERSION_STAMP%_*}
-          VERSION_TIME=${VERSION_STAMP#*_}
           VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
-          sed -i "s/^FIRMWARE_BUILDS_VER=.*/FIRMWARE_BUILDS_VER=${VERSION_DATE}/" trunk/versions.inc
-          sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${VERSION_TIME}|" trunk/versions.inc
           echo "固件版本：${VERSION_STRING}"
-          grep '^FIRMWARE_' trunk/versions.inc
+          echo "保持Padavan原生FIRMWARE_BUILDS_VER/REV，不再使用它们拼接Q7固件版本。"
+
           python3 - <<PY
           from pathlib import Path
 
@@ -113,20 +110,23 @@ jobs:
           p.write_text(s)
           print('已写入Q7固件版本初始化：${VERSION_STRING}')
           PY
+
           grep -n 'nvram_set("firmver_sub"' trunk/user/rc/rc.c
+          test "$(grep -c 'nvram_set("firmver_sub"' trunk/user/rc/rc.c)" -eq 1
+
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
           fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
           SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
-          cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
+          cp -f "$SRC" "images/ZTE_Q7_${VERSION_STAMP}.trx"
           rm -f images/ZTE_Q7.trx
           ls -lh images/*.trx
 
       - name: Upload Q7 firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ZTE_Q7_${{ env.BUILD_DATE }}
+          name: ZTE_Q7_${{ env.VERSION_STAMP }}
           path: trunk/images/*.trx
           if-no-files-found: error
