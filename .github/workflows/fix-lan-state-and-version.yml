@@ -1,0 +1,177 @@
+name: 修复LAN状态与Q7版本
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出主线
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: 修改Q7版本与LAN监听
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 修正Q7版本写入时机：放到rc初始化最后，确保不再被Padavan后续流程覆盖。
+          p = Path('.github/workflows/q7-build.yml')
+          s = p.read_text()
+          old = '''marker = '\\tklogctl(8, NULL, nvram_get_int("console_loglevel"));'\n          version_line = f'\\tnvram_set("firmver_sub", "${VERSION_STRING}");\\n'\n          if s.count(version_line) != 0:\n              raise SystemExit('Q7固件版本初始化已经存在')\n          if marker not in s:\n              raise SystemExit('没有找到固件版本初始化插入位置')\n          s = s.replace(marker, version_line + marker, 1)'''
+          new = '''marker = '\\tsystem("/etc/storage/started_script.sh &");'\n          version_line = f'\\t/* Q7固件版本最后写入，避免被Padavan后续初始化覆盖。 */\\n\\tnvram_set("firmver_sub", "${VERSION_STRING}");\\n'\n          if s.count(version_line) != 0:\n              raise SystemExit('Q7固件版本初始化已经存在')\n          if marker not in s:\n              raise SystemExit('没有找到系统启动完成位置')\n          s = s.replace(marker, version_line + marker, 1)'''
+          if old not in s:
+              raise SystemExit('未找到旧版Q7版本注入代码')
+          p.write_text(s.replace(old, new, 1))
+
+          # LAN后端：使用文件保存稳定设备快照，NVRAM只作为WebUI传输缓存。
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          s = s.replace('LOCKDIR=/var/run/lan_autodiscover.lock\n', 'LOCKDIR=/var/run/lan_autodiscover.lock\nDEVICE_FILE=/tmp/lan_autodiscover_devices.tsv\nDEVICE_TTL=300\n')
+
+          old_log_start = s.index('log_line() {')
+          old_log_end = s.index('\n# Q7唯一RJ45', old_log_start)
+          new_log = r'''log_line() {
+              line="$(sanitize_text "$(now) $*")"; old="$(nv lan_discovery_log)"
+              if [ -n "$old" ]; then
+                  old="$(printf '%s' "$old" | sed 's/&#13;/ /g; s/&#10;/\n/g; s/&#38;#13;/ /g; s/&#38;#10;/\n/g; s/&amp;#13;/ /g; s/&amp;#10;/\n/g')"
+                  nvram set lan_discovery_log="$(printf '%s\n%s\n' "$old" "$line" | tail -n 100)"
+              else
+                  nvram set lan_discovery_log="$line"
+              fi
+              nvram set lan_discovery_status_last="$(now)"
+              logger -t lan-autodiscover "$(sanitize_text "$*")"
+          }
+
+          clear_device_store() {
+              rm -f "$DEVICE_FILE" "$DEVICE_FILE.tmp" "$DEVICE_FILE.sorted"
+              nvram set lan_discovery_devices=""
+              nvram set lan_discovery_status_count="0"
+          }
+
+          sync_device_snapshot() {
+              [ -f "$DEVICE_FILE" ] || { nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"; return; }
+              now_epoch="$(date +%s)"
+              awk -F '\t' -v now="$now_epoch" -v ttl="$DEVICE_TTL" 'NF >= 5 && $5 >= now-ttl {printf "DEVICE type=%s IP=%s MAC=%s TIME=%s INFO=%s\n", $3, $1, $2, $6, $4}' "$DEVICE_FILE" > "$DEVICE_FILE.snapshot"
+              nvram set lan_discovery_devices="$(cat "$DEVICE_FILE.snapshot")"
+              count="$(wc -l < "$DEVICE_FILE.snapshot" 2>/dev/null | tr -d ' ')"
+              nvram set lan_discovery_status_count="${count:-0}"
+              rm -f "$DEVICE_FILE.snapshot"
+          }
+
+          update_device_store() {
+              ip="$1"; mac="$2"; type="$3"; info="$4"; now_epoch="$5"; seen_time="$6"
+              mkdir -p "$(dirname "$DEVICE_FILE")"
+              [ -f "$DEVICE_FILE" ] || : > "$DEVICE_FILE"
+              awk -F '\t' -v OFS='\t' -v ip="$ip" -v mac="$mac" -v type="$type" -v info="$info" -v epoch="$now_epoch" -v seen="$seen_time" '
+                  $1 == ip { if (!done) { print ip, mac, type, info, epoch, seen; done=1 } next }
+                  { print }
+                  END { if (!done) print ip, mac, type, info, epoch, seen }
+              ' "$DEVICE_FILE" > "$DEVICE_FILE.tmp"
+              awk -F '\t' '{split($1,a,"."); n=a[1]*16777216+a[2]*65536+a[3]*256+a[4]; printf "%010u\t%s\n", n, $0}' "$DEVICE_FILE.tmp" | sort -n | cut -f2- > "$DEVICE_FILE.sorted"
+              mv -f "$DEVICE_FILE.sorted" "$DEVICE_FILE"
+              sync_device_snapshot
+          }
+
+          # 用稳定状态文件代替直接保存瞬时探测输出。
+          old_append_start = s.index('append_device() {')
+          old_append_end = s.index('\nrun_discovery() {', old_append_start)
+          new_append = r'''append_device() {
+              line="$(sanitize_text "$1")"; [ -n "$line" ] || return
+              mac="$(printf '%s\n' "$line" | sed -n 's/.* MAC=//p' | awk '{print $1}')"
+              mac="$(sanitize_mac "$mac")"
+              ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+              [ -n "$ip" ] || return
+              case "$ip" in
+                  *.*.*.*) ;;
+                  *) return;;
+              esac
+              type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"; [ -n "$type" ] || type="-"
+              info="$(printf '%s\n' "$line" | sed -n 's/.* INFO=//p')"
+              [ -n "$info" ] || info="-"
+              info="$(printf '%s' "$info" | tr '\t' ' ' | tr -d '\r\n')"
+              seen_time="$(now)"; now_epoch="$(date +%s)"
+              update_device_store "$ip" "$mac" "$type" "$info" "$now_epoch" "$seen_time"
+          }'''
+          s = s[:old_append_start] + new_append + s[old_append_end:]
+
+          # 不在每轮发现开始时清空设备快照；只有物理拔线或更换接口才清理。
+          s = s.replace('nvram set lan_discovery_status_state="DHCP检测"; log_line "LAN口已插入 $iface"; : > /tmp/dhcpdetect_lan.log', 'nvram set lan_discovery_status_state="DHCP检测"; : > /tmp/dhcpdetect_lan.log')
+          s = s.replace('nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"; nvram set lan_discovery_status_state="持续设备发现";', 'sync_device_snapshot; nvram set lan_discovery_status_state="持续设备发现";')
+          s = s.replace('else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN口已拔出 $iface"; fi; fi', 'else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; clear_device_store; log_line "LAN口已拔出 $iface"; fi; fi')
+
+          # 防止同一个发现结果在连续读取tail时重复处理：加入结果去重缓存。
+          s = s.replace(': > /tmp/camdiscover_lan.log; : > /tmp/camdiscover_custom.conf', ': > /tmp/camdiscover_lan.log; : > /tmp/camdiscover_custom.conf; : > /tmp/camdiscover_seen.log')
+          s = s.replace('case "$line" in DEVICE\\ *) append_device "$line"; log_line "$line";;', 'case "$line" in DEVICE\\ *) if ! grep -Fqx "$line" /tmp/camdiscover_seen.log 2>/dev/null; then printf "%s\\n" "$line" >> /tmp/camdiscover_seen.log; append_device "$line"; log_line "$line"; fi;;')
+          p.write_text(s)
+
+          # LAN页面：日志多重HTML实体解码、过滤坏控制字符；设备每页5条并按IP排序。
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text()
+          old_norm = s[s.index('function norm(v)'):s.index('function lines(v)')]
+          new_norm = '''function norm(v){var s=String(v||'').replace(/\\r/g,'');for(var i=0;i<5;i++){s=s.replace(/&amp;#(\\d+);/gi,'&#$1;').replace(/&amp;#x([0-9a-f]+);/gi,'&#x$1;').replace(/&#38;/gi,'&').replace(/&amp;/gi,'&');}s=s.replace(/&#10;|&#x0a;/gi,'\\n').replace(/&#13;|&#x0d;/gi,'').replace(/&#8232;|&#x2028;/gi,'\\u2028').replace(/&#[0-9]{1,3}[A-Za-z]?;?/g,'');return s.replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F\\uFFFD]/g,'');}\n'''
+          s = s.replace(old_norm, new_norm)
+
+          start = s.index('function render_devices(s){')
+          end = s.index('\nfunction render_log(s)', start)
+          new_devices = r'''var device_page=1;
+          var device_rows=[];
+          function ip_num(ip){var a=String(ip||'').split('.');if(a.length!==4)return 4294967295;return ((+a[0]||0)*16777216)+((+a[1]||0)*65536)+((+a[2]||0)*256)+(+a[3]||0);}
+          function render_devices(s){
+           var body=document.getElementById('devices'),pager=document.getElementById('device_pager');if(!body)return;
+           var ls=lines(s),byIp={};
+           for(var i=0;i<ls.length;i++){
+            var z=ls[i];if(z.indexOf('DEVICE ')!==0)continue;
+            var type=(z.match(/type=([^ ]+)/)||[])[1]||'-';
+            var ip=(z.match(/IP=([^ ]+)/)||[])[1]||'-';
+            var mac=mac_norm((z.match(/MAC=([^ ]+)/)||[])[1]||'-');
+            var tm=(z.match(/TIME=([^ ]+)/)||[])[1]||'-';
+            var info=(z.match(/INFO=(.*)$/)||[])[1]||'-';
+            if(!byIp[ip])byIp[ip]={time:tm,type:type,ip:ip,mac:mac,info:info};
+            else {if(type!=='-'&&byIp[ip].type.indexOf(type)<0)byIp[ip].type=byIp[ip].type==='-'?type:byIp[ip].type+'/'+type;if(byIp[ip].mac==='-'&&mac!=='-')byIp[ip].mac=mac;if(byIp[ip].time==='-'&&tm!=='-')byIp[ip].time=tm;if((byIp[ip].info==='-'||!byIp[ip].info)&&info!=='-')byIp[ip].info=info;}
+           }
+           device_rows=[];for(var k in byIp){if(byIp.hasOwnProperty(k))device_rows.push(byIp[k]);}
+           device_rows.sort(function(a,b){return ip_num(a.ip)-ip_num(b.ip);});
+           var maxpage=Math.max(1,Math.ceil(device_rows.length/5));if(device_page>maxpage)device_page=maxpage;if(device_page<1)device_page=1;
+           body.innerHTML='';
+           var begin=(device_page-1)*5,end=Math.min(begin+5,device_rows.length);
+           for(var j=begin;j<end;j++){var r=device_rows[j],tr=document.createElement('tr');[r.time,r.type,r.ip,r.mac,r.info].forEach(function(v){var td=document.createElement('td');td.textContent=v||'-';tr.appendChild(td);});body.appendChild(tr);}
+           if(!body.children.length)body.innerHTML='<tr><td colspan="5" class="muted">暂无设备</td></tr>';
+           if(pager){pager.innerHTML='';if(device_rows.length){var prev=document.createElement('button');prev.type='button';prev.className='btn btn-mini';prev.disabled=device_page<=1;prev.innerHTML='上一页';prev.onclick=function(){device_page--;render_devices(s);};var next=document.createElement('button');next.type='button';next.className='btn btn-mini';next.disabled=device_page>=maxpage;next.innerHTML='下一页';next.onclick=function(){device_page++;render_devices(s);};var span=document.createElement('span');span.style.margin='0 8px';span.innerHTML='第 '+device_page+'/'+maxpage+' 页，共 '+device_rows.length+' 台';pager.appendChild(prev);pager.appendChild(span);pager.appendChild(next);}}
+          }
+'''
+          s = s[:start] + new_devices + s[end:]
+          s = s.replace('<h4>已发现设备</h4><table class="table table-bordered table-condensed"><thead>', '<h4>已发现设备</h4><div id="device_pager" style="margin:6px 0"></div><table class="table table-bordered table-condensed"><thead>')
+          p.write_text(s)
+
+          # 删除本次一次性修补工作流，避免后续重复执行。
+          wf = Path('.github/workflows/fix-lan-state-and-version.yml')
+          if wf.exists(): wf.unlink()
+          PY
+
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'DEVICE_FILE=/tmp/lan_autodiscover_devices.tsv' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'device_page=1' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'Q7固件版本最后写入' .github/workflows/q7-build.yml
+          git diff --check
+
+      - name: 提交修改
+        shell: bash
+        run: |
+          set -e
+          git config user.name "671792320"
+          git config user.email "10532894+671792320@users.noreply.github.com"
+          git add trunk/user/lan_autodiscover/lan_autodiscover.sh trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp .github/workflows/q7-build.yml .github/workflows/fix-lan-state-and-version.yml
+          git commit -m "完善LAN设备状态存储与分页显示"
+          git push origin master
