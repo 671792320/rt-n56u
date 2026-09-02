@@ -1,0 +1,54 @@
+name: 临时修复LAN WebUI状态同步
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: 修复NVRAM写入并清理临时工作流
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          marker = 'trap \'rmdir "$LOCKDIR" 2>/dev/null\' EXIT INT TERM HUP\n'
+          insert = '''trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
+
+# Q7固件中的nvram set统一通过键值形式写入，避免动态状态无法被WebUI读取。
+_nvram_bin="$(command -v nvram)"
+nvram() {
+    if [ "$1" = "set" ] && [ "$#" -ge 3 ]; then
+        "$_nvram_bin" set "$2=$3"
+    else
+        "$_nvram_bin" "$@"
+    fi
+}
+'''
+          if '# Q7固件中的nvram set统一通过键值形式写入' not in s:
+              if marker not in s:
+                  raise SystemExit('未找到插入位置')
+              s = s.replace(marker, insert, 1)
+              p.write_text(s)
+          PY
+          rm -f .github/workflows/_fix_lan_webui.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add trunk/user/lan_autodiscover/lan_autodiscover.sh .github/workflows/_fix_lan_webui.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "修复LAN监听WebUI状态同步"
+          git push origin master
