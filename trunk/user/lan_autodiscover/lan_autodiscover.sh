@@ -68,6 +68,24 @@ log_line() {
     nvram set lan_discovery_status_last="$(now)"
     logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
+# Q7唯一RJ45对应MTK交换机LAN4，使用mtk-esw原生PHY状态检测物理插拔。
+mtk_esw_lan4_state() {
+    [ -x /sbin/mtk_esw ] || return 2
+    state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
+    case "$state" in
+        1) printf '%s' "1"; return 0;;
+        0) printf '%s' "0"; return 0;;
+    esac
+    return 2
+}
+lan_phy_link_state() {
+    state="$(mtk_esw_lan4_state 2>/dev/null)"
+    case "$state" in
+        1) printf '%s' "UP"; return 0;;
+        0) printf '%s' "DOWN"; return 0;;
+    esac
+    return 1
+}
 refresh_interfaces() {
     out=""
     for p in /sys/class/net/*; do
@@ -76,7 +94,14 @@ refresh_interfaces() {
         if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
         case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*|eth*.1) role="LAN";; esac
         ip4="$(iface_ipv4 "$iface")"; mac="$(iface_mac "$iface")"
-        if [ -r "$p/carrier" ]; then link="$(cat "$p/carrier" 2>/dev/null)"; [ "$link" = "1" ] && link="UP" || link="DOWN"; else link="$(cat "$p/operstate" 2>/dev/null)"; [ "$link" = "up" ] && link="UP"; [ "$link" = "down" ] && link="DOWN"; fi
+        if [ "$iface" = "eth2.1" ]; then
+            link="$(lan_phy_link_state 2>/dev/null)"
+            [ -n "$link" ] || link="-"
+        elif [ -r "$p/carrier" ]; then
+            link="$(cat "$p/carrier" 2>/dev/null)"; [ "$link" = "1" ] && link="UP" || link="DOWN"
+        else
+            link="$(cat "$p/operstate" 2>/dev/null)"; [ "$link" = "up" ] && link="UP"; [ "$link" = "down" ] && link="DOWN"
+        fi
         line="${iface}|${role}|${ip4}|${mac}|${link:--}"
         if [ -n "$out" ]; then out="$(printf '%s\n%s' "$out" "$line")"; else out="$line"; fi
     done
@@ -88,7 +113,24 @@ set_link_status() {
     case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*) role="LAN";; eth*.1) role="LAN";; esac
     nvram set lan_discovery_status_if="$iface"; nvram set lan_discovery_status_role="$role"; nvram set lan_discovery_status_ip="$ip4"; nvram set lan_discovery_status_mac="$mac"; nvram set lan_discovery_status_link="$link"
 }
-is_link_up() { iface="$1"; [ -e "/sys/class/net/$iface" ] || return 1; if [ -r "/sys/class/net/$iface/carrier" ]; then [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0; else [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0; fi; return 1; }
+is_link_up() {
+    iface="$1"
+    # Q7 LAN使用mtk-esw检测LAN4物理PHY，避免eth2.1的carrier始终为1导致插拔检测失效。
+    if [ "$iface" = "eth2.1" ]; then
+        state="$(mtk_esw_lan4_state 2>/dev/null)"
+        case "$state" in
+            1) return 0;;
+            0) return 1;;
+        esac
+    fi
+    [ -e "/sys/class/net/$iface" ] || return 1
+    if [ -r "/sys/class/net/$iface/carrier" ]; then
+        [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
+    else
+        [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0
+    fi
+    return 1
+}
 append_device() {
     line="$(sanitize_text "$1")"; [ -n "$line" ] || return
     mac="$(printf '%s\n' "$line" | sed -n 's/.* MAC=//p' | awk '{print $1}')"
@@ -99,8 +141,7 @@ append_device() {
     ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
     [ -n "$ip" ] || return
     old="$(nv lan_discovery_devices)"
-    # One row per IP. If a new protocol reports the same IP, replace the old
-    # row instead of keeping IP/ARP/ONVIF duplicates.
+    # One row per IP. If a new protocol reports the same IP, replace the old row instead of keeping duplicates.
     old="$(printf '%s\n' "$old" | awk -v ip="$ip" 'index($0," IP=" ip " ")==0 && index($0," IP=" ip)==0 {print}')"
     if [ -n "$old" ]; then nvram set lan_discovery_devices="$(printf '%s\n%s\n' "$old" "$line" | tail -n 80)"; else nvram set lan_discovery_devices="$line"; fi
     count="$(printf '%s\n' "$(nv lan_discovery_devices)" | grep -c '^DEVICE ' 2>/dev/null)"; nvram set lan_discovery_status_count="${count:-0}"
