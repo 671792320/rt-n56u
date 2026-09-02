@@ -88,11 +88,32 @@ jobs:
         run: |
           set -e
           BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
+          VERSION_DATE=${VERSION_STAMP%_*}
+          VERSION_TIME=${VERSION_STAMP#*_}
+          VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
-          sed -i "s/^FIRMWARE_BUILDS_VER=.*/FIRMWARE_BUILDS_VER=${BUILD_DATE}/" trunk/versions.inc
-          sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${BUILD_DATE}|" trunk/versions.inc
-          echo "Firmware build version: ${BUILD_DATE}"
+          echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
+          sed -i "s/^FIRMWARE_BUILDS_VER=.*/FIRMWARE_BUILDS_VER=${VERSION_DATE}/" trunk/versions.inc
+          sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${VERSION_TIME}|" trunk/versions.inc
+          echo "固件版本：${VERSION_STRING}"
           grep '^FIRMWARE_' trunk/versions.inc
+          python3 - <<PY
+          from pathlib import Path
+
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text()
+          marker = '\tklogctl(8, NULL, nvram_get_int("console_loglevel"));'
+          version_line = f'\tnvram_set("firmver_sub", "${VERSION_STRING}");\n'
+          if s.count(version_line) != 0:
+              raise SystemExit('Q7固件版本初始化已经存在')
+          if marker not in s:
+              raise SystemExit('没有找到固件版本初始化插入位置')
+          s = s.replace(marker, version_line + marker, 1)
+          p.write_text(s)
+          print('已写入Q7固件版本初始化：${VERSION_STRING}')
+          PY
+          grep -n 'nvram_set("firmver_sub"' trunk/user/rc/rc.c
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
