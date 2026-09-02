@@ -41,6 +41,36 @@ jobs:
           sudo apt update
           sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
 
+      - name: 修复LAN监听NVRAM状态写入
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          marker = "trap 'rmdir \"$LOCKDIR\" 2>/dev/null' EXIT INT TERM HUP\n"
+          insert = '''trap 'rmdir \"$LOCKDIR\" 2>/dev/null' EXIT INT TERM HUP
+
+# Q7固件中的NVRAM写入统一使用键值形式，保证WebUI可以读取实时状态。
+_nvram_bin=\"$(command -v nvram)\"
+nvram() {
+    if [ \"$1\" = \"set\" ] && [ \"$#\" -ge 3 ]; then
+        \"$_nvram_bin\" set \"$2=$3\"
+    else
+        \"$_nvram_bin\" \"$@\"
+    fi
+}
+'''
+          if '# Q7固件中的NVRAM写入统一使用键值形式' not in s:
+              if marker not in s:
+                  raise SystemExit('未找到LAN监听脚本插入位置')
+              s = s.replace(marker, insert, 1)
+              p.write_text(s)
+          PY
+          grep -n 'Q7固件中的NVRAM写入统一使用键值形式' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -n '^nvram()' trunk/user/lan_autodiscover/lan_autodiscover.sh
+
       - name: Shellcheck
         run: sh ./trunk/tools/shellcheck.sh
 
@@ -67,6 +97,7 @@ jobs:
           test -f trunk/user/netmgr/Makefile
           grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'Q7固件中的NVRAM写入统一使用键值形式' trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
@@ -75,8 +106,8 @@ jobs:
           from pathlib import Path
           p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
           s = p.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool \"Register multiple callbacks to ct events\"\n\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool \"Register multiple callbacks to ct events\"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
           if old not in s:
               raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
           p.write_text(s.replace(old, new, 1))
