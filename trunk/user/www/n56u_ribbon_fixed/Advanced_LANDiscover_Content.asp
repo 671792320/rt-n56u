@@ -21,6 +21,7 @@
 <script>
 var $j=jQuery.noConflict();
 var refresh_timer=null;
+var device_page=1;
 var initial_status={
  iface:'<% nvram_get_x("", "lan_discovery_status_if"); %>',
  role:'<% nvram_get_x("", "lan_discovery_status_role"); %>',
@@ -35,7 +36,7 @@ var initial_status={
 <% login_state_hook(); %>
 function value_or(v,d){return(v!==undefined&&v!==null&&String(v)!==''&&String(v)!=='-')?String(v):d;}
 function link_text(v){v=String(v||'');return v==='UP'?'已插入':(v==='DOWN'?'未插入':v||'-');}
-function norm(v){var s=String(v||'').replace(/\r/g,'');for(var i=0;i<3;i++){s=s.replace(/&amp;#38;/gi,'&#38;').replace(/&amp;#10;/gi,'&#10;').replace(/&amp;#13;/gi,'&#13;').replace(/&amp;#8232;/gi,'&#8232;').replace(/&amp;#x2028;/gi,'&#x2028;');}return s.replace(/(?:&amp;|&#38;)#13;/gi,'').replace(/(?:&amp;|&#38;)#10;/gi,'\n').replace(/(?:&amp;|&#38;)#8232;/gi,'\u2028').replace(/(?:&amp;|&#38;)#x2028;/gi,'\u2028').replace(/&#13;/g,'').replace(/&#10;/g,'\n').replace(/&#8232;/g,'\u2028').replace(/&#x2028;/gi,'\u2028');}
+function norm(v){var s=String(v||'').replace(/\r/g,'');for(var i=0;i<4;i++){s=s.replace(/&amp;#38;/gi,'&#38;').replace(/&amp;#10;/gi,'&#10;').replace(/&amp;#13;/gi,'&#13;').replace(/&amp;#8232;/gi,'&#8232;').replace(/&amp;#x2028;/gi,'&#x2028;').replace(/&amp;amp;/gi,'&amp;');}return s.replace(/(?:&amp;|&#38;)#13;/gi,'').replace(/(?:&amp;|&#38;)#10;/gi,'\n').replace(/(?:&amp;|&#38;)#8232;/gi,'\u2028').replace(/(?:&amp;|&#38;)#x2028;/gi,'\u2028').replace(/&#13;/g,'').replace(/&#10;/g,'\n').replace(/&#8232;/g,'\u2028').replace(/&#x2028;/gi,'\u2028');}
 function lines(v){return norm(v).split(/\n|\u2028/).map(function(x){return String(x).replace(/^\s+|\s+$/g,'');}).filter(function(x){return x!=='';});}
 function esc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}
 function mac_norm(v){var m=String(v==null?'':v).replace(/&(?:#10|#13|#8232);/gi,'').replace(/\\/g,'').replace(/\s+/g,'').toUpperCase();return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(m)?m:'-';}
@@ -51,33 +52,47 @@ function render_interfaces(s){
  for(var i=0;i<ls.length;i++){var f=ls[i].split('|');if(f.length<5||!f[0]||f[1]!=='LAN'||/^(lo|br|ra|wds|apcli)/.test(f[0]))continue;var opt=document.createElement('option');opt.value=f[0];opt.text=f[0]+' | '+f[1]+' | '+(f[2]||'-')+' | '+link_text(f[4]);if(f[0]===wanted){opt.selected=true;found=true;}sel.appendChild(opt);}
  if(!sel.options.length){var o=document.createElement('option');o.value=wanted||'eth2.1';o.text=(wanted||'eth2.1')+' | LAN';o.selected=true;sel.appendChild(o);}else if(!found)sel.selectedIndex=0;
 }
+function ip_key(ip){var p=String(ip||'').split('.');if(p.length!==4)return 4294967295;for(var i=0;i<4;i++){if(!/^\d+$/.test(p[i]))return 4294967295;}return (((+p[0])*256+(+p[1]))*256+(+p[2]))*256+(+p[3]);}
 function render_devices(s){
- var body=document.getElementById('devices');if(!body)return;body.innerHTML='';var ls=lines(s),byIp={};
+ var body=document.getElementById('devices');if(!body)return;
+ var ls=lines(s),byIp={},rows=[];
  for(var i=0;i<ls.length;i++){
   var z=ls[i];if(z.indexOf('DEVICE ')!==0)continue;
   var type=(z.match(/type=([^ ]+)/)||[])[1]||'-';
   var ip=(z.match(/IP=([^ ]+)/)||[])[1]||'-';
   var mac=mac_norm((z.match(/MAC=([^ ]+)/)||[])[1]||'-');
   var info=(z.match(/INFO=(.*)$/)||[])[1]||'-';
-  var key=ip;
-  if(byIp[key]){
-   var row=byIp[key];
-   if(type!=='-' && row.type.indexOf(type)<0)row.type=row.type==='-'?type:row.type+'/'+type;
-   if(row.mac==='-' && mac!=='-')row.mac=mac;
-   if((row.info==='-'||!row.info) && info!=='-')row.info=info;
-   row.cells[1].textContent=row.type;row.cells[3].textContent=row.mac;row.cells[4].textContent=row.info;
-   continue;
+  if(byIp[ip]){
+   var row=byIp[ip];
+   if(type!=='-'&&row.type.indexOf(type)<0)row.type=row.type==='-'?type:row.type+'/'+type;
+   if(row.mac==='-'&&mac!=='-')row.mac=mac;
+   if((row.info==='-'||!row.info)&&info!=='-')row.info=info;
+  }else{
+   var item={type:type,ip:ip,mac:mac,info:info};byIp[ip]=item;rows.push(item);
   }
-  var tr=document.createElement('tr');
-  var cells=[];for(var c=0;c<5;c++){cells[c]=document.createElement('td');tr.appendChild(cells[c]);}
-  cells[0].textContent='-';cells[1].textContent=type;cells[2].textContent=ip;cells[3].textContent=mac;cells[4].textContent=info;
-  body.appendChild(tr);byIp[key]={type:type,mac:mac,info:info,cells:cells};
+ }
+ rows.sort(function(a,b){var d=ip_key(a.ip)-ip_key(b.ip);return d!==0?d:String(a.ip).localeCompare(String(b.ip));});
+ var pages=Math.max(1,Math.ceil(rows.length/5));
+ if(device_page>pages)device_page=pages;
+ body.innerHTML='';
+ var start=(device_page-1)*5,end=Math.min(start+5,rows.length);
+ for(var j=start;j<end;j++){
+  var r=rows[j],tr=document.createElement('tr'),cells=[];
+  for(var c=0;c<5;c++){cells[c]=document.createElement('td');tr.appendChild(cells[c]);}
+  cells[0].textContent=r.ip==='-'?'-':String(j+1);cells[1].textContent=r.type;cells[2].textContent=r.ip;cells[3].textContent=r.mac;cells[4].textContent=r.info;body.appendChild(tr);
  }
  if(!body.children.length)body.innerHTML='<tr><td colspan="5" class="muted">暂无设备</td></tr>';
+ var pager=document.getElementById('device_pager');
+ if(!pager)return;
+ pager.innerHTML='';
+ if(!rows.length)return;
+ var tip=document.createElement('span');tip.className='muted';tip.textContent='第 '+device_page+' / '+pages+' 页，共 '+rows.length+' 台';pager.appendChild(tip);
+ var prev=document.createElement('button');prev.type='button';prev.className='btn btn-small';prev.style.marginLeft='8px';prev.disabled=device_page<=1;prev.textContent='上一页';prev.onclick=function(){if(device_page>1){device_page--;refresh_data();}};pager.appendChild(prev);
+ var next=document.createElement('button');next.type='button';next.className='btn btn-small';next.style.marginLeft='4px';next.disabled=device_page>=pages;next.textContent='下一页';next.onclick=function(){if(device_page<pages){device_page++;refresh_data();}};pager.appendChild(next);
 }
 function render_log(s){
  var lg=document.getElementById('live_log');if(!lg)return;var ls=lines(s),out=[];
- for(var i=0;i<ls.length;i++){var t=String(ls[i]).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'');if(/^\d{2}:\d{2}:\d{2} /.test(t))out.push(t);}
+ for(var i=0;i<ls.length;i++){var t=String(ls[i]).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'').replace(/\\/g,'');if(/^\d{2}:\d{2}:\d{2} /.test(t))out.push(t);}
  lg.textContent=out.join('\n')||'暂无日志';lg.scrollTop=lg.scrollHeight;
 }
 function refresh_data(){
@@ -104,7 +119,7 @@ $j(document).ready(function(){
 });
 </script>
 <style>
-.status-table td{white-space:nowrap}.mini{width:48px;margin:0 4px}.live-box{height:170px;overflow-y:auto;overflow-x:hidden;background:#111;color:#ddd;padding:8px;font:12px monospace;white-space:pre-wrap;word-break:break-all}.table th,.table td{vertical-align:middle}
+.status-table td{white-space:nowrap}.mini{width:48px;margin:0 4px}.live-box{height:220px;overflow-y:auto;overflow-x:hidden;background:#111;color:#ddd;padding:8px;font:12px monospace;white-space:pre-wrap;word-break:break-all}.table th,.table td{vertical-align:middle}
 </style>
 </head>
 <body onLoad="initial();" onunload="return unload_body();">
@@ -137,7 +152,7 @@ $j(document).ready(function(){
 <tr><th>HIK-SADP</th><td><div class="main_itoggle"><div id="lan_discovery_hik_on_of"><input type="checkbox" id="lan_discovery_hik_fake" <% nvram_match_x("", "lan_discovery_hik", "1", "value=1 checked"); %>></div></div><div style="position:absolute;margin-left:-10000px"><input type="radio" value="1" name="lan_discovery_hik" id="lan_discovery_hik_1" <% nvram_match_x("", "lan_discovery_hik", "1", "checked"); %>><input type="radio" value="0" name="lan_discovery_hik" id="lan_discovery_hik_0" <% nvram_match_x("", "lan_discovery_hik", "0", "checked"); %>></div> 端口 <input class="mini" name="lan_discovery_hik_port" value="<% nvram_get_x("", "lan_discovery_hik_port"); %>"></td></tr>
 <tr><th>DAHUA-DHIP</th><td><div class="main_itoggle"><div id="lan_discovery_dahua_on_of"><input type="checkbox" id="lan_discovery_dahua_fake" <% nvram_match_x("", "lan_discovery_dahua", "1", "value=1 checked"); %>></div></div><div style="position:absolute;margin-left:-10000px"><input type="radio" value="1" name="lan_discovery_dahua" id="lan_discovery_dahua_1" <% nvram_match_x("", "lan_discovery_dahua", "1", "checked"); %>><input type="radio" value="0" name="lan_discovery_dahua" id="lan_discovery_dahua_0" <% nvram_match_x("", "lan_discovery_dahua", "0", "checked"); %>></div> 端口 <input class="mini" name="lan_discovery_dahua_port" value="<% nvram_get_x("", "lan_discovery_dahua_port"); %>"></td></tr>
 </table>
-<h4>已发现设备</h4><table class="table table-bordered table-condensed"><thead><tr><th>时间</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th></tr></thead><tbody id="devices"><tr><td colspan="5" class="muted">暂无设备</td></tr></tbody></table>
+<h4>已发现设备</h4><table class="table table-bordered table-condensed"><thead><tr><th>序号</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th></tr></thead><tbody id="devices"><tr><td colspan="5" class="muted">暂无设备</td></tr></tbody></table><div id="device_pager" style="padding:6px 0;text-align:right"></div>
 <h4>实时监听日志 <button type="button" class="btn btn-mini pull-right" onclick="clearLog();return false;">清空日志</button></h4><pre id="live_log" class="live-box">暂无日志</pre>
 <table class="table"><tr><td style="border:0"><center><input class="btn btn-primary" style="width:219px" type="button" value="保存" onclick="applyRule();return false;"></center></td></tr></table>
 </div></div></div></div></div></div>
