@@ -150,7 +150,7 @@ run_discovery() {
     iface="$1"; dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"; dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"; discover_enable="$(cfg lan_discovery_discover_enable 1)"; discover_cycle="$(cfg lan_discovery_cycle 10)"
     onvif="$(cfg lan_discovery_onvif 1)"; ssdp="$(cfg lan_discovery_ssdp 1)"; hik="$(cfg lan_discovery_hik 1)"; dahua="$(cfg lan_discovery_dahua 1)"; raw="$(cfg lan_discovery_raw 1)"
     onvif_port="$(cfg lan_discovery_onvif_port 3702)"; ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"; hik_port="$(cfg lan_discovery_hik_port 37020)"; dahua_port="$(cfg lan_discovery_dahua_port 37810)"; custom="$(nv lan_discovery_custom)"
-    nvram set lan_discovery_status_state="DHCP检测"; log_line "LAN Link UP $iface"; : > /tmp/dhcpdetect_lan.log
+    nvram set lan_discovery_status_state="DHCP检测"; log_line "LAN口已插入 $iface"; : > /tmp/dhcpdetect_lan.log
     if [ "$dhcp_enable" = "1" ] && [ -x /usr/bin/dhcpdetect ]; then
         /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1; rc=$?
         if [ "$rc" = "0" ]; then
@@ -204,6 +204,6 @@ while :; do
     if [ "$enable" != "1" ]; then nvram set lan_discovery_status_state="已禁用"; if [ -e "/sys/class/net/$iface" ]; then if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi; fi; sleep 2; continue; fi
     if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; sleep 2; continue; fi
     if is_link_up "$iface"; then state=1; else state=0; fi
-    if [ "$state" != "$last_state" ]; then last_state="$state"; if [ "$state" = "1" ]; then set_link_status "$iface" "UP"; run_discovery "$iface"; else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface"; fi; fi
+    if [ "$state" != "$last_state" ]; then last_state="$state"; if [ "$state" = "1" ]; then set_link_status "$iface" "UP"; run_discovery "$iface"; else set_link_status "$iface" "DOWN"; nvram set lan_discovery_status_state="等待接口"; log_line "LAN口已拔出 $iface"; fi; fi
     sleep 1
 done
