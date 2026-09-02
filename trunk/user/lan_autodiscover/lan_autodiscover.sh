@@ -124,17 +124,36 @@ run_discovery() {
     if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then nvram set lan_discovery_status_state="设备发现未启用"; return; fi
     nvram set lan_discovery_devices=""; nvram set lan_discovery_status_count="0"; nvram set lan_discovery_status_state="持续设备发现"; log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
     while is_link_up "$iface"; do
+        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+            nvram set lan_discovery_status_state="设备发现未启用"; log_line "设备发现已关闭，停止设备发现进程"; break
+        fi
         : > /tmp/camdiscover_lan.log; : > /tmp/camdiscover_custom.conf
         printf '%s\n' "$custom" | while IFS= read -r row; do [ -n "$row" ] || continue; printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf; done
         args="-i $iface -t $discover_cycle -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"; [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
-        /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 & pid=$!; last_tail=""
+        /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 & pid=$!; last_tail=""; stop_discovery=0
         while kill -0 "$pid" 2>/dev/null; do
+            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+                stop_discovery=1
+                kill "$pid" 2>/dev/null
+                log_line "设备发现开关已关闭，终止当前探测进程"
+                break
+            fi
             if [ -f /tmp/camdiscover_lan.log ]; then current="$(tail -n 25 /tmp/camdiscover_lan.log 2>/dev/null)"; if [ "$current" != "$last_tail" ]; then printf '%s\n' "$current" | while IFS= read -r line; do [ -n "$line" ] || continue; case "$line" in DEVICE\ *) append_device "$line"; log_line "$line";; *probe\ sent*|*probe\ FAILED*) log_line "$line";; *listen\ *FAILED*) log_line "$line";; esac; done; last_tail="$current"; fi; fi
             sleep 1
         done
-        wait "$pid"; if ! is_link_up "$iface"; then break; fi; log_line "本轮主动探测完成，继续监听，下一轮 ${discover_cycle}s"; sleep 1
+        wait "$pid" 2>/dev/null
+        if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+            nvram set lan_discovery_status_state="设备发现未启用"
+            break
+        fi
+        if ! is_link_up "$iface"; then break; fi
+        log_line "本轮主动探测完成，继续监听，下一轮 ${discover_cycle}s"; sleep 1
     done
-    nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface，停止发现"
+    if [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
+        nvram set lan_discovery_status_state="等待接口"; log_line "LAN Link DOWN $iface，停止发现"
+    else
+        nvram set lan_discovery_status_state="设备发现未启用"
+    fi
 }
 ensure_defaults; refresh_interfaces; last_iface=""; last_state="-9"; iface_refresh=0
 while :; do
