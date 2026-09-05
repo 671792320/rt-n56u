@@ -1,0 +1,72 @@
+name: 临时修复LAN监听WebUI同步
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: 修复后台NVRAM状态写入
+        shell: bash
+        run: |
+          set -e
+          FILE=trunk/user/lan_autodiscover/lan_autodiscover.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text(encoding='utf-8')
+          marker = 'trap \'rmdir "$LOCKDIR" 2>/dev/null\' EXIT INT TERM HUP\n'
+          insert = marker + '''\n# Q7统一通过nv_set写入NVRAM，确保实时状态能够被WebUI正确读取。\nNVRAM_BIN="$(command -v nvram)"\nnv_set() {\n    "$NVRAM_BIN" set "$1=$2"\n}\n'''
+          if 'nv_set() {' not in s:
+              if marker not in s:
+                  raise SystemExit('未找到初始化位置')
+              s = s.replace(marker, insert, 1)
+          lines = []
+          changed = 0
+          for line in s.splitlines(True):
+              m = re.match(r'^(\s*)nvram set ([A-Za-z0-9_]+) (.+?)(\r?\n)?$', line)
+              if m:
+                  line = f'{m.group(1)}nv_set {m.group(2)} {m.group(3)}{m.group(4) or ""}'
+                  changed += 1
+              lines.append(line)
+          s2 = ''.join(lines)
+          if changed == 0:
+              raise SystemExit('没有发现需要修复的NVRAM写入语句')
+          bad = []
+          for i, line in enumerate(s2.splitlines(), 1):
+              if re.match(r'^\s*nvram set [A-Za-z0-9_]+\s+', line):
+                  bad.append(f'{i}: {line}')
+          if bad:
+              raise SystemExit('仍存在错误的NVRAM写入语句：' + '\n'.join(bad))
+          p.write_text(s2, encoding='utf-8')
+          print(f'已修复 {changed} 处NVRAM状态写入')
+          PY
+          sh -n "$FILE"
+          grep -n 'nv_set' "$FILE" | head -20
+          git diff --check
+          git status --short
+
+      - name: 提交永久源码修复并清理临时工作流
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/_apply_lan_sync_fix.yml
+          git add trunk/user/lan_autodiscover/lan_autodiscover.sh .github/workflows/_apply_lan_sync_fix.yml
+          git diff --cached --check
+          git commit -m "修复LAN监听WebUI状态同步"
+          git push origin master
