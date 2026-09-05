@@ -7,6 +7,12 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
+# Q7统一通过nv_set写入NVRAM，确保实时状态能够被WebUI正确读取。
+NVRAM_BIN="$(command -v nvram)"
+nv_set() {
+    "$NVRAM_BIN" set "$1=$2"
+}
+
 # LAN设备结果和完整日志保存到持久化存储，供页面及后续转发功能使用。
 DEVICE_DB=/etc/storage/lan_discovery_devices.db
 LOG_FILE=/etc/storage/lan_discovery.log
@@ -79,15 +85,15 @@ log_line() {
     line="$(sanitize_text "$(now) $*" | sed 's/\\//g')"
     last="$(tail -n 1 "$LOG_FILE" 2>/dev/null)"
     if [ "$last" = "$line" ]; then
-        nvram set lan_discovery_status_last "$(now)"
+        nv_set lan_discovery_status_last "$(now)"
         return
     fi
     printf '%s\n' "$line" >> "$LOG_FILE"
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
     # NVRAM只保留最近30行，避免长时间运行导致状态字段过大。
     recent="$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
-    nvram set lan_discovery_log "$recent"
-    nvram set lan_discovery_status_last "$(now)"
+    nv_set lan_discovery_log "$recent"
+    nv_set lan_discovery_status_last "$(now)"
     logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
 # Q7唯一RJ45对应MTK交换机LAN4，使用mtk-esw原生PHY状态检测物理插拔。
@@ -134,7 +140,7 @@ refresh_interfaces() {
         line="${iface}|${role}|${ip4}|${mac}|${link:--}"
         if [ -n "$out" ]; then out="$(printf '%s\n%s' "$out" "$line")"; else out="$line"; fi
     done
-    nvram set lan_discovery_interfaces "$out"
+    nv_set lan_discovery_interfaces "$out"
 }
 set_link_status() {
     iface="$1"; link="$2"; ip4="$(iface_ipv4 "$iface")"; mac="$(iface_mac "$iface")"; role="LAN"
@@ -179,14 +185,14 @@ sort_device_db() {
 sync_device_cache() {
     sort_device_db
     # 页面缓存只取前100条；完整数据库仍保存在持久化文件中。
-    nvram set lan_discovery_devices "$(head -n 100 "$DEVICE_DB" 2>/dev/null)"
+    nv_set lan_discovery_devices "$(head -n 100 "$DEVICE_DB" 2>/dev/null)"
     count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
-    nvram set lan_discovery_status_count "${count:-0}"
+    nv_set lan_discovery_status_count "${count:-0}"
 }
 reset_device_db() {
     : > "$DEVICE_DB"
-    nvram set lan_discovery_devices ""
-    nvram set lan_discovery_status_count "0"
+    nv_set lan_discovery_devices ""
+    nv_set lan_discovery_status_count "0"
 }
 append_device() {
     clean="$(clean_device_line "$1")" || return
