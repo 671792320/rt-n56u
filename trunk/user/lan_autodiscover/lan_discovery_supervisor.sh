@@ -15,8 +15,24 @@ set_supervisor_status() {
     nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
+mtk_esw_lan4_state() {
+    [ -x /sbin/mtk_esw ] || return 2
+    state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
+    case "$state" in
+        1) return 0;;
+        0) return 1;;
+    esac
+    return 2
+}
+
 is_link_up() {
     iface="$1"
+    if [ "$iface" = "eth2.1" ]; then
+        mtk_esw_lan4_state
+        rc=$?
+        [ "$rc" = "0" ] && return 0
+        [ "$rc" = "1" ] && return 1
+    fi
     [ -e "/sys/class/net/$iface" ] || return 1
     if [ -r "/sys/class/net/$iface/carrier" ]; then
         [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
@@ -120,7 +136,7 @@ while :; do
     if [ "$enable" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
-            nvram set lan_discovery_status_state="等待接口"
+            nvram set lan_discovery_status_state="准备启动发现"
             echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
             start_worker "$iface"
         else

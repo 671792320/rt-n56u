@@ -168,6 +168,14 @@ sys_script(char *name)
 			system("echo -n > /tmp/syscmd.log\n");
 		}
 	}
+	else if (strcmp(name, "lan_discovery_clear_log")==0)
+	{
+		FILE *fp;
+		fp = fopen("/etc/storage/lan_discovery.log", "w");
+		if (fp) fclose(fp);
+		nvram_set("lan_discovery_log", "");
+		nvram_set("lan_discovery_status_last", "-");
+	}
 	else if (strcmp(name, "syslog.sh")==0)
 	{
 		;   // to nothing

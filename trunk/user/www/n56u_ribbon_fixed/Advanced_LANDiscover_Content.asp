@@ -108,7 +108,16 @@ function applyRule(){
  document.form.submit();
  return false;
 }
-function clearLog(){if(!login_safe())return false;document.form.lan_discovery_log.value='';applyRule();}
+function clearLog(){
+ if(!login_safe())return false;
+ showLoading();
+ document.form.action_mode.value='Update';
+ document.form.action_script.value='lan_discovery_clear_log';
+ document.form.current_page.value='Advanced_LANDiscover_Content.asp';
+ document.form.next_page.value='';
+ document.form.submit();
+ return false;
+}
 function initial(){
  show_banner(1);show_menu(5,3,1);show_footer();
  render_status({iface:value_or(initial_status.iface,'eth2.1'),role:value_or(initial_status.role,'LAN'),ip:value_or(initial_status.ip,'-'),mac:mac_norm(value_or(initial_status.mac,'-')),link:value_or(initial_status.link,'-'),dhcp:value_or(initial_status.dhcp,'未检测'),state:value_or(initial_status.state,'空闲'),count:value_or(initial_status.count,'0'),last:value_or(initial_status.last,'-')});
