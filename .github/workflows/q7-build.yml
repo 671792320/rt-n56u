@@ -52,6 +52,59 @@ jobs:
           grep -q 'Q7固件中的NVRAM写入统一使用键值形式' "$FILE"
           grep -q '^nvram() {' "$FILE"
 
+      - name: 修复设备发现开关、协议开关和周期
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+
+          sh = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = sh.read_text()
+
+          old = '''    if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then\n        runtime_set lan_discovery_status_state="设备发现未启用"\n        return\n    fi\n'''
+          new = '''    if [ ! -x /usr/bin/camdiscover ]; then\n        runtime_set lan_discovery_status_state="设备发现程序不存在"\n        return\n    fi\n\n    # 设备发现关闭时保持LAN工作进程和DHCP流程，不退出工作进程；等待开关重新打开。\n    if [ "$discover_enable" != "1" ]; then\n        runtime_set lan_discovery_status_state="设备发现未启用"\n        log_line "设备发现已关闭，等待重新启用"\n        while is_link_up "$iface"; do\n            [ "$(cfg lan_discovery_discover_enable 1)" = "1" ] && break\n            sleep 1\n        done\n        discover_enable="$(cfg lan_discovery_discover_enable 1)"\n        [ "$discover_enable" = "1" ] || return\n        runtime_set lan_discovery_status_state="启动设备发现"\n        log_line "设备发现已重新启用"\n    fi\n'''
+          if old not in s:
+              raise SystemExit('设备发现开关状态块未找到')
+          s = s.replace(old, new, 1)
+
+          old = '''        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"\n'''
+          new = '''        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"\n        [ "$onvif" = "1" ] && args="$args -O"\n        [ "$ssdp" = "1" ] && args="$args -S"\n        [ "$hik" = "1" ] && args="$args -H"\n        [ "$dahua" = "1" ] && args="$args -D"\n        [ "$raw" = "1" ] && args="$args -A"\n'''
+          if old not in s:
+              raise SystemExit('协议参数组装未找到')
+          s = s.replace(old, new, 1)
+
+          sh.write_text(s)
+
+          c = Path('trunk/user/camdiscover/camdiscover.c')
+          cs = c.read_text()
+          old = 'int timeout=10,onvif=1,ssdp=1,hik=1,dahua=1,raw=1,'
+          new = 'int timeout=10,onvif=0,ssdp=0,hik=0,dahua=0,raw=0,'
+          if old not in cs:
+              raise SystemExit('camdiscover协议默认值未找到')
+          c.write_text(cs.replace(old, new, 1))
+
+          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          p = page.read_text()
+          p = p.replace('''<tr><th>DHCP检测</th><td>''', '''<tr><th>DHCP检测</th><td>''', 1)
+          marker = '''</td></tr>\n<tr><th>设备发现</th>'''
+          if marker not in p:
+              raise SystemExit('DHCP检测页面行未找到')
+          p = p.replace(marker, '''</td></tr>\n<tr><th>DHCP等待时间</th><td><input class="mini" name="lan_discovery_dhcp_timeout" onkeypress="return is_number(this,event);" value="<% nvram_get_x(\"\", \"lan_discovery_dhcp_timeout\"); %>"> 秒</td></tr>\n<tr><th>设备发现</th>''', 1)
+          p = p.replace('''<tr><th>设备发现</th><td>''', '''<tr><th>设备发现</th><td>''', 1)
+          marker = '''</td></tr>\n<tr><th>ARP/IP</th>'''
+          if marker not in p:
+              raise SystemExit('设备发现页面行未找到')
+          p = p.replace(marker, '''</td></tr>\n<tr><th>设备发现周期</th><td><input class="mini" name="lan_discovery_cycle" onkeypress="return is_number(this,event);" value="<% nvram_get_x(\"\", \"lan_discovery_cycle\"); %>"> 秒</td></tr>\n<tr><th>ARP</th>''', 1)
+          page.write_text(p)
+          PY
+
+          # 中文备注：协议开关关闭时不传递对应flag；设备发现开关关闭只暂停发现，不影响LAN与DHCP。
+          grep -q '设备发现已关闭，等待重新启用' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q '\[ "$onvif" = "1" \] && args="$args -O"' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'int timeout=10,onvif=0,ssdp=0,hik=0,dahua=0,raw=0' trunk/user/camdiscover/camdiscover.c
+          grep -q 'name="lan_discovery_cycle"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+
       - name: Shellcheck
         run: sh ./trunk/tools/shellcheck.sh
 
@@ -79,6 +132,10 @@ jobs:
           grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'Q7固件中的NVRAM写入统一使用键值形式' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q '设备发现已关闭，等待重新启用' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'int timeout=10,onvif=0,ssdp=0,hik=0,dahua=0,raw=0' trunk/user/camdiscover/camdiscover.c
+          grep -q 'name="lan_discovery_dhcp_timeout"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'name="lan_discovery_cycle"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
@@ -126,4 +183,4 @@ jobs:
           path: trunk/images/*.trx
           if-no-files-found: error
 
-# 中文备注：本次提交用于触发Q7正式编译，代码内容保持不变。
+# 中文备注：本次提交用于修复设备发现开关、协议开关、周期输入，并触发Q7正式编译。
