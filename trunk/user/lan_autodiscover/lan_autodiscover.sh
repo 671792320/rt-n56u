@@ -7,7 +7,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
-# LAN设备结果和完整日志保存到持久化存储，供页面及后续转发功能使用。
+# LAN设备结果和完整日志保存到临时目录，供页面及后续转发功能使用。
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 mkdir -p /tmp
@@ -67,10 +67,6 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_dahua)" ] || nvram set lan_discovery_dahua=1
     [ -n "$(nv lan_discovery_dahua_port)" ] || nvram set lan_discovery_dahua_port=37810
     [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
-
-
-
-
 }
 clean_device_line() {
     raw="$(sanitize_text "$1" | sed 's/\\//g')"
@@ -94,7 +90,6 @@ log_line() {
     fi
     printf '%s\n' "$line" >> "$LOG_FILE"
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
-    # NVRAM只保留最近30行，避免长时间运行导致状态字段过大。
     recent="$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
     runtime_set lan_discovery_log="$recent"
     runtime_set lan_discovery_status_last="$(now)"
@@ -188,14 +183,11 @@ sort_device_db() {
 }
 sync_device_cache() {
     sort_device_db
-    # 页面缓存只取前100条；完整数据库仍保存在持久化文件中。
-
     count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
     runtime_set lan_discovery_status_count="${count:-0}"
 }
 reset_device_db() {
     : > "$DEVICE_DB"
-
     runtime_set lan_discovery_status_count="0"
 }
 append_device() {
@@ -215,17 +207,6 @@ run_discovery() {
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
     discover_enable="$(cfg lan_discovery_discover_enable 1)"
-    discover_cycle="$(cfg lan_discovery_cycle 10)"
-    onvif="$(cfg lan_discovery_onvif 1)"
-    ssdp="$(cfg lan_discovery_ssdp 1)"
-    hik="$(cfg lan_discovery_hik 1)"
-    dahua="$(cfg lan_discovery_dahua 1)"
-    raw="$(cfg lan_discovery_raw 1)"
-    onvif_port="$(cfg lan_discovery_onvif_port 3702)"
-    ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
-    hik_port="$(cfg lan_discovery_hik_port 37020)"
-    dahua_port="$(cfg lan_discovery_dahua_port 37810)"
-    custom="$(nv lan_discovery_custom)"
 
     runtime_set lan_discovery_status_state="DHCP检测"
     log_line "LAN口已插入 $iface"
@@ -260,35 +241,45 @@ run_discovery() {
         return
     fi
 
-    # 发现周期不再清空设备数据库，保证页面和后续转发使用稳定结果。
     sync_device_cache
     runtime_set lan_discovery_status_state="持续设备发现"
-    log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
     while is_link_up "$iface"; do
         if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
             runtime_set lan_discovery_status_state="设备发现未启用"
             log_line "设备发现已关闭，停止设备发现进程"
             break
         fi
-        # 每一轮重新读取周期和协议参数，使WebUI修改后的配置立即用于下一轮发现。
+
+        # 每一轮读取最新配置，WebUI修改后下一轮立即生效。
         discover_cycle="$(cfg lan_discovery_cycle 10)"
         case "$discover_cycle" in
             ''|*[!0-9]*) discover_cycle=10;;
         esac
         [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
-        [ "$discover_cycle" -le 60 ] 2>/dev/null || discover_cycle=60
+        [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
+        onvif="$(cfg lan_discovery_onvif 1)"
+        ssdp="$(cfg lan_discovery_ssdp 1)"
+        hik="$(cfg lan_discovery_hik 1)"
+        dahua="$(cfg lan_discovery_dahua 1)"
+        raw="$(cfg lan_discovery_raw 1)"
         onvif_port="$(cfg lan_discovery_onvif_port 3702)"
         ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
         hik_port="$(cfg lan_discovery_hik_port 37020)"
         dahua_port="$(cfg lan_discovery_dahua_port 37810)"
-        log_line "本轮设备发现周期 ${discover_cycle}s"
+        custom="$(nv lan_discovery_custom)"
+        probe_timeout=5
+        [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"
+        [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
+        round_start="$(date +%s)"
+        log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
+
         : > /tmp/camdiscover_lan.log
         : > /tmp/camdiscover_custom.conf
         printf '%s\n' "$custom" | while IFS= read -r row; do
             [ -n "$row" ] || continue
             printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf
         done
-        args="-i $iface -t $discover_cycle -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"
+        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"
         [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
         /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 &
         pid=$!
@@ -313,6 +304,7 @@ run_discovery() {
                                 ;;
                             *probe\ sent*|*probe\ FAILED*) log_line "$line";;
                             *listen\ *FAILED*) log_line "$line";;
+                            *probes\ enabled:*) log_line "$line";;
                         esac
                     done
                     last_tail="$current"
@@ -326,8 +318,21 @@ run_discovery() {
             break
         fi
         if ! is_link_up "$iface"; then break; fi
-        log_line "本轮主动探测完成，继续监听，下一轮 ${discover_cycle}s"
-        sleep 1
+        elapsed=$(( $(date +%s) - round_start ))
+        wait_seconds=$((discover_cycle - elapsed))
+        [ "$wait_seconds" -lt 0 ] 2>/dev/null && wait_seconds=0
+        log_line "本轮主动探测完成，继续监听，下一轮周期 ${discover_cycle}s"
+        while [ "$wait_seconds" -gt 0 ]; do
+            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+                runtime_set lan_discovery_status_state="设备发现未启用"
+                break
+            fi
+            if ! is_link_up "$iface"; then
+                break
+            fi
+            sleep 1
+            wait_seconds=$((wait_seconds - 1))
+        done
     done
     if [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
         runtime_set lan_discovery_status_state="等待接口"
