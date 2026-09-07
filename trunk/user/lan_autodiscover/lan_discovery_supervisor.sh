@@ -222,23 +222,20 @@ while :; do
         fi
     fi
 
-    # 设备发现开关独立于LAN插拔。无需重新插拔网线即可立即停止或恢复发现。
+    # 设备发现开关只控制发现功能，不停止LAN工作进程、不影响DHCP和LAN接口。
     if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ]; then
             runtime_set lan_discovery_status_state="启动设备发现"
             echo "$(date '+%H:%M:%S') 设备发现已启用" | logger -t lan-supervisor
-            stop_worker
-            start_worker "$iface"
         else
             runtime_set lan_discovery_status_state="设备发现未启用"
             echo "$(date '+%H:%M:%S') 设备发现已禁用" | logger -t lan-supervisor
-            stop_worker
         fi
     fi
 
-    # 工作进程异常退出时自动恢复，但设备发现关闭时保持停止。
-    if [ "$link" = "1" ] && [ "$discover_enable" = "1" ]; then
+    # LAN口已插入时工作进程持续存在；设备发现是否运行由worker独立控制。
+    if [ "$link" = "1" ]; then
         start_worker "$iface"
     fi
 

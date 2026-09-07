@@ -270,6 +270,18 @@ run_discovery() {
             log_line "设备发现已关闭，停止设备发现进程"
             break
         fi
+        # 每一轮重新读取周期和协议参数，使WebUI修改后的配置立即用于下一轮发现。
+        discover_cycle="$(cfg lan_discovery_cycle 10)"
+        case "$discover_cycle" in
+            ''|*[!0-9]*) discover_cycle=10;;
+        esac
+        [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
+        [ "$discover_cycle" -le 60 ] 2>/dev/null || discover_cycle=60
+        onvif_port="$(cfg lan_discovery_onvif_port 3702)"
+        ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
+        hik_port="$(cfg lan_discovery_hik_port 37020)"
+        dahua_port="$(cfg lan_discovery_dahua_port 37810)"
+        log_line "本轮设备发现周期 ${discover_cycle}s"
         : > /tmp/camdiscover_lan.log
         : > /tmp/camdiscover_custom.conf
         printf '%s\n' "$custom" | while IFS= read -r row; do
@@ -328,15 +340,18 @@ ensure_defaults
 refresh_interfaces
 last_iface=""
 last_state="-9"
+last_discover="-9"
 iface_refresh=0
 while :; do
     iface_refresh=$((iface_refresh + 1))
     if [ "$iface_refresh" -ge 5 ]; then refresh_interfaces; iface_refresh=0; fi
     enable="$(cfg lan_discovery_enable 1)"
+    discover_enable="$(cfg lan_discovery_discover_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_state="-9"
+        last_discover="-9"
         runtime_set lan_discovery_status_state="等待接口"
         log_line "检测接口切换为 $iface"
         if [ -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "WAIT"; else set_link_status "$iface" "不存在"; fi
@@ -362,6 +377,17 @@ while :; do
             set_link_status "$iface" "DOWN"
             runtime_set lan_discovery_status_state="等待接口"
             log_line "LAN口已拔出 $iface"
+        fi
+    fi
+
+    # 设备发现开关只控制camdiscover，不停止LAN工作进程或DHCP流程。
+    if [ "$state" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
+        last_discover="$discover_enable"
+        if [ "$discover_enable" = "1" ]; then
+            runtime_set lan_discovery_status_state="启动设备发现"
+            run_discovery "$iface"
+        else
+            runtime_set lan_discovery_status_state="设备发现未启用"
         fi
     fi
     sleep 1
