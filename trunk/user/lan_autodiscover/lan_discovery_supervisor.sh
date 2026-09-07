@@ -5,6 +5,8 @@
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
+DEVICE_DB=/etc/storage/lan_discovery_devices.db
+LOG_FILE=/etc/storage/lan_discovery.log
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
@@ -50,6 +52,62 @@ worker_running() {
     if kill -0 "$pid" 2>/dev/null; then return 0; fi
     rm -f "$PIDFILE"
     return 1
+}
+
+# 从实际系统状态重新生成页面显示字段，避免监督程序和工作进程各写一套状态。
+sync_runtime_status() {
+    iface="$1"
+    if [ -e "/sys/class/net/$iface" ]; then
+        ip4="$(ip -4 addr show dev br0 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
+        [ -n "$ip4" ] || ip4="$(nv lan_ipaddr)"
+        mac="$(cat /sys/class/net/br0/address 2>/dev/null)"
+        [ -n "$mac" ] || mac="$(cat /sys/class/net/$iface/address 2>/dev/null)"
+        [ -n "$ip4" ] || ip4="-"
+        [ -n "$mac" ] || mac="-"
+        nvram set lan_discovery_status_ip="$ip4"
+        nvram set lan_discovery_status_mac="$(printf '%s' "$mac" | tr '[:lower:]' '[:upper:]')"
+    fi
+
+    if is_link_up "$iface"; then
+        nvram set lan_discovery_status_link="UP"
+    else
+        nvram set lan_discovery_status_link="DOWN"
+        return
+    fi
+
+    [ -f "$DEVICE_DB" ] || : > "$DEVICE_DB"
+    count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
+    case "$count" in ''|*[!0-9]*) count=0;; esac
+    nvram set lan_discovery_status_count="$count"
+
+    # 根据正在运行的实际程序和临时日志校正当前阶段。
+    if ps 2>/dev/null | grep -q '[c]amdiscover'; then
+        nvram set lan_discovery_status_state="持续设备发现"
+    elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
+        nvram set lan_discovery_status_state="DHCP检测"
+    elif [ -f /tmp/camdiscover_lan.log ] && grep -q '开始持续设备发现' /tmp/lan_autodiscover_worker.log 2>/dev/null; then
+        nvram set lan_discovery_status_state="持续设备发现"
+    elif worker_running; then
+        nvram set lan_discovery_status_state="DHCP检测"
+    fi
+
+    # DHCP检测结果以当前检测日志为准，避免页面继续显示“未检测”。
+    if [ -f /tmp/dhcpdetect_lan.log ]; then
+        line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
+        gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
+        server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
+        if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
+            nvram set lan_discovery_status_dhcp="网关 $gateway"
+        elif [ -n "$server" ] && [ "$server" != "-" ]; then
+            nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
+        elif grep -q '\[dhcpdetect\].*No DHCP' /tmp/dhcpdetect_lan.log 2>/dev/null; then
+            nvram set lan_discovery_status_dhcp="未发现DHCP"
+        fi
+    fi
+
+    # 页面最后活动显示真实日志最近一条时间，没有日志时才退回当前时间。
+    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) .*/\1/p')"
+    [ -n "$last" ] && nvram set lan_discovery_status_last="$last" || nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
 start_worker() {
@@ -152,6 +210,8 @@ while :; do
         start_worker "$iface"
     fi
 
+    # 每秒根据真实运行状态刷新WebUI显示，避免前后端状态不同步。
+    sync_runtime_status "$iface"
     set_supervisor_status "运行中"
     sleep 1
 done
