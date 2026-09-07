@@ -4102,6 +4102,25 @@ ej_available_disk_names_and_sizes(int eid, webs_t wp, int argc, char **argv)
 }
 #endif
 
+static int
+ej_lan_discovery_devices(int eid, webs_t wp, int argc, char **argv)
+{
+	FILE *fp;
+	int ch;
+
+	/* 已发现设备列表是运行时数据，唯一来源为/tmp文本文件。 */
+	fp = fopen("/tmp/lan_discovery_devices.txt", "r");
+	if (!fp)
+		return 0;
+
+	while ((ch = fgetc(fp)) != EOF)
+		fputc(ch, wp);
+
+	fclose(fp);
+	fflush(wp);
+	return 0;
+}
+
 struct ej_handler ej_handlers[] =
 {
 	{ "nvram_get_x", ej_nvram_get_x},
@@ -4116,6 +4135,7 @@ struct ej_handler ej_handlers[] =
 	{ "nvram_dump", ej_dump},
 	{ "firmware_caps_hook", ej_firmware_caps_hook},
 	{ "json_system_status", ej_system_status_hook},
+	{ "lan_discovery_devices", ej_lan_discovery_devices},
 
 	{ "netdev", ej_netdev},
 	{ "bandwidth", ej_bandwidth},

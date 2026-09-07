@@ -4,6 +4,6 @@ STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan
 ---LOG---
 <% nvram_get_x("", "lan_discovery_log"); %>
 ---DEVICES---
-<% nvram_get_x("", "lan_discovery_devices"); %>
+<% lan_discovery_devices(); %>
 ---CUSTOM---
 <% nvram_get_x("", "lan_discovery_custom"); %>
