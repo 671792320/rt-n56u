@@ -8,12 +8,22 @@ fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 # LAN设备结果和完整日志保存到持久化存储，供页面及后续转发功能使用。
-DEVICE_DB=/etc/storage/lan_discovery_devices.db
-LOG_FILE=/etc/storage/lan_discovery.log
-mkdir -p /etc/storage
+DEVICE_DB=/tmp/lan_discovery_devices.txt
+LOG_FILE=/tmp/lan_discovery.log
+mkdir -p /tmp
 touch "$DEVICE_DB" "$LOG_FILE"
+RUNTIME_DIR=/tmp/lan_discovery_runtime
+mkdir -p "$RUNTIME_DIR"
 
 nv() { nvram get "$1" 2>/dev/null; }
+# 运行时状态只保存在/tmp，不写入持久NVRAM。
+runtime_set() {
+    item="$1"
+    key="${item%%=*}"
+    value="${item#*=}"
+    tmp="${RUNTIME_DIR}/.${key}.tmp"
+    printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
+}
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 now() { date '+%H:%M:%S'; }
 sanitize_text() { printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'; }
@@ -57,10 +67,10 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_dahua)" ] || nvram set lan_discovery_dahua=1
     [ -n "$(nv lan_discovery_dahua_port)" ] || nvram set lan_discovery_dahua_port=37810
     [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
-    [ -n "$(nv lan_discovery_status_dhcp)" ] || nvram set lan_discovery_status_dhcp="未检测"
-    [ -n "$(nv lan_discovery_status_state)" ] || nvram set lan_discovery_status_state="空闲"
-    [ -n "$(nv lan_discovery_status_count)" ] || nvram set lan_discovery_status_count=0
-    [ -n "$(nv lan_discovery_status_last)" ] || nvram set lan_discovery_status_last="-"
+
+
+
+
 }
 clean_device_line() {
     raw="$(sanitize_text "$1" | sed 's/\\//g')"
@@ -79,15 +89,15 @@ log_line() {
     line="$(sanitize_text "$(now) $*" | sed 's/\\//g')"
     last="$(tail -n 1 "$LOG_FILE" 2>/dev/null)"
     if [ "$last" = "$line" ]; then
-        nvram set lan_discovery_status_last="$(now)"
+        runtime_set lan_discovery_status_last="$(now)"
         return
     fi
     printf '%s\n' "$line" >> "$LOG_FILE"
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
     # NVRAM只保留最近30行，避免长时间运行导致状态字段过大。
     recent="$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
-    nvram set lan_discovery_log="$recent"
-    nvram set lan_discovery_status_last="$(now)"
+    runtime_set lan_discovery_log="$recent"
+    runtime_set lan_discovery_status_last="$(now)"
     logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
 # Q7唯一RJ45对应MTK交换机LAN4，使用mtk-esw原生PHY状态检测物理插拔。
@@ -134,17 +144,17 @@ refresh_interfaces() {
         line="${iface}|${role}|${ip4}|${mac}|${link:--}"
         if [ -n "$out" ]; then out="$(printf '%s\n%s' "$out" "$line")"; else out="$line"; fi
     done
-    nvram set lan_discovery_interfaces="$out"
+    runtime_set lan_discovery_interfaces="$out"
 }
 set_link_status() {
     iface="$1"; link="$2"; ip4="$(iface_ipv4 "$iface")"; mac="$(iface_mac "$iface")"; role="LAN"
     if printf '%s\n' "$(nv wan_ifnames) $(nv wan_ifname) $(nv wan_ifname_x)" | tr ' ' '\n' | grep -qx "$iface"; then role="WAN"; fi
     case "$iface" in wan*|ppp*|wwan*|eth*.2) role="WAN";; ra*|apcli*|wds*) role="WiFi";; br*) role="LAN";; eth*.1) role="LAN";; esac
-    nvram set lan_discovery_status_if="$iface"
-    nvram set lan_discovery_status_role="$role"
-    nvram set lan_discovery_status_ip="$ip4"
-    nvram set lan_discovery_status_mac="$mac"
-    nvram set lan_discovery_status_link="$link"
+    runtime_set lan_discovery_status_if="$iface"
+    runtime_set lan_discovery_status_role="$role"
+    runtime_set lan_discovery_status_ip="$ip4"
+    runtime_set lan_discovery_status_mac="$mac"
+    runtime_set lan_discovery_status_link="$link"
 }
 is_link_up() {
     iface="$1"
@@ -179,14 +189,14 @@ sort_device_db() {
 sync_device_cache() {
     sort_device_db
     # 页面缓存只取前100条；完整数据库仍保存在持久化文件中。
-    nvram set lan_discovery_devices="$(head -n 100 "$DEVICE_DB" 2>/dev/null)"
+
     count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
-    nvram set lan_discovery_status_count="${count:-0}"
+    runtime_set lan_discovery_status_count="${count:-0}"
 }
 reset_device_db() {
     : > "$DEVICE_DB"
-    nvram set lan_discovery_devices=""
-    nvram set lan_discovery_status_count="0"
+
+    runtime_set lan_discovery_status_count="0"
 }
 append_device() {
     clean="$(clean_device_line "$1")" || return
@@ -217,7 +227,7 @@ run_discovery() {
     dahua_port="$(cfg lan_discovery_dahua_port 37810)"
     custom="$(nv lan_discovery_custom)"
 
-    nvram set lan_discovery_status_state="DHCP检测"
+    runtime_set lan_discovery_status_state="DHCP检测"
     log_line "LAN口已插入 $iface"
     : > /tmp/dhcpdetect_lan.log
     if [ "$dhcp_enable" = "1" ] && [ -x /usr/bin/dhcpdetect ]; then
@@ -228,35 +238,35 @@ run_discovery() {
             gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
             server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
             if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="网关 $gateway"
+                runtime_set lan_discovery_status_dhcp="网关 $gateway"
                 log_line "上级DHCP：网关 $gateway"
             elif [ -n "$server" ] && [ "$server" != "-" ]; then
-                nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
+                runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
                 log_line "上级DHCP：服务器 $server，未提供网关"
             else
-                nvram set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"
+                runtime_set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"
                 log_line "上级DHCP已发现，但报文未提供网关"
             fi
         else
-            nvram set lan_discovery_status_dhcp="未发现DHCP"
+            runtime_set lan_discovery_status_dhcp="未发现DHCP"
             log_line "未发现DHCP"
         fi
     else
-        nvram set lan_discovery_status_dhcp="未启用"
+        runtime_set lan_discovery_status_dhcp="未启用"
     fi
 
     if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then
-        nvram set lan_discovery_status_state="设备发现未启用"
+        runtime_set lan_discovery_status_state="设备发现未启用"
         return
     fi
 
     # 发现周期不再清空设备数据库，保证页面和后续转发使用稳定结果。
     sync_device_cache
-    nvram set lan_discovery_status_state="持续设备发现"
+    runtime_set lan_discovery_status_state="持续设备发现"
     log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
     while is_link_up "$iface"; do
         if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            nvram set lan_discovery_status_state="设备发现未启用"
+            runtime_set lan_discovery_status_state="设备发现未启用"
             log_line "设备发现已关闭，停止设备发现进程"
             break
         fi
@@ -300,7 +310,7 @@ run_discovery() {
         done
         wait "$pid" 2>/dev/null
         if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            nvram set lan_discovery_status_state="设备发现未启用"
+            runtime_set lan_discovery_status_state="设备发现未启用"
             break
         fi
         if ! is_link_up "$iface"; then break; fi
@@ -308,9 +318,9 @@ run_discovery() {
         sleep 1
     done
     if [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
-        nvram set lan_discovery_status_state="等待接口"
+        runtime_set lan_discovery_status_state="等待接口"
     else
-        nvram set lan_discovery_status_state="设备发现未启用"
+        runtime_set lan_discovery_status_state="设备发现未启用"
     fi
 }
 
@@ -327,12 +337,12 @@ while :; do
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_state="-9"
-        nvram set lan_discovery_status_state="等待接口"
+        runtime_set lan_discovery_status_state="等待接口"
         log_line "检测接口切换为 $iface"
         if [ -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "WAIT"; else set_link_status "$iface" "不存在"; fi
     fi
     if [ "$enable" != "1" ]; then
-        nvram set lan_discovery_status_state="已禁用"
+        runtime_set lan_discovery_status_state="已禁用"
         if [ -e "/sys/class/net/$iface" ]; then
             if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi
         fi
@@ -350,7 +360,7 @@ while :; do
             run_discovery "$iface"
         else
             set_link_status "$iface" "DOWN"
-            nvram set lan_discovery_status_state="等待接口"
+            runtime_set lan_discovery_status_state="等待接口"
             log_line "LAN口已拔出 $iface"
         fi
     fi

@@ -450,6 +450,30 @@ ej_nvram_get_x(int eid, webs_t wp, int argc, char **argv)
 		return -1;
 	}
 
+	/* LAN监听运行状态全部来自/tmp；只有配置项继续读取NVRAM。 */
+	if (strncmp(name, "lan_discovery_status_", 21) == 0 ||
+	    strcmp(name, "lan_discovery_log") == 0 ||
+	    strcmp(name, "lan_discovery_devices") == 0 ||
+	    strcmp(name, "lan_discovery_interfaces") == 0) {
+		char path[128];
+		FILE *fp;
+		int ch;
+		snprintf(path, sizeof(path), "/tmp/lan_discovery_runtime/%s", name);
+		fp = fopen(path, "r");
+		if (fp) {
+			while ((ch = fgetc(fp)) != EOF) {
+				if (ch < 0 || (ch >= 0x20 && ch != '"' && ch != '&' && ch != '<' && ch != '>'))
+					ret += fprintf(wp, "%c", ch);
+				else
+					ret += fprintf(wp, "&#%d;", ch);
+			}
+			fclose(fp);
+			fflush(wp);
+			return ret;
+		}
+		return 0;
+	}
+
 	cn = nvram_safe_get(name);
 	for (c = cn; *c; c++) {
 		if (*c < 0 || (*c >= 0x20 && *c != '"' && *c != '&' && *c != '<' && *c != '>'))

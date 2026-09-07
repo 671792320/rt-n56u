@@ -5,14 +5,22 @@
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
-DEVICE_DB=/etc/storage/lan_discovery_devices.db
-LOG_FILE=/etc/storage/lan_discovery.log
+DEVICE_DB=/tmp/lan_discovery_devices.txt
+LOG_FILE=/tmp/lan_discovery.log
 
 nv() { nvram get "$1" 2>/dev/null; }
+# 运行时状态只保存在/tmp，不写入持久NVRAM。
+runtime_set() {
+    item="$1"
+    key="${item%%=*}"
+    value="${item#*=}"
+    tmp="${RUNTIME_DIR}/.${key}.tmp"
+    printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
+}
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
 set_supervisor_status() {
-    nvram set lan_discovery_status_supervisor="$1"
+    runtime_set lan_discovery_status_supervisor="$1"
 }
 
 # Q7唯一RJ45对应交换机LAN4，使用mtk-esw原生PHY状态判断物理插拔。
@@ -64,32 +72,32 @@ sync_runtime_status() {
         [ -n "$mac" ] || mac="$(cat /sys/class/net/$iface/address 2>/dev/null)"
         [ -n "$ip4" ] || ip4="-"
         [ -n "$mac" ] || mac="-"
-        nvram set lan_discovery_status_ip="$ip4"
-        nvram set lan_discovery_status_mac="$(printf '%s' "$mac" | tr '[:lower:]' '[:upper:]')"
+        runtime_set lan_discovery_status_ip="$ip4"
+        runtime_set lan_discovery_status_mac="$(printf '%s' "$mac" | tr '[:lower:]' '[:upper:]')"
     fi
 
     if is_link_up "$iface"; then
-        nvram set lan_discovery_status_link="UP"
+        runtime_set lan_discovery_status_link="UP"
     else
-        nvram set lan_discovery_status_link="DOWN"
+        runtime_set lan_discovery_status_link="DOWN"
         return
     fi
 
     [ -f "$DEVICE_DB" ] || : > "$DEVICE_DB"
     count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
     case "$count" in ''|*[!0-9]*) count=0;; esac
-    nvram set lan_discovery_status_count="$count"
+    runtime_set lan_discovery_status_count="$count"
 
     if ps 2>/dev/null | grep -q '[c]amdiscover'; then
-        nvram set lan_discovery_status_state="持续设备发现"
+        runtime_set lan_discovery_status_state="持续设备发现"
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
-        nvram set lan_discovery_status_state="DHCP检测"
+        runtime_set lan_discovery_status_state="DHCP检测"
     elif [ -f /tmp/camdiscover_lan.log ] && grep -q '开始持续设备发现' /tmp/lan_autodiscover_worker.log 2>/dev/null; then
-        nvram set lan_discovery_status_state="持续设备发现"
+        runtime_set lan_discovery_status_state="持续设备发现"
     elif worker_running && [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
-        nvram set lan_discovery_status_state="DHCP检测"
+        runtime_set lan_discovery_status_state="DHCP检测"
     elif [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-        nvram set lan_discovery_status_state="设备发现未启用"
+        runtime_set lan_discovery_status_state="设备发现未启用"
     fi
 
     # DHCP检测结果以当前检测日志为准，避免页面继续显示“未检测”。
@@ -98,33 +106,33 @@ sync_runtime_status() {
         gateway="$(printf '%s\\n' "$line" | sed -n 's/.* gateway=\\([^ ]*\\).*/\\1/p')"
         server="$(printf '%s\\n' "$line" | sed -n 's/.* server=\\([^ ]*\\).*/\\1/p')"
         if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-            nvram set lan_discovery_status_dhcp="网关 $gateway"
+            runtime_set lan_discovery_status_dhcp="网关 $gateway"
         elif [ -n "$server" ] && [ "$server" != "-" ]; then
-            nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
+            runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
         elif grep -q '\\[dhcpdetect\\].*No DHCP' /tmp/dhcpdetect_lan.log 2>/dev/null; then
-            nvram set lan_discovery_status_dhcp="未发现DHCP"
+            runtime_set lan_discovery_status_dhcp="未发现DHCP"
         fi
     fi
 
     last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\\) .*/\\1/p')"
-    [ -n "$last" ] && nvram set lan_discovery_status_last="$last" || nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
+    [ -n "$last" ] && runtime_set lan_discovery_status_last="$last" || runtime_set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
 start_worker() {
     iface="$1"
     if worker_running; then
-        nvram set lan_discovery_status_worker="运行中"
+        runtime_set lan_discovery_status_worker="运行中"
         return 0
     fi
     if [ ! -x /usr/bin/lan_autodiscover.sh ]; then
-        nvram set lan_discovery_status_worker="程序不存在"
+        runtime_set lan_discovery_status_worker="程序不存在"
         return 1
     fi
     rm -rf "$LOCKDIR" 2>/dev/null
     echo "$(date '+%H:%M:%S') LAN监听启动发现工作进程：$iface" | logger -t lan-supervisor
     /usr/bin/lan_autodiscover.sh >/tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
-    nvram set lan_discovery_status_worker="运行中"
+    runtime_set lan_discovery_status_worker="运行中"
     return 0
 }
 
@@ -138,7 +146,7 @@ stop_worker() {
     fi
     rm -f "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
-    nvram set lan_discovery_status_worker="已停止"
+    runtime_set lan_discovery_status_worker="已停止"
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
 }
@@ -149,7 +157,7 @@ last_iface=""
 last_link="-1"
 
 set_supervisor_status "运行中"
-nvram set lan_discovery_status_worker="已停止"
+runtime_set lan_discovery_status_worker="已停止"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
@@ -160,7 +168,7 @@ while :; do
         last_iface="$iface"
         last_link="-1"
         last_discover="-1"
-        nvram set lan_discovery_status_if="$iface"
+        runtime_set lan_discovery_status_if="$iface"
         echo "$(date '+%H:%M:%S') LAN监听接口：$iface" | logger -t lan-supervisor
     fi
 
@@ -169,13 +177,13 @@ while :; do
         last_link="-1"
         last_discover="-1"
         if [ "$enable" = "1" ]; then
-            nvram set lan_discovery_status_enable="已启用"
+            runtime_set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
         else
-            nvram set lan_discovery_status_enable="已禁用"
-            nvram set lan_discovery_status_state="已禁用"
-            nvram set lan_discovery_status_dhcp="未检测"
-            nvram set lan_discovery_status_count="0"
+            runtime_set lan_discovery_status_enable="已禁用"
+            runtime_set lan_discovery_status_state="已禁用"
+            runtime_set lan_discovery_status_dhcp="未检测"
+            runtime_set lan_discovery_status_count="0"
             echo "$(date '+%H:%M:%S') LAN监听已禁用" | logger -t lan-supervisor
             stop_worker
         fi
@@ -195,15 +203,15 @@ while :; do
     if [ "$link" != "$last_link" ]; then
         last_link="$link"
         if [ "$link" = "1" ]; then
-            nvram set lan_discovery_status_link="UP"
-            nvram set lan_discovery_status_state="DHCP检测"
+            runtime_set lan_discovery_status_link="UP"
+            runtime_set lan_discovery_status_state="DHCP检测"
             echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
             start_worker "$iface"
         else
-            nvram set lan_discovery_status_link="DOWN"
-            nvram set lan_discovery_status_state="等待接口"
-            nvram set lan_discovery_status_dhcp="未检测"
-            nvram set lan_discovery_status_count="0"
+            runtime_set lan_discovery_status_link="DOWN"
+            runtime_set lan_discovery_status_state="等待接口"
+            runtime_set lan_discovery_status_dhcp="未检测"
+            runtime_set lan_discovery_status_count="0"
             echo "$(date '+%H:%M:%S') LAN口已拔出：$iface" | logger -t lan-supervisor
             stop_worker
         fi
@@ -213,12 +221,12 @@ while :; do
     if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ]; then
-            nvram set lan_discovery_status_state="启动设备发现"
+            runtime_set lan_discovery_status_state="启动设备发现"
             echo "$(date '+%H:%M:%S') 设备发现已启用" | logger -t lan-supervisor
             stop_worker
             start_worker "$iface"
         else
-            nvram set lan_discovery_status_state="设备发现未启用"
+            runtime_set lan_discovery_status_state="设备发现未启用"
             echo "$(date '+%H:%M:%S') 设备发现已禁用" | logger -t lan-supervisor
             stop_worker
         fi
