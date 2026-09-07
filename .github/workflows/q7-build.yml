@@ -125,3 +125,5 @@ jobs:
           name: ZTE_Q7_${{ env.VERSION_STAMP }}
           path: trunk/images/*.trx
           if-no-files-found: error
+
+# 中文备注：本次提交用于触发Q7正式编译，代码内容保持不变。
