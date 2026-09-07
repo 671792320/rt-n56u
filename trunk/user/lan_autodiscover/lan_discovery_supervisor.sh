@@ -1,8 +1,7 @@
 #!/bin/sh
-# Persistent LAN event supervisor.
-# This process is always running. It never disables the LAN interface or
-# its link/IP handling. lan_discovery_enable controls the discovery worker,
-# while lan_discovery_discover_enable controls whether camdiscover is active.
+# LAN事件监督程序。
+# 该程序常驻运行，只负责Q7 LAN口物理插拔监听和发现工作进程启停。
+# DHCP检测、设备发现、设备数量、实时日志等业务状态统一由工作进程维护。
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
@@ -12,9 +11,9 @@ cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
 set_supervisor_status() {
     nvram set lan_discovery_status_supervisor="$1"
-    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
+# Q7唯一RJ45对应交换机LAN4，使用mtk-esw原生PHY状态判断物理插拔。
 mtk_esw_lan4_state() {
     [ -x /sbin/mtk_esw ] || return 2
     state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
@@ -64,18 +63,17 @@ start_worker() {
         return 1
     fi
     rm -rf "$LOCKDIR" 2>/dev/null
-    echo "$(date '+%H:%M:%S') LAN discovery worker start: $iface" | logger -t lan-supervisor
+    echo "$(date '+%H:%M:%S') LAN监听启动发现工作进程：$iface" | logger -t lan-supervisor
     /usr/bin/lan_autodiscover.sh >/tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
     nvram set lan_discovery_status_worker="运行中"
-    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
     return 0
 }
 
 stop_worker() {
     if worker_running; then
         pid="$(cat "$PIDFILE" 2>/dev/null)"
-        echo "$(date '+%H:%M:%S') LAN discovery worker stop" | logger -t lan-supervisor
+        echo "$(date '+%H:%M:%S') LAN监听停止发现工作进程" | logger -t lan-supervisor
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
@@ -83,14 +81,12 @@ stop_worker() {
     rm -f "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
     nvram set lan_discovery_status_worker="已停止"
-    # Only terminate our known discovery helpers. The LAN event supervisor
-    # itself remains alive.
+    # 只结束本项目产生的发现辅助进程，不结束LAN事件监督程序本身。
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
 }
 
 last_enable="-1"
-last_discover="-1"
 last_iface=""
 last_link="-1"
 
@@ -99,29 +95,29 @@ nvram set lan_discovery_status_worker="已停止"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
-    discover_enable="$(cfg lan_discovery_discover_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
 
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
         nvram set lan_discovery_status_if="$iface"
-        echo "$(date '+%H:%M:%S') LAN supervisor interface=$iface" | logger -t lan-supervisor
+        echo "$(date '+%H:%M:%S') LAN监听接口：$iface" | logger -t lan-supervisor
     fi
 
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
-        last_discover="-1"
+        last_link="-1"
         if [ "$enable" = "1" ]; then
             nvram set lan_discovery_status_enable="已启用"
-            echo "$(date '+%H:%M:%S') LAN discovery enabled" | logger -t lan-supervisor
+            echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
         else
             nvram set lan_discovery_status_enable="已禁用"
-            nvram set lan_discovery_status_state="LAN自动发现未启用"
-            echo "$(date '+%H:%M:%S') LAN discovery disabled; LAN event supervisor remains active" | logger -t lan-supervisor
+            nvram set lan_discovery_status_state="已禁用"
+            nvram set lan_discovery_status_dhcp="未检测"
+            nvram set lan_discovery_status_count="0"
+            echo "$(date '+%H:%M:%S') LAN监听已禁用" | logger -t lan-supervisor
             stop_worker
         fi
-        last_link="-1"
     fi
 
     if [ -e "/sys/class/net/$iface" ]; then
@@ -130,44 +126,32 @@ while :; do
         link=0
     fi
 
-    # Device discovery is a runtime switch independent of the LAN event
-    # supervisor. When it changes, stop/start the worker so the running
-    # camdiscover process is actually terminated/recreated.
-    if [ "$enable" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
-        last_discover="$discover_enable"
-        if [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
-            nvram set lan_discovery_status_state="准备启动发现"
-            echo "$(date '+%H:%M:%S') Device discovery enabled" | logger -t lan-supervisor
-            start_worker "$iface"
-        else
-            nvram set lan_discovery_status_state="设备发现未启用"
-            echo "$(date '+%H:%M:%S') Device discovery disabled" | logger -t lan-supervisor
-            stop_worker
-        fi
+    if [ "$enable" != "1" ]; then
+        sleep 1
+        continue
     fi
 
     if [ "$link" != "$last_link" ]; then
         last_link="$link"
         if [ "$link" = "1" ]; then
             nvram set lan_discovery_status_link="UP"
-            echo "$(date '+%H:%M:%S') LAN Link UP $iface" | logger -t lan-supervisor
-            if [ "$enable" = "1" ] && [ "$discover_enable" = "1" ]; then
-                start_worker "$iface"
-            else
-                stop_worker
-            fi
+            nvram set lan_discovery_status_state="DHCP检测"
+            echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
+            # LAN插入后只启动一次工作进程，后续DHCP和设备发现全部由工作进程按顺序执行。
+            start_worker "$iface"
         else
             nvram set lan_discovery_status_link="DOWN"
-            echo "$(date '+%H:%M:%S') LAN Link DOWN $iface" | logger -t lan-supervisor
-            stop_worker
             nvram set lan_discovery_status_state="等待接口"
+            nvram set lan_discovery_status_dhcp="未检测"
+            nvram set lan_discovery_status_count="0"
+            echo "$(date '+%H:%M:%S') LAN口已拔出：$iface" | logger -t lan-supervisor
+            stop_worker
         fi
-    elif [ "$enable" = "1" ] && [ "$discover_enable" = "1" ] && [ "$link" = "1" ]; then
-        # Recover automatically if the worker exits unexpectedly.
+    elif [ "$link" = "1" ]; then
+        # 工作进程异常退出时自动恢复，但不参与业务状态写入。
         start_worker "$iface"
     fi
 
-    nvram set lan_discovery_status_supervisor="运行中"
-    nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
+    set_supervisor_status "运行中"
     sleep 1
 done
