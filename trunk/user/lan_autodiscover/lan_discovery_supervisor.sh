@@ -1,7 +1,7 @@
 #!/bin/sh
 # LAN事件监督程序。
-# 该程序常驻运行，只负责Q7 LAN口物理插拔监听和发现工作进程启停。
-# DHCP检测、设备发现、设备数量、实时日志等业务状态统一由工作进程维护。
+# 该程序常驻运行，只负责Q7 LAN口物理插拔监听、总开关和发现工作进程启停。
+# DHCP检测、设备发现、设备数量、实时日志等业务状态由工作进程维护。
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
@@ -54,7 +54,7 @@ worker_running() {
     return 1
 }
 
-# 从实际系统状态重新生成页面显示字段，避免监督程序和工作进程各写一套状态。
+# 从实际系统状态重新生成页面显示字段，避免页面看到已经失效的缓存。
 sync_runtime_status() {
     iface="$1"
     if [ -e "/sys/class/net/$iface" ]; then
@@ -80,33 +80,33 @@ sync_runtime_status() {
     case "$count" in ''|*[!0-9]*) count=0;; esac
     nvram set lan_discovery_status_count="$count"
 
-    # 根据正在运行的实际程序和临时日志校正当前阶段。
     if ps 2>/dev/null | grep -q '[c]amdiscover'; then
         nvram set lan_discovery_status_state="持续设备发现"
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
         nvram set lan_discovery_status_state="DHCP检测"
     elif [ -f /tmp/camdiscover_lan.log ] && grep -q '开始持续设备发现' /tmp/lan_autodiscover_worker.log 2>/dev/null; then
         nvram set lan_discovery_status_state="持续设备发现"
-    elif worker_running; then
+    elif worker_running && [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
         nvram set lan_discovery_status_state="DHCP检测"
+    elif [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+        nvram set lan_discovery_status_state="设备发现未启用"
     fi
 
     # DHCP检测结果以当前检测日志为准，避免页面继续显示“未检测”。
     if [ -f /tmp/dhcpdetect_lan.log ]; then
-        line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
-        gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
-        server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
+        line="$(grep -m1 '^\\[dhcpdetect\\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
+        gateway="$(printf '%s\\n' "$line" | sed -n 's/.* gateway=\\([^ ]*\\).*/\\1/p')"
+        server="$(printf '%s\\n' "$line" | sed -n 's/.* server=\\([^ ]*\\).*/\\1/p')"
         if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
             nvram set lan_discovery_status_dhcp="网关 $gateway"
         elif [ -n "$server" ] && [ "$server" != "-" ]; then
             nvram set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
-        elif grep -q '\[dhcpdetect\].*No DHCP' /tmp/dhcpdetect_lan.log 2>/dev/null; then
+        elif grep -q '\\[dhcpdetect\\].*No DHCP' /tmp/dhcpdetect_lan.log 2>/dev/null; then
             nvram set lan_discovery_status_dhcp="未发现DHCP"
         fi
     fi
 
-    # 页面最后活动显示真实日志最近一条时间，没有日志时才退回当前时间。
-    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) .*/\1/p')"
+    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\\) .*/\\1/p')"
     [ -n "$last" ] && nvram set lan_discovery_status_last="$last" || nvram set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
@@ -139,12 +139,12 @@ stop_worker() {
     rm -f "$PIDFILE"
     rm -rf "$LOCKDIR" 2>/dev/null
     nvram set lan_discovery_status_worker="已停止"
-    # 只结束本项目产生的发现辅助进程，不结束LAN事件监督程序本身。
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
 }
 
 last_enable="-1"
+last_discover="-1"
 last_iface=""
 last_link="-1"
 
@@ -153,11 +153,13 @@ nvram set lan_discovery_status_worker="已停止"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
+    discover_enable="$(cfg lan_discovery_discover_enable 1)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
 
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
+        last_discover="-1"
         nvram set lan_discovery_status_if="$iface"
         echo "$(date '+%H:%M:%S') LAN监听接口：$iface" | logger -t lan-supervisor
     fi
@@ -165,6 +167,7 @@ while :; do
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
         last_link="-1"
+        last_discover="-1"
         if [ "$enable" = "1" ]; then
             nvram set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
@@ -195,7 +198,6 @@ while :; do
             nvram set lan_discovery_status_link="UP"
             nvram set lan_discovery_status_state="DHCP检测"
             echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
-            # LAN插入后只启动一次工作进程，后续DHCP和设备发现全部由工作进程按顺序执行。
             start_worker "$iface"
         else
             nvram set lan_discovery_status_link="DOWN"
@@ -205,12 +207,28 @@ while :; do
             echo "$(date '+%H:%M:%S') LAN口已拔出：$iface" | logger -t lan-supervisor
             stop_worker
         fi
-    elif [ "$link" = "1" ]; then
-        # 工作进程异常退出时自动恢复，但不参与业务状态写入。
+    fi
+
+    # 设备发现开关独立于LAN插拔。无需重新插拔网线即可立即停止或恢复发现。
+    if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
+        last_discover="$discover_enable"
+        if [ "$discover_enable" = "1" ]; then
+            nvram set lan_discovery_status_state="启动设备发现"
+            echo "$(date '+%H:%M:%S') 设备发现已启用" | logger -t lan-supervisor
+            stop_worker
+            start_worker "$iface"
+        else
+            nvram set lan_discovery_status_state="设备发现未启用"
+            echo "$(date '+%H:%M:%S') 设备发现已禁用" | logger -t lan-supervisor
+            stop_worker
+        fi
+    fi
+
+    # 工作进程异常退出时自动恢复，但设备发现关闭时保持停止。
+    if [ "$link" = "1" ] && [ "$discover_enable" = "1" ]; then
         start_worker "$iface"
     fi
 
-    # 每秒根据真实运行状态刷新WebUI显示，避免前后端状态不同步。
     sync_runtime_status "$iface"
     set_supervisor_status "运行中"
     sleep 1
