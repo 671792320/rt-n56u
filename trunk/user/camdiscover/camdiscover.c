@@ -205,17 +205,16 @@ static void handle_hik(int fd){
 }
 static void mac_to_text(const unsigned char *m,char *out,size_t n){if(!m||!out||!n)return;snprintf(out,n,"%02x:%02x:%02x:%02x:%02x:%02x",m[0],m[1],m[2],m[3],m[4],m[5]);}
 static int handle_raw(int fd){
-    unsigned char buf[4096]; ssize_t n; struct sockaddr_ll from; socklen_t fl=sizeof(from); unsigned short proto; unsigned int ipoff; char mac[32],ip[INET_ADDRSTRLEN]; struct iphdr *ih; struct arphdr *ah;
+    unsigned char buf[4096]; ssize_t n; struct sockaddr_ll from; socklen_t fl=sizeof(from); unsigned short proto; unsigned int ipoff; char mac[32]; struct arphdr *ah;
     n=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&from,&fl); if(n<(ssize_t)sizeof(struct ethhdr))return 0;
     proto=ntohs(*(unsigned short*)(buf+12)); ipoff=sizeof(struct ethhdr);
     if(proto==ETH_P_8021Q&&n>=(ssize_t)(ipoff+4)){proto=ntohs(*(unsigned short*)(buf+16));ipoff+=4;}
+    if(proto!=ETH_P_ARP)return 0;
     mac_to_text(buf+6,mac,sizeof(mac)); if(self_mac[0]&&!strcasecmp(mac,self_mac))return 0;
-    if(proto==ETH_P_ARP&&n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){
+    if(n>=(ssize_t)(ipoff+sizeof(struct arphdr)+20)){
         ah=(struct arphdr*)(buf+ipoff);
         if(ntohs(ah->ar_pro)==ETH_P_IP&&ah->ar_hln==6&&ah->ar_pln==4){unsigned char *arp=buf+ipoff+sizeof(struct arphdr);char srcip[INET_ADDRSTRLEN];if(inet_ntop(AF_INET,arp+6,srcip,sizeof(srcip))){if(ah->ar_op==htons(ARPOP_REPLY)||ah->ar_op==htons(ARPOP_REQUEST))print_ipv4_device("ARP",srcip,mac);}}
-        return 1;
     }
-    if(proto==ETH_P_IP&&n>=(ssize_t)(ipoff+sizeof(struct iphdr))){ih=(struct iphdr*)(buf+ipoff);if(ih->version!=4||ih->ihl<5)return 1;if(inet_ntop(AF_INET,&ih->saddr,ip,sizeof(ip))&&strcmp(ip,"0.0.0.0")&&strcmp(ip,"127.0.0.1"))print_ipv4_device("IP",ip,mac);}
     return 1;
 }
 static int wait_for_responses(struct discover_ctx *c,int timeout){
@@ -243,7 +242,7 @@ static int wait_for_responses(struct discover_ctx *c,int timeout){
 int main(int argc,char **argv){
     struct discover_ctx c; const char *ifname=NULL,*custom_path=NULL; int timeout=10,onvif=1,ssdp=1,hik=1,dahua=1,raw=1,onvif_port=ONVIF_PORT,ssdp_port=SSDP_PORT,hik_port=HIK_PORT,dahua_port=DAHUA_PORT,opt,rc;
     memset(&c,0,sizeof(c)); c.fd_onvif=c.fd_ssdp=c.fd_hik=c.fd_dahua=c.fd_raw=-1;
-    while((opt=getopt(argc,argv,"i:t:o:s:k:d:OSHDAC:"))!=-1){switch(opt){case 'i':ifname=optarg;break;case 't':timeout=atoi(optarg);break;case 'o':onvif_port=atoi(optarg);break;case 's':ssdp_port=atoi(optarg);break;case 'k':hik_port=atoi(optarg);break;case 'd':dahua_port=atoi(optarg);break;case 'O':onvif=1;break;case 'S':ssdp=1;break;case 'H':hik=1;break;case 'D':dahua=1;break;case 'A':raw=1;break;case 'C':custom_path=optarg;break;default:break;}}
+    while((opt=getopt(argc,argv,"i:t:o:s:k:d:O:S:H:D:A:C:"))!=-1){switch(opt){case 'i':ifname=optarg;break;case 't':timeout=atoi(optarg);break;case 'o':onvif_port=atoi(optarg);break;case 's':ssdp_port=atoi(optarg);break;case 'k':hik_port=atoi(optarg);break;case 'd':dahua_port=atoi(optarg);break;case 'O':onvif=atoi(optarg)!=0;break;case 'S':ssdp=atoi(optarg)!=0;break;case 'H':hik=atoi(optarg)!=0;break;case 'D':dahua=atoi(optarg)!=0;break;case 'A':raw=atoi(optarg)!=0;break;case 'C':custom_path=optarg;break;default:break;}}
     if(timeout<1)timeout=1; if(timeout>60)timeout=60; if(!ifname)ifname="br0";
     c.ifname=ifname; c.ifindex=get_ifindex(ifname); load_self_addresses(); load_self_mac(ifname);
     if(c.ifindex==0){fprintf(stderr,"[camdiscover] interface %s not found\n",ifname);return 1;}
@@ -255,7 +254,7 @@ int main(int argc,char **argv){
     if(custom_path)load_custom(custom_path,&c);
     fprintf(stdout,"[camdiscover] iface=%s ifindex=%u timeout=%d\n",c.ifname,c.ifindex,timeout);fflush(stdout);
     fprintf(stdout,"[camdiscover] sockets ONVIF=%d SSDP=%d HIK=%d DAHUA=%d RAW=%d custom=%d\n",c.fd_onvif,c.fd_ssdp,c.fd_hik,c.fd_dahua,c.fd_raw,c.custom_count);fflush(stdout);
-    fprintf(stdout,"[camdiscover] probes enabled: ONVIF=%d SSDP=%d HIK=%d DAHUA=%d RAW=%d\n",onvif,ssdp,hik,dahua,raw);fflush(stdout);
+    fprintf(stdout,"[camdiscover] probes enabled: ONVIF=%d SSDP=%d HIK=%d DAHUA=%d ARP=%d\n",onvif,ssdp,hik,dahua,raw);fflush(stdout);
     if(c.custom_count)send_custom_probes(&c);
     if(c.fd_onvif>=0){rc=send_onvif_probe(c.fd_onvif,onvif_port);printf("[camdiscover] ONVIF probe %s\n",rc==0?"sent":"FAILED");}
     if(c.fd_ssdp>=0){rc=send_ssdp_probe(c.fd_ssdp,ssdp_port);printf("[camdiscover] SSDP probe %s\n",rc==0?"sent":"FAILED");}
