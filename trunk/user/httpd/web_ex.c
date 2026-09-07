@@ -451,9 +451,23 @@ ej_nvram_get_x(int eid, webs_t wp, int argc, char **argv)
 	}
 
 	/* LAN监听运行状态全部来自/tmp；只有配置项继续读取NVRAM。 */
+	if (strcmp(name, "lan_discovery_devices") == 0) {
+		FILE *fp = fopen("/tmp/lan_discovery_devices.txt", "r");
+		int ch;
+		if (!fp) return 0;
+		while ((ch = fgetc(fp)) != EOF) {
+			if (ch < 0 || (ch >= 0x20 && ch != '"' && ch != '&' && ch != '<' && ch != '>'))
+				ret += fprintf(wp, "%c", ch);
+			else
+				ret += fprintf(wp, "&#%d;", ch);
+		}
+		fclose(fp);
+		fflush(wp);
+		return ret;
+	}
+
 	if (strncmp(name, "lan_discovery_status_", 21) == 0 ||
 	    strcmp(name, "lan_discovery_log") == 0 ||
-	    strcmp(name, "lan_discovery_devices") == 0 ||
 	    strcmp(name, "lan_discovery_interfaces") == 0) {
 		char path[128];
 		FILE *fp;

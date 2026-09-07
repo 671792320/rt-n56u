@@ -355,8 +355,8 @@ while :; do
         last_state="$state"
         if [ "$state" = "1" ]; then
             set_link_status "$iface" "UP"
-            # 只有物理链路从断开变为插入时清空旧网络的设备记录。
-            reset_device_db
+            # 网线插拔不清空设备列表；设备列表仅在/tmp生命周期结束时自然清空，或由WebUI手动清空。
+            sync_device_cache
             run_discovery "$iface"
         else
             set_link_status "$iface" "DOWN"

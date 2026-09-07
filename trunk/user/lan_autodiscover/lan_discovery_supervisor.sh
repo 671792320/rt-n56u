@@ -7,6 +7,8 @@ PIDFILE=/tmp/lan_autodiscover_worker.pid
 LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
+RUNTIME_DIR=/tmp/lan_discovery_runtime
+mkdir -p "$RUNTIME_DIR"
 
 nv() { nvram get "$1" 2>/dev/null; }
 # 运行时状态只保存在/tmp，不写入持久NVRAM。
@@ -88,7 +90,10 @@ sync_runtime_status() {
     case "$count" in ''|*[!0-9]*) count=0;; esac
     runtime_set lan_discovery_status_count="$count"
 
-    if ps 2>/dev/null | grep -q '[c]amdiscover'; then
+    # 功能开关优先于进程瞬时状态，避免关闭设备发现后仍显示“持续设备发现”。
+    if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+        runtime_set lan_discovery_status_state="设备发现未启用"
+    elif ps 2>/dev/null | grep -q '[c]amdiscover'; then
         runtime_set lan_discovery_status_state="持续设备发现"
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
         runtime_set lan_discovery_status_state="DHCP检测"
