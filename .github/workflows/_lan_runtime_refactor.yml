@@ -1,0 +1,141 @@
+name: LAN运行数据结构整理
+on:
+  push:
+    branches: [ master ]
+jobs:
+  refactor:
+    if: github.event.head_commit.message != '完成LAN运行数据与配置分离'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 修改LAN运行数据结构
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          worker = root / 'trunk/user/lan_autodiscover/lan_autodiscover.sh'
+          supervisor = root / 'trunk/user/lan_autodiscover/lan_discovery_supervisor.sh'
+          asp = root / 'trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp'
+          webex = root / 'trunk/user/httpd/web_ex.c'
+
+          def refactor_shell(path):
+              s = path.read_text(encoding='utf-8')
+              s = s.replace('DEVICE_DB=/etc/storage/lan_discovery_devices.db', 'DEVICE_DB=/tmp/lan_discovery_devices.txt')
+              s = s.replace('LOG_FILE=/etc/storage/lan_discovery.log', 'LOG_FILE=/tmp/lan_discovery.log')
+              s = s.replace('mkdir -p /etc/storage\ntouch "$DEVICE_DB" "$LOG_FILE"', 'mkdir -p /tmp\ntouch "$DEVICE_DB" "$LOG_FILE"\nRUNTIME_DIR=/tmp/lan_discovery_runtime\nmkdir -p "$RUNTIME_DIR"')
+              if 'runtime_set() {' not in s:
+                  marker = 'nv() { nvram get "$1" 2>/dev/null; }\n'
+                  helper = '''nv() { nvram get "$1" 2>/dev/null; }\n# 运行时状态只保存在/tmp，不进入NVRAM。\nruntime_set() {\n    item="$1"\n    key="${item%%=*}"\n    value="${item#*=}"\n    tmp="${RUNTIME_DIR}/.${key}.tmp"\n    printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"\n}\n'''
+                  s = s.replace(marker, helper, 1)
+              s = re.sub(r'\bnvram set (lan_discovery_status_[A-Za-z0-9_]+)=', r'runtime_set \1=', s)
+              s = re.sub(r'\bnvram set (lan_discovery_(?:log|devices|interfaces))=', r'runtime_set \1=', s)
+              # 设备列表不再复制到NVRAM，页面直接读取/tmp文件。
+              s = re.sub(r'^\s*runtime_set lan_discovery_devices=.*$', '', s, flags=re.M)
+              # 只保留配置项在NVRAM，删除旧的运行时默认初始化。
+              s = re.sub(r'^\s*\[ -n "\$\(nv lan_discovery_status_[^\n]+$', '', s, flags=re.M)
+              s = s.replace('# LAN设备结果和完整日志保存到持久化存储，供页面及后续转发功能使用。', '# LAN设备结果和实时日志只保存在/tmp，供页面及后续转发功能使用。')
+              s = s.replace('# 页面缓存只取前100条；完整数据库仍保存在持久化文件中。', '# 设备完整列表直接保存在/tmp文件中，页面按需读取。')
+              path.write_text(s, encoding='utf-8')
+
+          refactor_shell(worker)
+          refactor_shell(supervisor)
+
+          # WebUI数据接口改为读取/tmp运行时数据；配置custom仍从NVRAM读取。
+          asp.write_text('''<% lan_discovery_data(); %>\n''', encoding='utf-8')
+
+          s = webex.read_text(encoding='utf-8')
+          marker = 'struct ej_handler ej_handlers[] =\n{\n'
+          if 'static int\nej_lan_discovery_data' not in s:
+              func = r'''static void
+lan_runtime_write_file(webs_t wp, const char *key)
+{
+    char path[128];
+    FILE *fp;
+    int ch;
+
+    snprintf(path, sizeof(path), "/tmp/lan_discovery_runtime/%s", key);
+    fp = fopen(path, "r");
+    if (!fp)
+        return;
+
+    while ((ch = fgetc(fp)) != EOF)
+        fputc(ch, wp);
+
+    fclose(fp);
+}
+
+static int
+ej_lan_discovery_data(int eid, webs_t wp, int argc, char **argv)
+{
+    static const char *keys[] = {
+        "lan_discovery_status_if",
+        "lan_discovery_status_role",
+        "lan_discovery_status_ip",
+        "lan_discovery_status_mac",
+        "lan_discovery_status_link",
+        "lan_discovery_status_dhcp",
+        "lan_discovery_status_state",
+        "lan_discovery_status_count",
+        "lan_discovery_status_last",
+        NULL
+    };
+    int i;
+
+    websWrite(wp, "STATUS");
+    for (i = 0; keys[i] != NULL; ++i) {
+        websWrite(wp, "|");
+        lan_runtime_write_file(wp, keys[i]);
+    }
+    websWrite(wp, "\n---IFACES---\n");
+    lan_runtime_write_file(wp, "lan_discovery_interfaces");
+    websWrite(wp, "\n---LOG---\n");
+    lan_runtime_write_file(wp, "lan_discovery_log");
+    websWrite(wp, "\n---DEVICES---\n");
+    {
+        FILE *fp = fopen("/tmp/lan_discovery_devices.txt", "r");
+        int ch;
+        if (fp) {
+            while ((ch = fgetc(fp)) != EOF)
+                fputc(ch, wp);
+            fclose(fp);
+        }
+    }
+    websWrite(wp, "\n---CUSTOM---\n");
+    {
+        const char *v = nvram_safe_get("lan_discovery_custom");
+        for (; v && *v; ++v) {
+            if (*v < 0 || (*v >= 0x20 && *v != '"' && *v != '&' && *v != '<' && *v != '>'))
+                fputc(*v, wp);
+            else
+                fprintf(wp, "&#%d;", *v);
+        }
+    }
+    websWrite(wp, "\n");
+    fflush(wp);
+    return 0;
+}
+
+'''
+              s = s.replace(marker, func + marker, 1)
+          if '{ "lan_discovery_data", ej_lan_discovery_data},' not in s:
+              s = s.replace('\t{ "json_system_status", ej_system_status_hook},\n', '\t{ "json_system_status", ej_system_status_hook},\n\t{ "lan_discovery_data", ej_lan_discovery_data},\n', 1)
+          webex.write_text(s, encoding='utf-8')
+          PY
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          sh -n trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          grep -q 'lan_discovery_data' trunk/user/httpd/web_ex.c
+          grep -q 'lan_discovery_data' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
+          git status --short
+      - name: 提交永久修改
+        shell: bash
+        run: |
+          git config user.name 'GitHub Actions'
+          git config user.email 'actions@github.com'
+          git add trunk/user/lan_autodiscover/lan_autodiscover.sh trunk/user/lan_autodiscover/lan_discovery_supervisor.sh trunk/user/httpd/web_ex.c trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp .github/workflows/_lan_runtime_refactor.yml
+          git commit -m '完成LAN运行数据与配置分离'
+          git rm .github/workflows/_lan_runtime_refactor.yml
+          git commit --amend --no-edit
+          git push
