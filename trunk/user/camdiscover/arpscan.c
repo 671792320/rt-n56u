@@ -28,6 +28,7 @@
 #define MAC_TEXT_LEN 32
 #define IP_TEXT_LEN 16
 #define BUF_SIZE 2048
+#define ETH_FRAME_MIN 60
 
 typedef struct {
     unsigned int network;
@@ -160,7 +161,7 @@ static int same_mac(const unsigned char *a, const unsigned char *b)
 static int send_arp_request(int fd, int ifindex, const unsigned char src_mac[6],
                             unsigned int src_ip, unsigned int target_ip)
 {
-    unsigned char frame[ETH_HLEN + 28];
+    unsigned char frame[ETH_FRAME_MIN];
     struct ethhdr *eth = (struct ethhdr *)frame;
     struct arphdr *arp = (struct arphdr *)(frame + ETH_HLEN);
     unsigned char *p = frame + ETH_HLEN + sizeof(struct arphdr);
@@ -214,7 +215,7 @@ static void handle_arp(const unsigned char *buf, int len,
 
     p = buf + ETH_HLEN + sizeof(struct arphdr);
     memcpy(&sender_ip, p + 6, 4);
-    if (sender_ip == self_ip || same_mac(p, self_mac))
+    if (ntohl(sender_ip) == self_ip || same_mac(p, self_mac))
         return;
 
     ipv4_text(ntohl(sender_ip), ip, sizeof(ip));
