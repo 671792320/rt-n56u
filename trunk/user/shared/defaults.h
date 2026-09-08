@@ -37,11 +37,19 @@
 
 #define DEF_WLAN_2G_CC		"CN"
 #define DEF_WLAN_5G_CC		"US"
+
+#if defined(BOARD_ZTE_Q7)
+/* Q7使用设备LAN MAC最后四位生成默认无线名称。 */
+#define DEF_WLAN_2G_SSID	"@seetong-IPCtest-utp2_%s"
+#define DEF_WLAN_2G_PSK		"88888888"
+#else
 #define DEF_WLAN_2G_SSID	BOARD_PID "_%s"
+#define DEF_WLAN_2G_PSK		"1234567890"
+#endif
+
 #define DEF_WLAN_5G_SSID	BOARD_PID "_5G_%s"
 #define DEF_WLAN_2G_GSSID	BOARD_PID "_GUEST_%s"
 #define DEF_WLAN_5G_GSSID	BOARD_PID "_GUEST_5G_%s"
-#define DEF_WLAN_2G_PSK		"1234567890"
 #define DEF_WLAN_5G_PSK		"1234567890"
 
 #define DEF_ROOT_PASSWORD	"admin"
