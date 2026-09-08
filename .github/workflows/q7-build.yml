@@ -121,6 +121,43 @@ jobs:
           PY
           grep -A3 'args="-i $iface' trunk/user/lan_autodiscover/lan_autodiscover.sh
 
+      - name: 修复LAN设备WebUI数据同步
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 后端设备主库仍然保存在/tmp文本文件；增加Web专用快照，避免WebUI读取时与写库过程竞争。
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          s = s.replace('DEVICE_DB=/tmp/lan_discovery_devices.txt\n', 'DEVICE_DB=/tmp/lan_discovery_devices.txt\nWEB_DEVICE_DB=/tmp/lan_discovery_devices_web.txt\n', 1)
+          old = '''sync_device_cache() {\n    sort_device_db\n    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"\n    runtime_set "lan_discovery_status_count=${count:-0}"\n}'''
+          new = '''sync_device_cache() {\n    sort_device_db\n    count="$(grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null | grep -v 'type=SUBNET ' | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"\n    runtime_set "lan_discovery_status_count=${count:-0}"\n    # WebUI读取独立快照，避免直接读取正在更新的主设备数据库。\n    tmp="${WEB_DEVICE_DB}.tmp"\n    if [ -f "$DEVICE_DB" ]; then\n        grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null > "$tmp" || :\n        mv -f "$tmp" "$WEB_DEVICE_DB"\n    else\n        : > "$WEB_DEVICE_DB"\n    fi\n}'''
+          if old not in s:
+              raise SystemExit('设备缓存同步代码块未找到')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('trunk/user/httpd/web_ex.c')
+          s = p.read_text()
+          old = 'fp = fopen("/tmp/lan_discovery_devices.txt", "r");'
+          new = 'fp = fopen("/tmp/lan_discovery_devices_web.txt", "r");\n\tif (!fp)\n\t\tfp = fopen("/tmp/lan_discovery_devices.txt", "r");'
+          if old not in s:
+              raise SystemExit('WebUI设备列表读取代码未找到')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text()
+          old = "var initialNet=initial_status.ip&&/^(\\d+\\.){3}\\d+$/.test(initial_status.ip)?initial_status.ip.split('.').slice(0,3).join('.')+'.0':'';"
+          new = "var initialIp=String(initial_status.ip||'').split('/')[0];var initialNet=initialIp&&/^(\\d+\\.){3}\\d+$/.test(initialIp)?initialIp.split('.').slice(0,3).join('.')+'.0':'';"
+          if old not in s:
+              raise SystemExit('IP矩阵初始网段解析代码未找到')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -n 'WEB_DEVICE_DB' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -n 'lan_discovery_devices_web' trunk/user/httpd/web_ex.c
+          grep -n 'initialIp=' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+
       - name: Build ZTE_Q7
         shell: bash
         run: |
