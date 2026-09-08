@@ -63,6 +63,7 @@ jobs:
           test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/user/netmgr/netmgr.c
@@ -98,7 +99,7 @@ jobs:
           p = Path('trunk/user/httpd/httpd.c')
           s = p.read_text()
           old = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\tif (login_ip.len == 0)\n\t\treturn 2;\n\n\tif (is_uaddr_equal(&login_ip, ip_now))\n\t\treturn 3;\n\n\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {\n\t\treset_login_data();\n\t\treturn 2;\n\t}\n\n\treturn 0;\n}\n'''
-          new = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\t/*\n\t * 取消Web管理端“单客户端登录”限制。\n\t * 每个HTTP请求仍由auth_check()独立校验用户名和密码，\n\t * 因此允许多个不同客户端同时登录不会绕过认证。\n\t */\n\treturn 2;\n}\n'''
+          new = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\t/*\n\t * 取消Web管理端“单客户端登录”限制。\n\t * 每个HTTP请求仍由auth_check()独立校验用户名和密码。\n\t */\n\treturn 2;\n}\n'''
           if old not in s:
               raise SystemExit('Web登录限制代码块未找到，拒绝继续构建')
           p.write_text(s.replace(old, new, 1))
@@ -121,6 +122,166 @@ jobs:
           PY
           grep -A3 'args="-i $iface' trunk/user/lan_autodiscover/lan_autodiscover.sh
 
+      - name: 接入LAN目标网段空闲IP与协议发现源地址
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) lan_autodiscover：ARP得到目标网段后，选择空闲IP作为br0 secondary地址。
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+
+          marker = '''run_dhcp_detect() {'''
+          if 'select_target_subnet() {' not in s:
+              helper = r'''select_target_subnet() {
+    iface="$1"
+    local_ip="$(iface_ipv4 "$iface" | cut -d/ -f1)"
+    local_net="$(printf '%s\n' "$local_ip" | awk -F. 'NF==4 {printf "%d.%d.%d.0",$1,$2,$3}')"
+
+    # 优先使用DHCP探测得到的网关所在网段。
+    gateway="$(grep -m1 '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
+    if [ -n "$gateway" ]; then
+        net="$(printf '%s\n' "$gateway" | awk -F. 'NF==4 {printf "%d.%d.%d.0",$1,$2,$3}')"
+        if [ -n "$net" ] && [ "$net" != "$local_net" ] && grep -q "DEVICE type=SUBNET IP=$net INFO=24" "$DEVICE_DB" 2>/dev/null; then
+            printf '%s' "$net"
+            return 0
+        fi
+    fi
+
+    awk -v local_net="$local_net" '/^DEVICE type=SUBNET / {ip=""; for(i=1;i<=NF;i++) if($i ~ /^IP=/){ip=substr($i,4); break} if(ip != "" && ip != local_net){print ip; exit}}' "$DEVICE_DB" 2>/dev/null
+}
+
+ensure_lan_takeover() {
+    iface="$1"
+    [ -x /usr/bin/lan_takeover.sh ] || { log_line "LAN临时接管程序不存在"; return 0; }
+    target_net="$(select_target_subnet "$iface")"
+    if [ -z "$target_net" ]; then
+        runtime_set "lan_discovery_status_target_network="
+        runtime_set "lan_discovery_status_target_ip="
+        runtime_set "lan_discovery_status_target_iface="
+        return 0
+    fi
+    current_target="$(cat "$RUNTIME_DIR/lan_discovery_status_target_network" 2>/dev/null)"
+    current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
+    if [ "$current_target" = "$target_net/24" ] && [ -n "$current_ip" ] && ip -4 addr show dev br0 2>/dev/null | grep -q " $current_ip/24 "; then
+        return 0
+    fi
+    runtime_set "lan_discovery_status_state=LAN目标网段接管"
+    /usr/bin/lan_takeover.sh "$iface" "$target_net" >> "$LOG_FILE" 2>&1 || log_line "LAN目标网段接管失败：$target_net/24"
+}
+
+cleanup_takeover() {
+    [ -x /usr/bin/lan_takeover.sh ] || return 0
+    /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :
+}
+
+'''
+              if marker not in s:
+                  raise SystemExit('DHCP函数插入点未找到')
+              s = s.replace(marker, helper + marker, 1)
+
+          old_call = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
+          new_call = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        ensure_lan_takeover "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
+          if old_call not in s:
+              raise SystemExit('发现循环插入点未找到')
+          s = s.replace(old_call, new_call, 1)
+
+          old_cleanup = '''cleanup() {\n    stop_health\n    rm -f "$CUSTOM_TMP" "$CUSTOM_CONF" "$DHCP_LOG" "$ARP_LOG" "$CAM_LOG"\n    rmdir "$LOCKDIR" 2>/dev/null\n}'''
+          new_cleanup = '''cleanup() {\n    stop_health\n    cleanup_takeover\n    rm -f "$CUSTOM_TMP" "$CUSTOM_CONF" "$DHCP_LOG" "$ARP_LOG" "$CAM_LOG"\n    rmdir "$LOCKDIR" 2>/dev/null\n}'''
+          if old_cleanup not in s:
+              raise SystemExit('cleanup代码块未找到')
+          s = s.replace(old_cleanup, new_cleanup, 1)
+          p.write_text(s)
+
+          # 2) camdiscover：增加显式源IP，协议探测使用目标LAN secondary地址。
+          p = Path('trunk/user/camdiscover/camdiscover.c')
+          s = p.read_text()
+          old_struct = 'struct discover_ctx { int fd_onvif,fd_ssdp,fd_hik,fd_dahua,fd_raw; const char *ifname; unsigned int ifindex; struct custom_probe custom[MAX_CUSTOM]; int custom_count; };'
+          new_struct = 'struct discover_ctx { int fd_onvif,fd_ssdp,fd_hik,fd_dahua,fd_raw; const char *ifname; unsigned int ifindex; struct in_addr source_addr; int has_source_addr; struct custom_probe custom[MAX_CUSTOM]; int custom_count; };'
+          if old_struct not in s:
+              raise SystemExit('discover_ctx结构未找到')
+          s = s.replace(old_struct, new_struct, 1)
+
+          old_recv = '''static int make_udp_receiver(const char *group,int port,unsigned int ifindex){\n    int fd,reuse=1,ttl=2,loop=0; struct sockaddr_in b; struct ip_mreqn m,mi;\n    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return -1;\n    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));\n    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port); b.sin_addr.s_addr=htonl(INADDR_ANY);\n    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return -1;}\n    memset(&mi,0,sizeof(mi)); mi.imr_ifindex=(int)ifindex;\n    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_IF,&mi,sizeof(mi));\n    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_TTL,&ttl,sizeof(ttl));\n    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_LOOP,&loop,sizeof(loop));\n    memset(&m,0,sizeof(m)); if(!inet_aton(group,&m.imr_multiaddr)){close(fd);return -1;}\n    m.imr_ifindex=(int)ifindex;\n    if(setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))<0){close(fd);return -1;}\n    return fd;\n}'''
+          new_recv = '''static int make_udp_receiver(const char *group,int port,unsigned int ifindex,const struct in_addr *source_addr,int has_source){\n    int fd,reuse=1,ttl=2,loop=0; struct sockaddr_in b; struct ip_mreqn m,mi;\n    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return -1;\n    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));\n    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port);\n    b.sin_addr.s_addr = (has_source && source_addr) ? source_addr->s_addr : htonl(INADDR_ANY);\n    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return -1;}\n    memset(&mi,0,sizeof(mi)); if(has_source&&source_addr)mi.imr_address=*source_addr; mi.imr_ifindex=(int)ifindex;\n    if(setsockopt(fd,IPPROTO_IP,IP_MULTICAST_IF,&mi,sizeof(mi))<0) { /* 继续，部分旧内核仅接受ifindex */ }\n    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_TTL,&ttl,sizeof(ttl));\n    setsockopt(fd,IPPROTO_IP,IP_MULTICAST_LOOP,&loop,sizeof(loop));\n    memset(&m,0,sizeof(m)); if(!inet_aton(group,&m.imr_multiaddr)){close(fd);return -1;}\n    if(has_source&&source_addr)m.imr_address=*source_addr; m.imr_ifindex=(int)ifindex;\n    if(setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))<0){close(fd);return -1;}\n    return fd;\n}'''
+          if old_recv not in s:
+              raise SystemExit('make_udp_receiver代码块未找到')
+          s = s.replace(old_recv, new_recv, 1)
+
+          old_custom_recv = '''static int make_custom_receiver(int port){\n    int fd,reuse=1; struct sockaddr_in b;\n    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return -1;\n    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));\n    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port); b.sin_addr.s_addr=htonl(INADDR_ANY);\n    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return -1;}\n    return fd;\n}'''
+          new_custom_recv = '''static int make_custom_receiver(const char *addr,int port,unsigned int ifindex,const struct in_addr *source_addr,int has_source){\n    int fd,reuse=1,bcast=1; struct sockaddr_in b;\n    fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return -1;\n    setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));\n    setsockopt(fd,SOL_SOCKET,SO_BROADCAST,&bcast,sizeof(bcast));\n    memset(&b,0,sizeof(b)); b.sin_family=AF_INET; b.sin_port=htons((unsigned short)port);\n    b.sin_addr.s_addr=(has_source&&source_addr)?source_addr->s_addr:htonl(INADDR_ANY);\n    if(bind(fd,(struct sockaddr*)&b,sizeof(b))<0){close(fd);return -1;}\n    if(addr){\n        struct in_addr group;\n        if(inet_aton(addr,&group) && (ntohl(group.s_addr)>=0xe0000000U && ntohl(group.s_addr)<=0xefffffffU)){\n            struct ip_mreqn m; memset(&m,0,sizeof(m)); m.imr_multiaddr=group; if(has_source&&source_addr)m.imr_address=*source_addr; m.imr_ifindex=(int)ifindex;\n            if(setsockopt(fd,IPPROTO_IP,IP_ADD_MEMBERSHIP,&m,sizeof(m))<0){close(fd);return -1;}\n        }\n    }\n    return fd;\n}'''
+          if old_custom_recv not in s:
+              raise SystemExit('make_custom_receiver代码块未找到')
+          s = s.replace(old_custom_recv, new_custom_recv, 1)
+
+          old_send = 'static int send_to_addr(int fd,const char *addr,int port,const char *data,size_t len){\n    struct sockaddr_in d; ssize_t n; memset(&d,0,sizeof(d)); d.sin_family=AF_INET; d.sin_port=htons((unsigned short)port);\n    if(!inet_aton(addr,&d.sin_addr))return -1; n=sendto(fd,data,len,0,(struct sockaddr*)&d,sizeof(d)); return n==(ssize_t)len?0:-1;\n}'
+          new_send = 'static int send_to_addr(int fd,const char *addr,int port,const char *data,size_t len){\n    struct sockaddr_in d; ssize_t n; memset(&d,0,sizeof(d)); d.sin_family=AF_INET; d.sin_port=htons((unsigned short)port);\n    if(!inet_aton(addr,&d.sin_addr))return -1; n=sendto(fd,data,len,0,(struct sockaddr*)&d,sizeof(d)); return n==(ssize_t)len?0:-1;\n}\nstatic int bind_source_if_needed(int fd,const struct in_addr *source_addr,int has_source){\n    if(!has_source||!source_addr)return 0;\n    { struct sockaddr_in s; memset(&s,0,sizeof(s)); s.sin_family=AF_INET; s.sin_addr=*source_addr; if(bind(fd,(struct sockaddr*)&s,sizeof(s))<0)return -1; }\n    return 0;\n}'
+          if old_send not in s:
+              raise SystemExit('send_to_addr代码块未找到')
+          s = s.replace(old_send, new_send, 1)
+
+          old_custom_load = 'c->custom[i].fd=make_custom_receiver(c->custom[i].port);'
+          new_custom_load = 'c->custom[i].fd=make_custom_receiver(c->custom[i].addr,c->custom[i].port,c->ifindex,c->has_source_addr?&c->source_addr:0,c->has_source_addr);'
+          if old_custom_load not in s:
+              raise SystemExit('custom receiver调用未找到')
+          s = s.replace(old_custom_load, new_custom_load, 1)
+
+          old_send_custom = 'static void send_custom_probes(struct discover_ctx *c){\n    int fd,i,rc; for(i=0;i<c->custom_count;i++){fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)continue;rc=send_to_addr(fd,c->custom[i].addr,c->custom[i].port,c->custom[i].payload,strlen(c->custom[i].payload));printf("[camdiscover] custom %s probe %s\\n",c->custom[i].name,rc==0?"sent":"FAILED");fflush(stdout);close(fd);}\n}'
+          new_send_custom = 'static void send_custom_probes(struct discover_ctx *c){\n    int fd,i,rc; for(i=0;i<c->custom_count;i++){fd=socket(AF_INET,SOCK_DGRAM,0);if(fd<0)continue;if(bind_source_if_needed(fd,c->has_source_addr?&c->source_addr:0,c->has_source_addr)<0){close(fd);continue;}rc=send_to_addr(fd,c->custom[i].addr,c->custom[i].port,c->custom[i].payload,strlen(c->custom[i].payload));printf("[camdiscover] custom %s probe %s\\n",c->custom[i].name,rc==0?"sent":"FAILED");fflush(stdout);close(fd);}\n}'
+          if old_send_custom not in s:
+              raise SystemExit('send_custom_probes代码块未找到')
+          s = s.replace(old_send_custom, new_send_custom, 1)
+
+          old_main = 'int main(int argc,char **argv){\n    struct discover_ctx c; const char *ifname=NULL,*custom_path=NULL; int timeout=10,onvif=1,ssdp=1,hik=1,dahua=1,raw=1,onvif_port=ONVIF_PORT,ssdp_port=SSDP_PORT,hik_port=HIK_PORT,dahua_port=DAHUA_PORT,opt,rc;'
+          new_main = 'int main(int argc,char **argv){\n    struct discover_ctx c; const char *ifname=NULL,*custom_path=NULL,*source_text=NULL; int timeout=10,onvif=1,ssdp=1,hik=1,dahua=1,raw=1,onvif_port=ONVIF_PORT,ssdp_port=SSDP_PORT,hik_port=HIK_PORT,dahua_port=DAHUA_PORT,opt,rc;'
+          if old_main not in s:
+              raise SystemExit('camdiscover main签名未找到')
+          s = s.replace(old_main, new_main, 1)
+
+          old_getopt = 'while((opt=getopt(argc,argv,"i:t:o:s:k:d:O:S:H:D:A:C:"))!=-1)'
+          new_getopt = 'while((opt=getopt(argc,argv,"i:t:o:s:k:d:O:S:H:D:A:C:I:"))!=-1)'
+          if old_getopt not in s:
+              raise SystemExit('camdiscover getopt未找到')
+          s = s.replace(old_getopt, new_getopt, 1)
+
+          old_switch = 'case '\''C'\'':custom_path=optarg;break;default:break;}}'
+          new_switch = 'case '\''C'\'':custom_path=optarg;break;case '\''I'\'':source_text=optarg;break;default:break;}}'
+          if old_switch not in s:
+              raise SystemExit('camdiscover C参数分支未找到')
+          s = s.replace(old_switch, new_switch, 1)
+
+          old_init = 'memset(&c,0,sizeof(c)); c.fd_onvif=c.fd_ssdp=c.fd_hik=c.fd_dahua=c.fd_raw=-1;'
+          new_init = 'memset(&c,0,sizeof(c)); c.fd_onvif=c.fd_ssdp=c.fd_hik=c.fd_dahua=c.fd_raw=-1; c.has_source_addr=0; if(source_text&&inet_aton(source_text,&c.source_addr)) c.has_source_addr=1;'
+          if old_init not in s:
+              raise SystemExit('camdiscover初始化代码未找到')
+          s = s.replace(old_init, new_init, 1)
+
+          old_receivers = 'if(onvif)c.fd_onvif=make_udp_receiver(ONVIF_ADDR,onvif_port,c.ifindex);\n    if(ssdp)c.fd_ssdp=make_udp_receiver(SSDP_ADDR,ssdp_port,c.ifindex);\n    if(hik)c.fd_hik=make_udp_receiver(HIK_ADDR,hik_port,c.ifindex);\n    if(dahua)c.fd_dahua=make_udp_receiver(DAHUA_ADDR,dahua_port,c.ifindex);'
+          new_receivers = 'if(onvif)c.fd_onvif=make_udp_receiver(ONVIF_ADDR,onvif_port,c.ifindex,c.has_source_addr?&c.source_addr:0,c.has_source_addr);\n    if(ssdp)c.fd_ssdp=make_udp_receiver(SSDP_ADDR,ssdp_port,c.ifindex,c.has_source_addr?&c.source_addr:0,c.has_source_addr);\n    if(hik)c.fd_hik=make_udp_receiver(HIK_ADDR,hik_port,c.ifindex,c.has_source_addr?&c.source_addr:0,c.has_source_addr);\n    if(dahua)c.fd_dahua=make_udp_receiver(DAHUA_ADDR,dahua_port,c.ifindex,c.has_source_addr?&c.source_addr:0,c.has_source_addr);'
+          if old_receivers not in s:
+              raise SystemExit('标准UDP接收器调用未找到')
+          s = s.replace(old_receivers, new_receivers, 1)
+
+          old_log = 'fprintf(stdout,"[camdiscover] iface=%s ifindex=%u timeout=%d\\n",c.ifname,c.ifindex,timeout);fflush(stdout);'
+          new_log = 'fprintf(stdout,"[camdiscover] iface=%s ifindex=%u timeout=%d source=%s\\n",c.ifname,c.ifindex,timeout,c.has_source_addr?source_text:"auto");fflush(stdout);'
+          if old_log not in s:
+              raise SystemExit('camdiscover启动日志未找到')
+          s = s.replace(old_log, new_log, 1)
+
+          # 每个标准探测 socket 负责接收，同时将发送socket绑定到目标LAN source。
+          old_probe_onvif = 'if(c.fd_onvif>=0){rc=send_onvif_probe(c.fd_onvif,onvif_port);printf("[camdiscover] ONVIF probe %s\\n",rc==0?"sent":"FAILED");}'
+          new_probe_onvif = 'if(c.fd_onvif>=0){rc=send_onvif_probe(c.fd_onvif,onvif_port);printf("[camdiscover] ONVIF probe %s\\n",rc==0?"sent":"FAILED");}'
+          if old_probe_onvif not in s:
+              raise SystemExit('ONVIF探测发送代码未找到')
+          # 发送仍复用接收socket，已经在receiver里绑定source IP，因此无需进一步改。
+
+          p.write_text(s)
+          PY
+          grep -n 'select_target_subnet\|ensure_lan_takeover\|cleanup_takeover' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -n 'source_text\|make_udp_receiver.*source' trunk/user/camdiscover/camdiscover.c
+
       - name: 修复LAN设备WebUI数据同步
         shell: bash
         run: |
@@ -128,12 +289,11 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # 后端设备主库仍然保存在/tmp文本文件；增加Web专用快照，避免WebUI读取时与写库过程竞争。
           p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
           s = p.read_text()
           s = s.replace('DEVICE_DB=/tmp/lan_discovery_devices.txt\n', 'DEVICE_DB=/tmp/lan_discovery_devices.txt\nWEB_DEVICE_DB=/tmp/lan_discovery_devices_web.txt\n', 1)
           old = '''sync_device_cache() {\n    sort_device_db\n    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"\n    runtime_set "lan_discovery_status_count=${count:-0}"\n}'''
-          new = '''sync_device_cache() {\n    sort_device_db\n    count="$(grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null | grep -v 'type=SUBNET ' | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"\n    runtime_set "lan_discovery_status_count=${count:-0}"\n    # WebUI读取独立快照，避免直接读取正在更新的主设备数据库。\n    tmp="${WEB_DEVICE_DB}.tmp"\n    if [ -f "$DEVICE_DB" ]; then\n        grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null > "$tmp" || :\n        mv -f "$tmp" "$WEB_DEVICE_DB"\n    else\n        : > "$WEB_DEVICE_DB"\n    fi\n}'''
+          new = '''sync_device_cache() {\n    sort_device_db\n    count="$(grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null | grep -v 'type=SUBNET ' | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"\n    runtime_set "lan_discovery_status_count=${count:-0}"\n    tmp="${WEB_DEVICE_DB}.tmp"\n    if [ -f "$DEVICE_DB" ]; then\n        grep '^DEVICE type=' "$DEVICE_DB" 2>/dev/null > "$tmp" || :\n        mv -f "$tmp" "$WEB_DEVICE_DB"\n    else\n        : > "$WEB_DEVICE_DB"\n    fi\n}'''
           if old not in s:
               raise SystemExit('设备缓存同步代码块未找到')
           p.write_text(s.replace(old, new, 1))
