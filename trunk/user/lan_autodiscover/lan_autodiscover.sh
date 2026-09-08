@@ -72,6 +72,66 @@ ensure_defaults() {
     [ -n "$(nv lan_discovery_dahua_port)" ] || nvram set lan_discovery_dahua_port=37810
     [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
 }
+
+# 从统一“自定义接口”中读取标准探测配置。
+# 标准格式：名称|端口|启用；说明行以#开头，普通自定义UDP不参与标准配置。
+read_custom_builtin() {
+    custom="$1"
+    onvif_enable=0; onvif_port=3702
+    ssdp_enable=0; ssdp_port=1900
+    hik_enable=0; hik_port=37020
+    dahua_enable=0; dahua_port=37810
+    arp_enable=0
+
+    printf '%s\n' "$custom" | while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        case "$row" in \#*) continue;; esac
+        oldifs="$IFS"; IFS='|'; set -- $row; IFS="$oldifs"
+        name="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+        port="${2:-0}"; enable="${3:-0}"
+        [ "$enable" = "1" ] || enable=0
+        case "$name" in
+            onvif) onvif_enable=1; onvif_port="$port";;
+            ssdp) ssdp_enable=1; ssdp_port="$port";;
+            hik|hik-sadp) hik_enable=1; hik_port="$port";;
+            dahua|dahua-dhip) dahua_enable=1; dahua_port="$port";;
+            arp) arp_enable=1;;
+        esac
+        printf '%s\n' "__CUSTOM_CFG__ $name $port $enable"
+    done
+}
+
+get_standard_config() {
+    custom="$(nv lan_discovery_custom)"
+    # 先使用统一自定义接口；若其中没有标准配置，则兼容旧NVRAM。
+    cfg_lines="$(read_custom_builtin "$custom")"
+    have_standard=0
+    printf '%s\n' "$cfg_lines" | grep -q '^__CUSTOM_CFG__ ' && have_standard=1
+    if [ "$have_standard" = "1" ]; then
+        onvif="$(printf '%s\n' "$cfg_lines" | awk '$2=="onvif" {v=$4} END{print v+0}')"
+        onvif_port="$(printf '%s\n' "$cfg_lines" | awk '$2=="onvif" {v=$3} END{print v+3702}')"
+        ssdp="$(printf '%s\n' "$cfg_lines" | awk '$2=="ssdp" {v=$4} END{print v+0}')"
+        ssdp_port="$(printf '%s\n' "$cfg_lines" | awk '$2=="ssdp" {v=$3} END{print v+1900}')"
+        hik="$(printf '%s\n' "$cfg_lines" | awk '$2=="hik" {v=$4} END{print v+0}')"
+        hik_port="$(printf '%s\n' "$cfg_lines" | awk '$2=="hik" {v=$3} END{print v+37020}')"
+        dahua="$(printf '%s\n' "$cfg_lines" | awk '$2=="dahua" {v=$4} END{print v+0}')"
+        dahua_port="$(printf '%s\n' "$cfg_lines" | awk '$2=="dahua" {v=$3} END{print v+37810}')"
+        raw="$(printf '%s\n' "$cfg_lines" | awk '$2=="arp" {v=$4} END{print v+0}')"
+    else
+        onvif="$(cfg lan_discovery_onvif 1)"; onvif_port="$(cfg lan_discovery_onvif_port 3702)"
+        ssdp="$(cfg lan_discovery_ssdp 1)"; ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
+        hik="$(cfg lan_discovery_hik 1)"; hik_port="$(cfg lan_discovery_hik_port 37020)"
+        dahua="$(cfg lan_discovery_dahua 1)"; dahua_port="$(cfg lan_discovery_dahua_port 37810)"
+        raw="$(cfg lan_discovery_raw 1)"
+    fi
+
+    case "$onvif" in 1) ;; *) onvif=0;; esac
+    case "$ssdp" in 1) ;; *) ssdp=0;; esac
+    case "$hik" in 1) ;; *) hik=0;; esac
+    case "$dahua" in 1) ;; *) dahua=0;; esac
+    case "$raw" in 1) ;; *) raw=0;; esac
+}
+
 clean_device_line() {
     raw="$(sanitize_text "$1" | sed 's/\\//g')"
     type="$(printf '%s\n' "$raw" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
@@ -227,10 +287,6 @@ sync_device_cache() {
     count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
     runtime_set lan_discovery_status_count="${count:-0}"
 }
-reset_device_db() {
-    : > "$DEVICE_DB"
-    runtime_set lan_discovery_status_count="0"
-}
 clear_subnet_records() {
     [ -f "$DEVICE_DB" ] || return
     tmp="${DEVICE_DB}.tmp"
@@ -246,11 +302,7 @@ append_device() {
 
     old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
     tmp="${DEVICE_DB}.tmp"
-    : > "$tmp"
-    awk -v ip="$ip" '$0 ~ /type=IP_CONFLICT / {next} index($0," IP=" ip " ")!=0 || index($0," IP=" ip)==0 {if (index($0," IP=" ip " ")!=0 || index($0," IP=" ip "")==0) print}' "$DEVICE_DB" 2>/dev/null > "$tmp"
-    # 上面的条件保持历史其它IP记录，同时排除同IP旧记录。
-    awk -v ip="$ip" 'BEGIN{} {if ($0 ~ /type=IP_CONFLICT /) next; if (index($0," IP=" ip " ") != 0) next; print}' "$DEVICE_DB" 2>/dev/null > "${tmp}.base"
-    mv -f "${tmp}.base" "$tmp"
+    awk -v ip="$ip" 'BEGIN{} {if ($0 ~ /type=IP_CONFLICT /) next; if (index($0," IP=" ip " ") != 0) next; print}' "$DEVICE_DB" 2>/dev/null > "$tmp"
     printf '%s\n' "$clean" >> "$tmp"
     if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] && [ -n "$new_mac" ] && [ "$new_mac" != "-" ] && [ "$old_mac" != "$new_mac" ]; then
         printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s\n' "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
@@ -261,51 +313,36 @@ append_device() {
 }
 register_subnet_from_ip() {
     ip="$1"
-    case "$ip" in
-        *.*.*.*) ;;
-        *) return;;
-    esac
+    case "$ip" in *.*.*.*) ;; *) return;; esac
     subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0<=255 && $3+0<=255 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}')"
     [ -n "$subnet" ] || return
-    if ! grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null; then
-        append_device "DEVICE type=SUBNET IP=${subnet} INFO=24"
-    fi
+    if ! grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null; then append_device "DEVICE type=SUBNET IP=${subnet} INFO=24"; fi
 }
 register_subnet_from_device_line() {
-    line="$1"
-    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
-    [ "$type" = "SUBNET" ] && return
-    ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
-    [ -n "$ip" ] && register_subnet_from_ip "$ip"
+    line="$1"; type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"; [ "$type" = "SUBNET" ] && return
+    ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"; [ -n "$ip" ] && register_subnet_from_ip "$ip"
 }
 
 run_arpscan() {
     iface="$1"
-    [ "$(cfg lan_discovery_raw 1)" = "1" ] || return 0
+    get_standard_config
+    [ "$raw" = "1" ] || return 0
     [ -x /usr/bin/arpscan ] || { log_line "主动ARP扫描程序不存在"; return 0; }
-
-    args="-i $iface -t 1"
-    subnet_count=0
+    args="-i $iface -t 2"; subnet_count=0
     while IFS= read -r row; do
         [ -n "$row" ] || continue
         network="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([0-9.]*\) INFO=\([0-9][0-9]*\).*/\1\/\2/p')"
         [ -n "$network" ] || continue
-        args="$args -s $network"
-        subnet_count=$((subnet_count + 1))
+        args="$args -s $network"; subnet_count=$((subnet_count + 1))
     done <<EOF
 $(grep '^DEVICE type=SUBNET ' "$DEVICE_DB" 2>/dev/null)
 EOF
-
     runtime_set lan_discovery_status_state="主动ARP扫描"
     log_line "开始主动ARP扫描，已知网段 ${subnet_count} 个"
     : > /tmp/arpscan_lan.log
-    /usr/bin/arpscan $args > /tmp/arpscan_lan.log 2>&1 &
-    pid=$!
+    /usr/bin/arpscan $args > /tmp/arpscan_lan.log 2>&1 & pid=$!
     while kill -0 "$pid" 2>/dev/null; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            kill "$pid" 2>/dev/null
-            return 0
-        fi
+        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then kill "$pid" 2>/dev/null; return 0; fi
         if [ -f /tmp/arpscan_lan.log ]; then
             while IFS= read -r line; do
                 [ -n "$line" ] || continue
@@ -316,8 +353,7 @@ EOF
                             register_subnet_from_device_line "$line"
                             clean="$(append_device "$line")"
                             [ -n "$clean" ] && log_line "发现设备：$clean"
-                        fi
-                        ;;
+                        fi;;
                     \[arpscan\]*) log_line "$line";;
                 esac
             done < /tmp/arpscan_lan.log
@@ -330,124 +366,47 @@ EOF
 
 run_discovery() {
     iface="$1"
-    dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
-    dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
-    discover_enable="$(cfg lan_discovery_discover_enable 1)"
-
-    runtime_set lan_discovery_status_state="DHCP检测"
-    log_line "LAN口已插入 $iface"
-    start_health "$iface"
+    dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"; dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"; discover_enable="$(cfg lan_discovery_discover_enable 1)"
+    runtime_set lan_discovery_status_state="DHCP检测"; log_line "LAN口已插入 $iface"; start_health "$iface"
     : > /tmp/dhcpdetect_lan.log
     if [ "$dhcp_enable" = "1" ] && [ -x /usr/bin/dhcpdetect ]; then
-        /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1
-        rc=$?
+        /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1; rc=$?
         if [ "$rc" = "0" ]; then
             line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
-            gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
-            server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
-            if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-                runtime_set lan_discovery_status_dhcp="网关 $gateway"
-                log_line "上级DHCP：网关 $gateway"
-            elif [ -n "$server" ] && [ "$server" != "-" ]; then
-                runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
-                log_line "上级DHCP：服务器 $server，未提供网关"
-            else
-                runtime_set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"
-                log_line "上级DHCP已发现，但报文未提供网关"
-            fi
-        else
-            runtime_set lan_discovery_status_dhcp="未发现DHCP"
-            log_line "未发现DHCP"
-        fi
-    else
-        runtime_set lan_discovery_status_dhcp="未启用"
-    fi
+            gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"; server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
+            if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then runtime_set lan_discovery_status_dhcp="网关 $gateway"; log_line "上级DHCP：网关 $gateway"; elif [ -n "$server" ] && [ "$server" != "-" ]; then runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"; log_line "上级DHCP：服务器 $server，未提供网关"; else runtime_set lan_discovery_status_dhcp="已发现DHCP（无网关信息）"; log_line "上级DHCP已发现，但报文未提供网关"; fi
+        else runtime_set lan_discovery_status_dhcp="未发现DHCP"; log_line "未发现DHCP"; fi
+    else runtime_set lan_discovery_status_dhcp="未启用"; fi
 
-    if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then
-        runtime_set lan_discovery_status_state="设备发现未启用"
-        return
-    fi
-
-    # 网线重新插入时保留设备列表，但重新建立本次现场的网段集合，避免把上一现场的网段拿来扫描。
-    clear_subnet_records
-    register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"
-    sync_device_cache
-    runtime_set lan_discovery_status_state="持续设备发现"
+    if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then runtime_set lan_discovery_status_state="设备发现未启用"; return; fi
+    clear_subnet_records; register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"; sync_device_cache; runtime_set lan_discovery_status_state="持续设备发现"
 
     while is_link_up "$iface"; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            log_line "设备发现已关闭，停止设备发现进程"
-            break
-        fi
-
-        discover_cycle="$(cfg lan_discovery_cycle 10)"
-        case "$discover_cycle" in
-            ''|*[!0-9]*) discover_cycle=10;;
-        esac
-        [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
-        [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
-        onvif="$(cfg lan_discovery_onvif 1)"
-        ssdp="$(cfg lan_discovery_ssdp 1)"
-        hik="$(cfg lan_discovery_hik 1)"
-        dahua="$(cfg lan_discovery_dahua 1)"
-        raw="$(cfg lan_discovery_raw 1)"
-        onvif_port="$(cfg lan_discovery_onvif_port 3702)"
-        ssdp_port="$(cfg lan_discovery_ssdp_port 1900)"
-        hik_port="$(cfg lan_discovery_hik_port 37020)"
-        dahua_port="$(cfg lan_discovery_dahua_port 37810)"
-        custom="$(nv lan_discovery_custom)"
-        probe_timeout=5
-        [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"
-        [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
+        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then runtime_set lan_discovery_status_state="设备发现未启用"; log_line "设备发现已关闭，停止设备发现进程"; break; fi
+        discover_cycle="$(cfg lan_discovery_cycle 10)"; case "$discover_cycle" in ''|*[!0-9]*) discover_cycle=10;; esac
+        [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1; [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
+        get_standard_config
+        custom="$(nv lan_discovery_custom)"; probe_timeout=5; [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"; [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
         round_start="$(date +%s)"
 
-        if [ "$raw" = "1" ]; then
-            run_arpscan "$iface"
-        fi
-
+        if [ "$raw" = "1" ]; then run_arpscan "$iface"; fi
         log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
-        : > /tmp/camdiscover_lan.log
-        : > /tmp/camdiscover_custom.conf
-        printf '%s\n' "$custom" | while IFS= read -r row; do
-            [ -n "$row" ] || continue
-            printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf
-        done
+        : > /tmp/camdiscover_lan.log; : > /tmp/camdiscover_custom.conf
+        printf '%s\n' "$custom" | while IFS= read -r row; do case "$row" in ''|\#*) continue;; esac; p1="$(printf '%s' "$row" | awk -F'|' '{print NF}')"; [ "$p1" -ge 5 ] && printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf; done
         args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"
-        [ "$onvif" = "1" ] && args="$args -O"
-        [ "$ssdp" = "1" ] && args="$args -S"
-        [ "$hik" = "1" ] && args="$args -H"
-        [ "$dahua" = "1" ] && args="$args -D"
-        [ "$raw" = "1" ] && args="$args -A"
-        [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
-        /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 &
-        pid=$!
-        last_tail=""
-        stop_discovery=0
+        [ "$onvif" = "1" ] && args="$args -O"; [ "$ssdp" = "1" ] && args="$args -S"; [ "$hik" = "1" ] && args="$args -H"; [ "$dahua" = "1" ] && args="$args -D"; [ "$raw" = "1" ] && args="$args -A"; [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
+        /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 & pid=$!
+        last_tail=""; stop_discovery=0
         while kill -0 "$pid" 2>/dev/null; do
-            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-                stop_discovery=1
-                kill "$pid" 2>/dev/null
-                log_line "设备发现开关已关闭，终止当前探测进程"
-                break
-            fi
+            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then stop_discovery=1; kill "$pid" 2>/dev/null; log_line "设备发现开关已关闭，终止当前探测进程"; break; fi
             if [ -f /tmp/camdiscover_lan.log ]; then
                 current="$(tail -n 25 /tmp/camdiscover_lan.log 2>/dev/null)"
                 if [ "$current" != "$last_tail" ]; then
                     printf '%s\n' "$current" | while IFS= read -r line; do
                         [ -n "$line" ] || continue
                         case "$line" in
-                            DEVICE\ *)
-                                type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
-                                if [ "$type" != "SUBNET" ]; then
-                                    register_subnet_from_device_line "$line"
-                                    clean="$(append_device "$line")"
-                                    [ -n "$clean" ] && log_line "发现设备：$clean"
-                                fi
-                                ;;
-                            *probe\ sent*|*probe\ FAILED*) log_line "$line";;
-                            *listen\ *FAILED*) log_line "$line";;
-                            *probes\ enabled:*) log_line "$line";;
+                            DEVICE\ *) type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"; if [ "$type" != "SUBNET" ]; then register_subnet_from_device_line "$line"; clean="$(append_device "$line")"; [ -n "$clean" ] && log_line "发现设备：$clean"; fi;;
+                            *probe\ sent*|*probe\ FAILED*) log_line "$line";; *listen\ *FAILED*) log_line "$line";; *probes\ enabled:*) log_line "$line";;
                         esac
                     done
                     last_tail="$current"
@@ -456,89 +415,31 @@ run_discovery() {
             sleep 1
         done
         wait "$pid" 2>/dev/null
-        if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            break
-        fi
+        if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then runtime_set lan_discovery_status_state="设备发现未启用"; break; fi
         if ! is_link_up "$iface"; then break; fi
-        elapsed=$(( $(date +%s) - round_start ))
-        wait_seconds=$((discover_cycle - elapsed))
-        [ "$wait_seconds" -lt 0 ] 2>/dev/null && wait_seconds=0
+        elapsed=$(( $(date +%s) - round_start )); wait_seconds=$((discover_cycle - elapsed)); [ "$wait_seconds" -lt 0 ] 2>/dev/null && wait_seconds=0
         log_line "本轮主动探测完成，继续监听，下一轮周期 ${discover_cycle}s"
         while [ "$wait_seconds" -gt 0 ]; do
-            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-                runtime_set lan_discovery_status_state="设备发现未启用"
-                break
-            fi
-            if ! is_link_up "$iface"; then
-                break
-            fi
-            sleep 1
-            wait_seconds=$((wait_seconds - 1))
+            if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then runtime_set lan_discovery_status_state="设备发现未启用"; break; fi
+            if ! is_link_up "$iface"; then break; fi
+            sleep 1; wait_seconds=$((wait_seconds - 1))
         done
     done
-    if [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then
-        runtime_set lan_discovery_status_state="等待接口"
-    else
-        runtime_set lan_discovery_status_state="设备发现未启用"
-    fi
+    if [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]; then runtime_set lan_discovery_status_state="等待接口"; else runtime_set lan_discovery_status_state="设备发现未启用"; fi
 }
 
 ensure_defaults
 refresh_interfaces
-last_iface=""
-last_state="-9"
-last_discover="-9"
-iface_refresh=0
+last_iface=""; last_state="-9"; last_discover="-9"; iface_refresh=0
 while :; do
-    iface_refresh=$((iface_refresh + 1))
-    if [ "$iface_refresh" -ge 5 ]; then refresh_interfaces; iface_refresh=0; fi
-    enable="$(cfg lan_discovery_enable 1)"
-    discover_enable="$(cfg lan_discovery_discover_enable 1)"
-    iface="$(cfg lan_discovery_ifname eth2.1)"
-    if [ "$iface" != "$last_iface" ]; then
-        last_iface="$iface"
-        last_state="-9"
-        last_discover="-9"
-        runtime_set lan_discovery_status_state="等待接口"
-        log_line "检测接口切换为 $iface"
-        if [ -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "WAIT"; else set_link_status "$iface" "不存在"; fi
-    fi
-    if [ "$enable" != "1" ]; then
-        runtime_set lan_discovery_status_state="已禁用"
-        if [ -e "/sys/class/net/$iface" ]; then
-            if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi
-        fi
-        stop_health
-        sleep 2
-        continue
-    fi
-    if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; stop_health; sleep 2; continue; fi
-    if is_link_up "$iface"; then state=1; else state=0; fi
-    if [ "$state" != "$last_state" ]; then
-        last_state="$state"
-        if [ "$state" = "1" ]; then
-            set_link_status "$iface" "UP"
-            sync_device_cache
-            run_discovery "$iface"
-        else
-            set_link_status "$iface" "DOWN"
-            stop_health
-            runtime_set lan_discovery_status_state="等待接口"
-            log_line "LAN口已拔出 $iface"
-        fi
-    fi
-
-    # 设备发现开关只控制camdiscover和主动ARP扫描，不停止LAN工作进程、DHCP或网络健康监视。
-    if [ "$state" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
-        last_discover="$discover_enable"
-        if [ "$discover_enable" = "1" ]; then
-            runtime_set lan_discovery_status_state="启动设备发现"
-            run_discovery "$iface"
-        else
-            runtime_set lan_discovery_status_state="设备发现未启用"
-        fi
-    fi
-    if [ "$state" = "1" ]; then start_health "$iface"; fi
+    iface_refresh=$((iface_refresh + 1)); if [ "$iface_refresh" -ge 5 ]; then refresh_interfaces; iface_refresh=0; fi
+    enable="$(cfg lan_discovery_enable 1)"; discover_enable="$(cfg lan_discovery_discover_enable 1)"; iface="$(cfg lan_discovery_ifname eth2.1)"
+    if [ "$iface" != "$last_iface" ]; then last_iface="$iface"; set_link_status "$iface" "$(lan_phy_link_state 2>/dev/null || echo '-')"; log_line "检测接口切换为 $iface"; fi
+    if [ "$discover_enable" != "$last_discover" ]; then last_discover="$discover_enable"; [ "$discover_enable" = "1" ] && log_line "设备发现已启用" || log_line "设备发现已禁用"; fi
+    if [ "$enable" != "1" ]; then runtime_set lan_discovery_status_state="LAN监听已禁用"; sleep 1; continue; fi
+    if is_link_up "$iface"; then link="UP"; else link="DOWN"; fi
+    set_link_status "$iface" "$link"
+    if [ "$link" = "UP" ] && [ "$last_state" != "1" ]; then last_state=1; run_discovery "$iface" & worker_pid=$!; echo "$worker_pid" > /tmp/lan_autodiscover_worker.pid
+    elif [ "$link" = "DOWN" ] && [ "$last_state" != "0" ]; then last_state=0; [ -n "$worker_pid" ] && kill "$worker_pid" 2>/dev/null; worker_pid=""; stop_health; runtime_set lan_discovery_status_state="等待接口"; fi
     sleep 1
 done
