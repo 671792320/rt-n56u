@@ -5,10 +5,11 @@
  *
  * 检测项目：
  * 1. 广播包速率：达到阈值时报告广播风暴。
- * 2. 本机MAC回流：收到源MAC等于本机MAC的帧时报告疑似二层环路。
+ * 2. 本机MAC回流：忽略PACKET_OUTGOING，只统计实际从接口收到的帧。
  *
  * Q7只有一个RJ45，因此这些结果是现场排障提示，不等同于交换机STP诊断。
  */
+#include <arpa/inet.h>
 #include <getopt.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
@@ -171,6 +172,8 @@ int main(int argc, char **argv)
         while (time(NULL) == start) {
             fd_set rfds;
             struct timeval tv;
+            struct sockaddr_ll from;
+            socklen_t from_len;
             int n;
 
             FD_ZERO(&rfds);
@@ -184,12 +187,18 @@ int main(int argc, char **argv)
             if (!FD_ISSET(fd, &rfds))
                 continue;
 
-            n = recv(fd, buf, sizeof(buf), 0);
+            from_len = sizeof(from);
+            n = recvfrom(fd, buf, sizeof(buf), 0,
+                         (struct sockaddr *)&from, &from_len);
             if (n < ETH_HLEN)
                 continue;
 
+            /* 本机发送出去的帧也可能被AF_PACKET看到，不能误判为环路。 */
+            if (from.sll_pkttype == PACKET_OUTGOING)
+                continue;
+
             c.total++;
-            if (mac_equal(buf, self_mac))
+            if (mac_equal(buf + ETH_ALEN, self_mac))
                 c.self_source++;
             if (buf[0] == 0xff && buf[1] == 0xff && buf[2] == 0xff &&
                 buf[3] == 0xff && buf[4] == 0xff && buf[5] == 0xff)
