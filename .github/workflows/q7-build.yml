@@ -24,18 +24,6 @@ jobs:
           ref: master
           fetch-depth: 1
 
-      - name: Add LAN discovery level-1 menu
-        shell: bash
-        run: |
-          set -e
-          grep -q 'menuL1_title = new Array' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          sed -i '/^menuL1_icon = new Array/i menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");' trunk/user/www/n56u_ribbon_fixed/state.js
-          sed -i '/^menuL1_icon = new Array/a menuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_icon.push("icon-search")' trunk/user/www/n56u_ribbon_fixed/state.js
-
       - name: Prepare environment
         run: |
           sudo apt update
@@ -58,17 +46,21 @@ jobs:
           test -f trunk/configs/boards/ZTE_Q7/board.mk
           test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
           test -f trunk/user/camdiscover/camdiscover.c
+          test -f trunk/user/camdiscover/arpscan.c
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
-          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'lan_discovery_dhcp_timeout' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'lan_discovery_cycle' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'IP占用情况' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'arpscan' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'ARB_PLACEHOLDER_DO_NOT_USE' /dev/null || true
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
