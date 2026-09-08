@@ -4,12 +4,10 @@
  * 只用于网络异常检测，不把任何普通IPv4流量加入设备列表。
  *
  * 检测项目：
- * 1. 广播包速率：连续达到阈值时报告广播风暴。
+ * 1. 广播包速率：达到阈值时报告广播风暴。
  * 2. 本机MAC回流：收到源MAC等于本机MAC的帧时报告疑似二层环路。
  *
- * Q7只有一个RJ45，因此如果交换网络中的广播/未知单播被环路反复转发，
- * 这个工具可以作为现场排障提示，但“疑似环路”仍属于异常迹象，不等同于
- * 专业交换机STP诊断结果。
+ * Q7只有一个RJ45，因此这些结果是现场排障提示，不等同于交换机STP诊断。
  */
 #include <getopt.h>
 #include <linux/if.h>
@@ -22,10 +20,13 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 
 #define BUF_SIZE 2048
 #define DEFAULT_BCAST_THRESHOLD 1000
 #define DEFAULT_LOOP_THRESHOLD 1
+#define RUNTIME_DIR "/tmp/lan_discovery_runtime"
 
 typedef struct {
     unsigned long long total;
@@ -66,17 +67,34 @@ static int mac_equal(const unsigned char *a, const unsigned char *b)
     return memcmp(a, b, 6) == 0;
 }
 
-static void emit_health(const health_counter_t *c, int bcast_threshold,
-                        int loop_threshold)
+static void runtime_set(const char *name, const char *value)
 {
-    const char *state = "OK";
-    if (c->self_source >= (unsigned long long)loop_threshold &&
-        c->broadcast >= (unsigned long long)bcast_threshold)
-        state = "LOOP_BROADCAST";
-    else if (c->self_source >= (unsigned long long)loop_threshold)
-        state = "LOOP_SUSPECTED";
-    else if (c->broadcast >= (unsigned long long)bcast_threshold)
-        state = "BROADCAST_STORM";
+    char tmp[160];
+    char path[160];
+    FILE *fp;
+
+    mkdir(RUNTIME_DIR, 0755);
+    snprintf(tmp, sizeof(tmp), "%s/.%s.tmp", RUNTIME_DIR, name);
+    snprintf(path, sizeof(path), "%s/%s", RUNTIME_DIR, name);
+    fp = fopen(tmp, "w");
+    if (!fp)
+        return;
+    fprintf(fp, "%s", value ? value : "");
+    fclose(fp);
+    rename(tmp, path);
+}
+
+static void emit_health(const char *state, const health_counter_t *c)
+{
+    char value[128];
+
+    runtime_set("lan_discovery_status_health", state);
+    snprintf(value, sizeof(value), "%llu", c->broadcast);
+    runtime_set("lan_discovery_status_broadcast", value);
+    snprintf(value, sizeof(value), "%llu", c->self_source);
+    runtime_set("lan_discovery_status_loop", value);
+    snprintf(value, sizeof(value), "%llu", c->total);
+    runtime_set("lan_discovery_status_total", value);
 
     printf("HEALTH state=%s broadcast=%llu total=%llu self=%llu\n",
            state, c->broadcast, c->total, c->self_source);
@@ -90,6 +108,7 @@ int main(int argc, char **argv)
     int loop_threshold = DEFAULT_LOOP_THRESHOLD;
     int ifindex, fd, opt;
     unsigned char self_mac[6], buf[BUF_SIZE];
+    char last_state[32] = "";
 
     while ((opt = getopt(argc, argv, "i:b:l:h")) != -1) {
         switch (opt) {
@@ -177,7 +196,24 @@ int main(int argc, char **argv)
                 c.broadcast++;
         }
 
-        emit_health(&c, bcast_threshold, loop_threshold);
+        {
+            const char *state = "OK";
+            if (c.self_source >= (unsigned long long)loop_threshold &&
+                c.broadcast >= (unsigned long long)bcast_threshold)
+                state = "LOOP_BROADCAST";
+            else if (c.self_source >= (unsigned long long)loop_threshold)
+                state = "LOOP_SUSPECTED";
+            else if (c.broadcast >= (unsigned long long)bcast_threshold)
+                state = "BROADCAST_STORM";
+
+            emit_health(state, &c);
+            if (strcmp(last_state, state) != 0) {
+                printf("[lanhealth] 网络状态=%s 广播=%llu/s 总包=%llu 本机MAC回流=%llu/s\n",
+                       state, c.broadcast, c.total, c.self_source);
+                fflush(stdout);
+                snprintf(last_state, sizeof(last_state), "%s", state);
+            }
+        }
     }
 
     close(fd);
