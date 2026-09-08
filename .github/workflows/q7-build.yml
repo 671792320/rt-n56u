@@ -105,6 +105,34 @@ jobs:
           PY
           grep -A18 -B2 'http_login_check' trunk/user/httpd/httpd.c
 
+      - name: 修复LAN发现参数传递和ARP接收接口
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # camdiscover 的 -O/-S/-H/-D/-A 都要求参数，不能只传一个孤立开关。
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          old = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"\n    [ "$onvif" = "1" ] && args="$args -O"\n    [ "$ssdp" = "1" ] && args="$args -S"\n    [ "$hik" = "1" ] && args="$args -H"\n    [ "$dahua" = "1" ] && args="$args -D"\n    [ "$raw" = "1" ] && args="$args -A"'''
+          new = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"'''
+          if old not in s:
+              raise SystemExit('camdiscover参数组装代码块未找到')
+          p.write_text(s.replace(old, new, 1))
+
+          # arpscan 发送仍从 eth2.1 发出，但接收绑定改到 br0，兼容Q7桥接后的入站ARP回包。
+          p = Path('trunk/user/camdiscover/arpscan.c')
+          s = p.read_text()
+          old = '''    {\n        struct sockaddr_ll ba;\n        memset(&ba, 0, sizeof(ba));\n        ba.sll_family = AF_PACKET;\n        ba.sll_ifindex = ifindex;\n        ba.sll_protocol = htons(ETH_P_ARP);\n        if (bind(fd, (struct sockaddr *)&ba, sizeof(ba)) < 0) {\n            perror("[arpscan] bind");\n            close(fd);\n            return 1;\n        }\n    }'''
+          new = '''    {\n        struct sockaddr_ll ba;\n        struct ifreq rifr;\n        int rx_ifindex = ifindex;\n        memset(&rifr, 0, sizeof(rifr));\n        strncpy(rifr.ifr_name, "br0", IFNAMSIZ - 1);\n        if (ioctl(fd, SIOCGIFINDEX, &rifr) == 0 && rifr.ifr_ifindex > 0)\n            rx_ifindex = rifr.ifr_ifindex;\n        memset(&ba, 0, sizeof(ba));\n        ba.sll_family = AF_PACKET;\n        ba.sll_ifindex = rx_ifindex;\n        ba.sll_protocol = htons(ETH_P_ARP);\n        if (bind(fd, (struct sockaddr *)&ba, sizeof(ba)) < 0) {\n            perror("[arpscan] bind");\n            close(fd);\n            return 1;\n        }\n        printf("[arpscan] ARP发送接口=%s，接收接口=%s\\n", ifname, rx_ifindex == ifindex ? ifname : "br0");\n        fflush(stdout);\n    }'''
+          if old not in s:
+              raise SystemExit('arpscan接收绑定代码块未找到')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -A4 -B2 'args="-i $iface' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -A14 -B2 'ARP发送接口' trunk/user/camdiscover/arpscan.c
+
       - name: Build ZTE_Q7
         shell: bash
         run: |
