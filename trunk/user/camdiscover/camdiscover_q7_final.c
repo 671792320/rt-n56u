@@ -1,7 +1,6 @@
 /* Q7 LAN discovery final helper.
- * The discovery socket can use a temporary target-LAN source IPv4 stored in
- * /tmp/lan_discovery_runtime/lan_discovery_status_target_ip.  This keeps the
- * original standard probes and the WebUI custom-probe interface usable.
+ * Uses a temporary target-LAN source IPv4 stored in
+ * /tmp/lan_discovery_runtime/lan_discovery_status_target_ip.
  */
 #include <arpa/inet.h>
 #include <getopt.h>
@@ -107,28 +106,6 @@ static void hex_encode(const unsigned char *buf, size_t len, char *out, size_t o
     out[n] = 0;
 }
 
-static int url_hex(int c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-static void url_decode(char *out, size_t n, const char *in)
-{
-    size_t i = 0, j = 0;
-    while (in && in[i] && j + 1 < n) {
-        if (in[i] == '%' && in[i + 1] && in[i + 2]) {
-            int a = url_hex(in[i + 1]), b = url_hex(in[i + 2]);
-            if (a >= 0 && b >= 0) { out[j++] = (char)((a << 4) | b); i += 3; continue; }
-        }
-        out[j++] = in[i] == '+' ? ' ' : in[i];
-        ++i;
-    }
-    out[j] = 0;
-}
-
 static int bind_source(int fd, const struct in_addr *source, int has_source)
 {
     struct sockaddr_in a;
@@ -137,6 +114,16 @@ static int bind_source(int fd, const struct in_addr *source, int has_source)
     a.sin_family = AF_INET;
     a.sin_addr = *source;
     a.sin_port = 0;
+    return bind(fd, (struct sockaddr *)&a, sizeof(a));
+}
+
+static int bind_receiver(int fd, int port, const struct in_addr *source, int has_source)
+{
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons((unsigned short)port);
+    a.sin_addr.s_addr = (has_source && source) ? source->s_addr : htonl(INADDR_ANY);
     return bind(fd, (struct sockaddr *)&a, sizeof(a));
 }
 
@@ -194,15 +181,13 @@ static int send_onvif(int fd)
 
 static int send_ssdp(int fd)
 {
-    static const char p[] =
-        "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Padavan-Q7-camdiscover/1.0\r\n\r\n";
+    static const char p[] = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Padavan-Q7-camdiscover/1.0\r\n\r\n";
     return send_to_addr(fd, SSDP_ADDR, SSDP_PORT, p, strlen(p));
 }
 
 static int send_hik(int fd)
 {
-    static const char p[] =
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Probe>\r\n<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n<Types>inquiry</Types>\r\n</Probe>\r\n";
+    static const char p[] = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Probe>\r\n<Uuid>00000000-0000-0000-0000-000000000000</Uuid>\r\n<Types>inquiry</Types>\r\n</Probe>\r\n";
     return send_to_addr(fd, HIK_ADDR, HIK_PORT, p, strlen(p));
 }
 
@@ -281,7 +266,8 @@ static int load_custom(const char *path, struct discover_ctx *c)
 {
     FILE *f;
     char line[1800], *a, *b, *d, *e;
-    int i;
+    int i, reuse;
+    struct sockaddr_in rb;
     f = fopen(path, "r");
     if (!f) return 0;
     while (fgets(line, sizeof(line), f) && c->custom_count < MAX_CUSTOM) {
@@ -293,23 +279,24 @@ static int load_custom(const char *path, struct discover_ctx *c)
         e = strchr(d, '|'); if (!e) continue; *e++ = 0;
         if (strcmp(e, "1")) continue;
         i = c->custom_count++;
-        c->custom[i].fd = -1;
+        c->custom[i].fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (c->custom[i].fd < 0) continue;
+        reuse = 1;
+        setsockopt(c->custom[i].fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         url_decode(c->custom[i].name, sizeof(c->custom[i].name), line);
         url_decode(c->custom[i].addr, sizeof(c->custom[i].addr), a);
         c->custom[i].port = atoi(b);
         url_decode(c->custom[i].payload, sizeof(c->custom[i].payload), d);
-        c->custom[i].fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (c->custom[i].fd >= 0 && bind_source(c->custom[i].fd, &c->source_addr, c->has_source_addr) < 0) {
+        memset(&rb, 0, sizeof(rb));
+        rb.sin_family = AF_INET;
+        rb.sin_port = htons((unsigned short)c->custom[i].port);
+        rb.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(c->custom[i].fd, (struct sockaddr *)&rb, sizeof(rb)) < 0) {
             close(c->custom[i].fd); c->custom[i].fd = -1;
+            fprintf(stdout, "[camdiscover] custom %s listen UDP/%d FAILED\n", c->custom[i].name, c->custom[i].port);
+        } else {
+            fprintf(stdout, "[camdiscover] custom %s listen %s:%d\n", c->custom[i].name, c->custom[i].addr, c->custom[i].port);
         }
-        if (c->custom[i].fd >= 0) {
-            int reuse = 1; struct sockaddr_in rb;
-            setsockopt(c->custom[i].fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-            memset(&rb, 0, sizeof(rb)); rb.sin_family = AF_INET; rb.sin_port = htons((unsigned short)c->custom[i].port); rb.sin_addr.s_addr = htonl(INADDR_ANY);
-            if (bind(c->custom[i].fd, (struct sockaddr *)&rb, sizeof(rb)) < 0) { close(c->custom[i].fd); c->custom[i].fd = -1; }
-        }
-        if (c->custom[i].fd < 0) fprintf(stdout, "[camdiscover] custom %s listen UDP/%d FAILED\n", c->custom[i].name, c->custom[i].port);
-        else fprintf(stdout, "[camdiscover] custom %s listen %s:%d\n", c->custom[i].name, c->custom[i].addr, c->custom[i].port);
         fflush(stdout);
     }
     fclose(f);
@@ -417,7 +404,6 @@ int main(int argc, char **argv)
     fflush(stdout);
 
     if (c.custom_count) send_custom(&c);
-    if (c.fd_onvif >= 0) { rc = send_to_addr(c.fd_onvif, ONVIF_ADDR, onvif_port, "", 0); (void)rc; }
     if (c.fd_onvif >= 0) { rc = send_onvif(c.fd_onvif); printf("[camdiscover] ONVIF probe %s\n", rc == 0 ? "sent" : "FAILED"); }
     if (c.fd_ssdp >= 0) { rc = send_ssdp(c.fd_ssdp); printf("[camdiscover] SSDP probe %s\n", rc == 0 ? "sent" : "FAILED"); }
     if (c.fd_hik >= 0) { rc = send_hik(c.fd_hik); printf("[camdiscover] HIK probe %s\n", rc == 0 ? "sent" : "FAILED"); }
