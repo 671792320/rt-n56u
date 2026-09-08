@@ -4,11 +4,19 @@
 # LAN监听、DHCP检测、设备发现开关分别控制各自功能，不关闭LAN接口。
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
-LOCKDIR=/var/run/lan_autodiscover.lock
+SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
+WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 mkdir -p "$RUNTIME_DIR"
+
+# 监督程序自身也必须单实例运行，否则多个监督程序可能同时拉起多个worker。
+if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
+    echo "$(date '+%H:%M:%S') LAN监督程序已经运行" | logger -t lan-supervisor
+    exit 0
+fi
+trap 'rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 nv() { nvram get "$1" 2>/dev/null; }
 # 运行时状态只保存在/tmp，不写入持久NVRAM。
@@ -103,19 +111,19 @@ sync_runtime_status() {
 
     # DHCP检测结果以当前检测日志为准。
     if [ -f /tmp/dhcpdetect_lan.log ]; then
-        line="$(grep -m1 '^\\[dhcpdetect\\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
-        gateway="$(printf '%s\\n' "$line" | sed -n 's/.* gateway=\\([^ ]*\\).*/\\1/p')"
-        server="$(printf '%s\\n' "$line" | sed -n 's/.* server=\\([^ ]*\\).*/\\1/p')"
+        line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
+        gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
+        server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
         if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
             runtime_set lan_discovery_status_dhcp="网关 $gateway"
         elif [ -n "$server" ] && [ "$server" != "-" ]; then
             runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
-        elif grep -q '\\[dhcpdetect\\].*No DHCP' /tmp/dhcpdetect_lan.log 2>/dev/null; then
+        elif grep -q '\[dhcpdetect\].*no DHCP server reply' /tmp/dhcpdetect_lan.log 2>/dev/null; then
             runtime_set lan_discovery_status_dhcp="未发现DHCP"
         fi
     fi
 
-    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\\) .*/\\1/p')"
+    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) .*/\1/p')"
     [ -n "$last" ] && runtime_set lan_discovery_status_last="$last" || runtime_set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
 
@@ -125,13 +133,27 @@ start_worker() {
         runtime_set lan_discovery_status_worker="运行中"
         return 0
     fi
+    # 工作进程自己的锁目录如果仍存在但PID已经不存在，说明是异常残留，才允许清理。
+    if [ -d "$WORKER_LOCKDIR" ]; then
+        stale=""
+        [ -r "$WORKER_LOCKDIR/pid" ] && stale="$(cat "$WORKER_LOCKDIR/pid" 2>/dev/null)"
+        case "$stale" in
+            ''|*[!0-9]*) rmdir "$WORKER_LOCKDIR" 2>/dev/null;;
+            *)
+                if ! kill -0 "$stale" 2>/dev/null; then rmdir "$WORKER_LOCKDIR" 2>/dev/null; fi
+                ;;
+        esac
+        [ -d "$WORKER_LOCKDIR" ] && {
+            runtime_set lan_discovery_status_worker="已有工作进程"
+            return 0
+        }
+    fi
     if [ ! -x /usr/bin/lan_autodiscover.sh ]; then
         runtime_set lan_discovery_status_worker="程序不存在"
         return 1
     fi
-    rm -rf "$LOCKDIR" 2>/dev/null
     echo "$(date '+%H:%M:%S') LAN监听启动发现工作进程：$iface" | logger -t lan-supervisor
-    /usr/bin/lan_autodiscover.sh >/tmp/lan_autodiscover_worker.log 2>&1 &
+    /usr/bin/lan_autodiscover.sh > /tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
     runtime_set lan_discovery_status_worker="运行中"
     return 0
@@ -146,7 +168,7 @@ stop_worker() {
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$PIDFILE"
-    rm -rf "$LOCKDIR" 2>/dev/null
+    rmdir "$WORKER_LOCKDIR" 2>/dev/null
     runtime_set lan_discovery_status_worker="已停止"
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
