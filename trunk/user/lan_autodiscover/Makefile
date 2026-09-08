@@ -13,5 +13,7 @@ romfs:
 	$(ROMFSINST) -p +x /usr/bin/lan_autodiscover.sh
 	$(ROMFSINST) -p +x /usr/bin/lan_discovery_supervisor.sh
 	$(ROMFSINST) -p +x /usr/bin/lan_takeover.sh
+	$(ROMFSINST) -p +x /usr/bin/lan_snat.sh
+	$(ROMFSINST) -p +x /usr/bin/lan_network_manager.sh
 
 clean:
