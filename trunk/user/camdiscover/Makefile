@@ -7,7 +7,6 @@ INSTALLDIR=$(ROOTDIR)/romfs
 include $(SHDIR)/boards.mk
 include $(SHDIR)/cflags.mk
 CFLAGS += -Os -s -I. -I$(SHDIR) -I$(SHDIR)/include
-# Q7 validation build：兼容旧版uClibc与Linux UAPI报文头。
 CFLAGS += -include $(CURDIR)/camdiscover_compat.h -include netinet/ip.h
 
 EXEC=camdiscover
