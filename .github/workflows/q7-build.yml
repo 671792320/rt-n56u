@@ -120,6 +120,21 @@ jobs:
           echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
           sed -i '/Q7固件版本/d' trunk/user/rc/rc.c
           sed -i "/^[[:space:]]*\\/\\/ system ready$/i\\\tnvram_set(\"firmver_sub\", \"${VERSION_STRING}\"); /* Q7固件版本 */" trunk/user/rc/rc.c
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text()
+          marker = '\tklogctl(8, NULL, nvram_get_int("console_loglevel"));'
+          insert = '''#if defined(BOARD_ZTE_Q7)\n\t/* Q7无线名称使用设备LAN MAC地址后四位，避免多台Q7名称重复。 */\n\tsnprintf(tmp, sizeof(tmp), "@seetong-IPCtest-utp2_%s", lan_mac);\n\tnvram_set("wl_ssid", tmp);\n\t/* Q7无线默认密码。 */\n\tnvram_set("wl_wpa_psk", "88888888");\n#endif\n\n'''
+          if marker not in s:
+              raise SystemExit('未找到无线参数初始化位置')
+          if '@seetong-IPCtest-utp2_' not in s:
+              s = s.replace(marker, insert + marker, 1)
+          p.write_text(s)
+          PY
+          grep -q '@seetong-IPCtest-utp2_' trunk/user/rc/rc.c
+          grep -q 'nvram_set("wl_wpa_psk", "88888888")' trunk/user/rc/rc.c
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
