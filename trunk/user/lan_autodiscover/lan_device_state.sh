@@ -1,6 +1,5 @@
 #!/bin/sh
 # LAN发现设备状态跟踪：以ARP发现轮次为准维护正常/冲突/离线状态。
-# 不依赖WebUI刷新次数，状态保存在/tmp，设备记录仍由主发现程序维护。
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 STATE_FILE="$RUNTIME_DIR/device_state.db"
@@ -19,7 +18,6 @@ norm_mac() {
     esac
 }
 
-# 命令：begin / arp IP MAC / proto IP TYPE / finish
 case "$1" in
 begin)
     : > "$ARP_SEEN_FILE"
@@ -42,42 +40,51 @@ proto)
 finish)
     tmp="${STATE_FILE}.tmp"
     : > "$tmp"
+    seen_ips="${ARP_SEEN_FILE}.ips"
+    sort -t'|' -k1,1 -u "$ARP_SEEN_FILE" 2>/dev/null | cut -d'|' -f1 > "$seen_ips"
 
-    # 当前轮ARP结果：同IP多MAC直接进入冲突状态。
-    awk -F'|' 'NF>=2 {ips[$1]=1; if($2!="-") mac[$1][$2]=1} END {for(ip in ips){n=0; m=""; for(x in mac[ip]){n++; m=m (m?" / ":"") x} status=(n>1?"IP冲突":"正常"); print ip "|" m "|" status "|0"}}' "$ARP_SEEN_FILE" |
-    while IFS='|' read -r ip macs status miss; do
+    # 当前轮：根据每个IP实际收到的ARP MAC数量判断冲突。
+    while IFS= read -r ip; do
         [ -n "$ip" ] || continue
-        old="$(grep "^$ip|" "$STATE_FILE" 2>/dev/null | head -n 1)"
-        [ "$status" = "IP冲突" ] || status="正常"
-        printf '%s|%s|%s|0\n' "$ip" "${macs:--}" "$status" >> "$tmp"
-    done
+        macs="$(grep "^$ip|" "$ARP_SEEN_FILE" 2>/dev/null | cut -d'|' -f2 | grep -v '^-$' | sort -u)
+        count="$(printf '%s\n' "$macs" | grep -c ':' 2>/dev/null)"
+        case "$count" in ''|*[!0-9]*) count=0;; esac
+        mac="$(printf '%s\n' "$macs" | head -n 1)"
+        [ -n "$mac" ] || mac="-"
+        if [ "$count" -gt 1 ]; then status="IP冲突"; else status="正常"; fi
+        printf '%s|%s|%s|0\n' "$ip" "$mac" "$status" >> "$tmp"
+    done < "$seen_ips"
 
-    # 历史设备如果本轮没有ARP响应，miss++；达到3轮才进入暂时离线。
+    # 历史设备：本轮无ARP响应则miss+1；连续3轮才离线。
     while IFS='|' read -r ip mac status miss; do
         [ -n "$ip" ] || continue
-        grep -q "^$ip|" "$ARP_SEEN_FILE" 2>/dev/null && continue
+        grep -qx "$ip" "$seen_ips" 2>/dev/null && continue
         case "$miss" in ''|*[!0-9]*) miss=0;; esac
         miss=$((miss + 1))
-        [ "$status" = "IP冲突" ] && new_status="IP冲突" || new_status="正常"
+        new_status="正常"
+        [ "$status" = "IP冲突" ] && new_status="IP冲突"
         [ "$miss" -ge 3 ] && new_status="暂时离线"
         printf '%s|%s|%s|%s\n' "$ip" "${mac:--}" "$new_status" "$miss" >> "$tmp"
     done < "$STATE_FILE"
 
     sort -t'|' -k1,1 -u "$tmp" > "${tmp}.sort" 2>/dev/null && mv -f "${tmp}.sort" "$tmp"
     mv -f "$tmp" "$STATE_FILE"
+    rm -f "$seen_ips"
 
-    # 输出给WebUI：每个设备保留一条状态记录；协议信息从当前数据库合并。
+    # 将状态投影回设备数据库。每个IP一条主记录，避免ARP记录被协议记录覆盖。
     out="${DEVICE_DB}.status.tmp"
     : > "$out"
     while IFS='|' read -r ip mac status miss; do
         [ -n "$ip" ] || continue
-        info=""
         protocols=""
-        # 当前数据库里能够提供的协议标签。
+        info=""
         while IFS= read -r row; do
             type="$(printf '%s\n' "$row" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
             [ -n "$type" ] || continue
-            case "$type" in SUBNET|IP_CONFLICT|PROTO_FAIL|ARP) ;; *) protocols="$protocols${protocols:+ / }$type";; esac
+            case "$type" in
+                SUBNET|IP_CONFLICT|PROTO_FAIL|ARP) ;;
+                *) case " $protocols " in *" $type "*) ;; *) protocols="$protocols${protocols:+ / }$type";; esac ;;
+            esac
             [ -z "$info" ] && info="$(printf '%s\n' "$row" | sed -n 's/.*INFO=\(.*\)$/\1/p')"
         done <<EOF
 $(grep " IP=$ip " "$DEVICE_DB" 2>/dev/null)
@@ -90,18 +97,6 @@ EOF
         printf 'DEVICE type=ARP IP=%s MAC=%s INFO=%s STATUS=%s PROTO=%s MISS=%s\n' "$ip" "${mac:--}" "${info:--}" "$status" "$protocols" "$miss" >> "$out"
     done < "$STATE_FILE"
 
-    # 当前轮明确上报的协议探测异常才转换为协议异常，不把整个网络失败误算成设备离线。
-    while IFS='|' read -r ip type; do
-        [ -n "$ip" ] || continue
-        grep -q "^$ip|" "$STATE_FILE" 2>/dev/null || continue
-        sed -i "s/^DEVICE type=ARP IP=$ip /DEVICE type=ARP IP=$ip /" "$out" 2>/dev/null || :
-        sed -i "s/ STATUS=正常 / STATUS=协议异常 /" "$out" 2>/dev/null || :
-        sed -i "s/ INFO=[^ ]*/ INFO=协议探测无响应/" "$out" 2>/dev/null || :
-    done < "$EVENT_FILE"
-
-    # 保留没有ARP状态的协议记录（极少数仅协议可见设备）。
-    awk '!seen[$3]++' "$out" > "${out}.uniq" 2>/dev/null || cp -f "$out" "${out}.uniq"
-    mv -f "${out}.uniq" "$DEVICE_DB"
+    mv -f "$out" "$DEVICE_DB"
     ;;
-
 esac
