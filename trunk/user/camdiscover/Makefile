@@ -14,18 +14,24 @@ CFLAGS += -Os -s -I. -I$(SHDIR) -I$(SHDIR)/include
 CFLAGS += -include $(CURDIR)/camdiscover_compat.h -include netinet/ip.h
 
 EXEC=camdiscover
-dhcpdetect=dhcpdetect
+DHCP_EXEC=dhcpdetect
+ARP_EXEC=arpscan
 OBJS=camdiscover.o camdiscover_debug.o
 DHCP_OBJS=dhcpdetect.o
+ARP_OBJS=arpscan.o
 
-all: $(EXEC) $(dhcpdetect)
+all: $(EXEC) $(DHCP_EXEC) $(ARP_EXEC)
 
 $(EXEC): $(OBJS)
 	$(CC) -o $@ $(OBJS)
 	$(STRIP) $@
 
-$(dhcpdetect): $(DHCP_OBJS)
+$(DHCP_EXEC): $(DHCP_OBJS)
 	$(CC) -o $@ $(DHCP_OBJS)
+	$(STRIP) $@
+
+$(ARP_EXEC): $(ARP_OBJS)
+	$(CC) -o $@ $(ARP_OBJS)
 	$(STRIP) $@
 
 camdiscover.o: camdiscover.c
@@ -36,7 +42,8 @@ camdiscover.o: camdiscover.c
 
 romfs:
 	$(ROMFSINST) /usr/bin/$(EXEC)
-	$(ROMFSINST) /usr/bin/$(dhcpdetect)
+	$(ROMFSINST) /usr/bin/$(DHCP_EXEC)
+	$(ROMFSINST) /usr/bin/$(ARP_EXEC)
 
 clean:
-	rm -f $(EXEC) $(OBJS) $(dhcpdetect) $(DHCP_OBJS)
+	rm -f $(EXEC) $(OBJS) $(DHCP_EXEC) $(DHCP_OBJS) $(ARP_EXEC) $(ARP_OBJS)
