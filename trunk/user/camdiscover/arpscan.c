@@ -6,7 +6,9 @@
  * 2. 只处理ARP，不抓取普通IPv4流量，避免把局域网中的电脑、手机、服务器等
  *    普通主机全部当成“未知设备”被动计入设备列表。
  * 3. 一个进程批量发送整段ARP请求，再统一等待响应，避免启动数百个arping进程。
- * 4. 默认扫描本机接口所在/24网段；可以通过多个-s参数追加其它已发现网段。
+ * 4. Q7的eth2.1是VLAN接口，可能没有自己的IPv4地址；这种情况下使用br0的
+ *    IPv4/掩码作为扫描参考和ARP源地址，但ARP帧仍然从eth2.1发出。
+ * 5. 默认扫描本机接口所在/24网段；可以通过多个-s参数追加其它已发现网段。
  */
 #include <arpa/inet.h>
 #include <getopt.h>
@@ -98,53 +100,77 @@ static int add_subnet(subnet_t *list, int *count, const subnet_t *s)
     return 0;
 }
 
+static int get_iface_index_mac(int fd, const char *ifname, int *ifindex,
+                               unsigned char mac[6])
+{
+    struct ifreq ifr;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0)
+        return -1;
+    *ifindex = ifr.ifr_ifindex;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0)
+        return -1;
+    memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
+    return 0;
+}
+
+static int get_iface_ipv4(int fd, const char *ifname, unsigned int *ip, unsigned int *mask)
+{
+    struct ifreq ifr;
+    struct sockaddr_in *sa;
+
+    if (!ifname || !ip || !mask)
+        return -1;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFADDR, &ifr) != 0)
+        return -1;
+    sa = (struct sockaddr_in *)&ifr.ifr_addr;
+    if (sa->sin_family != AF_INET)
+        return -1;
+    *ip = ntohl(sa->sin_addr.s_addr);
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFNETMASK, &ifr) != 0)
+        return -1;
+    sa = (struct sockaddr_in *)&ifr.ifr_netmask;
+    if (sa->sin_family != AF_INET)
+        return -1;
+    *mask = ntohl(sa->sin_addr.s_addr);
+    return 0;
+}
+
 static int get_ifinfo(const char *ifname, int *ifindex, unsigned char mac[6],
                       unsigned int *ip, unsigned int *mask)
 {
     int fd;
-    struct ifreq ifr;
-    struct sockaddr_in *sa;
+    int ip_ok = 0;
 
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0)
         return -1;
 
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
+    if (get_iface_index_mac(fd, ifname, ifindex, mac) < 0) {
         close(fd);
         return -1;
     }
-    *ifindex = ifr.ifr_ifindex;
 
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
-        close(fd);
-        return -1;
+    /* Q7的eth2.1通常没有L3地址，所以回退到br0获取本机IPv4。 */
+    if (get_iface_ipv4(fd, ifname, ip, mask) == 0) {
+        ip_ok = 1;
+    } else if (strcmp(ifname, "br0") != 0 && get_iface_ipv4(fd, "br0", ip, mask) == 0) {
+        ip_ok = 1;
     }
-    memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
-
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
-        close(fd);
-        return -1;
-    }
-    sa = (struct sockaddr_in *)&ifr.ifr_addr;
-    *ip = ntohl(sa->sin_addr.s_addr);
-
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(fd, SIOCGIFNETMASK, &ifr) < 0) {
-        close(fd);
-        return -1;
-    }
-    sa = (struct sockaddr_in *)&ifr.ifr_netmask;
-    *mask = ntohl(sa->sin_addr.s_addr);
 
     close(fd);
-    return 0;
+    return ip_ok ? 0 : -1;
 }
 
 static void mac_text(const unsigned char *m, char *out, size_t out_len)
@@ -201,6 +227,7 @@ static void handle_arp(const unsigned char *buf, int len,
     const unsigned char *p;
     unsigned int sender_ip;
     char ip[IP_TEXT_LEN], mac[MAC_TEXT_LEN];
+    unsigned short op;
 
     if (len < (int)(ETH_HLEN + sizeof(struct arphdr) + 20))
         return;
@@ -210,7 +237,8 @@ static void handle_arp(const unsigned char *buf, int len,
     arp = (const struct arphdr *)(buf + ETH_HLEN);
     if (ntohs(arp->ar_pro) != ETH_P_IP || arp->ar_hln != 6 || arp->ar_pln != 4)
         return;
-    if (ntohs(arp->ar_op) != ARPOP_REPLY && ntohs(arp->ar_op) != ARPOP_REQUEST)
+    op = ntohs(arp->ar_op);
+    if (op != ARPOP_REPLY && op != ARPOP_REQUEST)
         return;
 
     p = buf + ETH_HLEN + sizeof(struct arphdr);
@@ -232,7 +260,7 @@ static int scan_subnet(int fd, int ifindex, const unsigned char mac[6],
     char network[IP_TEXT_LEN];
 
     ipv4_text(s->network, network, sizeof(network));
-    printf("DEVICE type=SUBNET IP=%s INFO=%d\n", network, s->prefix);
+    printf("[arpscan] 扫描网段 %s/%d\n", network, s->prefix);
     fflush(stdout);
 
     for (host = 1; host < 255; ++host) {
@@ -255,6 +283,7 @@ int main(int argc, char **argv)
     fd_set rfds;
     struct timeval tv;
     time_t end;
+    char source_ip[IP_TEXT_LEN];
 
     memset(subnets, 0, sizeof(subnets));
 
@@ -278,10 +307,11 @@ int main(int argc, char **argv)
     }
 
     if (get_ifinfo(ifname, &ifindex, mac, &ip, &mask) < 0) {
-        fprintf(stderr, "[arpscan] interface %s unavailable\n", ifname);
+        fprintf(stderr, "[arpscan] interface %s unavailable（无法取得本机IPv4，已尝试br0回退）\n", ifname);
         return 1;
     }
 
+    ipv4_text(ip, source_ip, sizeof(source_ip));
     if ((mask & 0xffffff00U) == 0xffffff00U) {
         subnet_t local;
         local.network = ip & 0xffffff00U;
@@ -309,7 +339,8 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("[arpscan] iface=%s subnet_count=%d timeout=%d\n", ifname, subnet_count, timeout);
+    printf("[arpscan] iface=%s ifindex=%d source_ip=%s subnet_count=%d timeout=%d\n",
+           ifname, ifindex, source_ip, subnet_count, timeout);
     fflush(stdout);
 
     for (i = 0; i < subnet_count; ++i)
