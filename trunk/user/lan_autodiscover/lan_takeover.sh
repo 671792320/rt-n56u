@@ -77,13 +77,13 @@ probe_free_ip() {
     output="$($ARPING -I "$IFACE" -c 1 -s 0.0.0.0 "$candidate" 2>&1)"
     status=$?
     if [ "$status" -eq 0 ]; then
-        log "候选IP存在ARP响应，跳过：$candidate"
+        log "候选IP存在ARP响应，跳过：$candidate" >&2
         return 1
     fi
 
     # 某些BusyBox版本即使返回非0也可能打印明确的单播回复；再次按输出确认。
     printf '%s\n' "$output" | grep -qiE 'Unicast reply|reply from|bytes from' && {
-        log "候选IP存在ARP/探测响应，跳过：$candidate"
+        log "候选IP存在ARP/探测响应，跳过：$candidate" >&2
         return 1
     }
     return 0
