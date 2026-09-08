@@ -1,0 +1,138 @@
+name: Q7 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    name: ZTE_Q7
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Prepare environment
+        shell: bash
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Register LAN discovery menu
+        shell: bash
+        run: |
+          set -eux
+          grep -q 'menuL1_title = new Array' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          sed -i '/^menuL1_icon = new Array/i menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");' trunk/user/www/n56u_ribbon_fixed/state.js
+          sed -i '/^menuL1_icon = new Array/a menuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
+
+      - name: Shellcheck
+        shell: bash
+        run: sh ./trunk/tools/shellcheck.sh
+
+      - name: Prepare MIPSel toolchain
+        shell: bash
+        run: |
+          set -eux
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+
+      - name: Apply Q7 LAN discovery build patches
+        shell: bash
+        run: |
+          set -eux
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
+          s = p.read_text()
+          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
+          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('trunk/user/httpd/httpd.c')
+          s = p.read_text()
+          old = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\tif (login_ip.len == 0)\n\t\treturn 2;\n\n\tif (is_uaddr_equal(&login_ip, ip_now))\n\t\treturn 3;\n\n\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {\n\t\treset_login_data();\n\t\treturn 2;\n\t}\n\n\treturn 0;\n}\n'''
+          new = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\treturn 2;\n}\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
+          s = p.read_text()
+          old = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"\n    [ "$onvif" = "1" ] && args="$args -O"\n    [ "$ssdp" = "1" ] && args="$args -S"\n    [ "$hik" = "1" ] && args="$args -H"\n    [ "$dahua" = "1" ] && args="$args -D"\n    [ "$raw" = "1" ] && args="$args -A"'''
+          new = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          old = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
+          new = '''        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh begin\n            run_arpscan "$iface"\n        fi\n        run_camdiscover "$iface" "$discover_cycle"\n        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh finish\n        fi'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
+          s = p.read_text()
+          s = s.replace('''STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan_discovery_status_role"); %>|<% nvram_get_x("", "lan_discovery_status_ip"); %>|<% nvram_get_x("", "lan_discovery_status_mac"); %>|<% nvram_get_x("", "lan_discovery_status_link"); %>|<% nvram_get_x("", "lan_discovery_status_dhcp"); %>|<% nvram_get_x("", "lan_discovery_status_state"); %>|<% nvram_get_x("", "lan_discovery_status_count"); %>|<% nvram_get_x("", "lan_discovery_status_last"); %>|<% nvram_get_x("", "lan_discovery_status_health"); %>|<% nvram_get_x("", "lan_discovery_status_broadcast"); %>|<% nvram_get_x("", "lan_discovery_status_loop"); %>|<% nvram_get_x("", "lan_discovery_status_total"); %>''', '''STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan_discovery_status_role"); %>|<% nvram_get_x("", "lan_discovery_status_ip"); %>|<% nvram_get_x("", "lan_discovery_status_mac"); %>|<% nvram_get_x("", "lan_discovery_status_link"); %>|<% nvram_get_x("", "lan_discovery_status_dhcp"); %>|<% nvram_get_x("", "lan_discovery_status_state"); %>|<% nvram_get_x("", "lan_discovery_status_count"); %>|<% nvram_get_x("", "lan_discovery_status_last"); %>|<% nvram_get_x("", "lan_discovery_status_health"); %>|<% nvram_get_x("", "lan_discovery_status_broadcast"); %>|<% nvram_get_x("", "lan_discovery_status_loop"); %>|<% nvram_get_x("", "lan_discovery_status_total"); %>''')
+          p.write_text(s)
+          PY
+
+      - name: Verify Q7 sources
+        shell: bash
+        run: |
+          set -eux
+          test -f trunk/build_firmware_ci
+          test -f trunk/configs/templates/ZTE_Q7.config
+          test -f trunk/configs/boards/ZTE_Q7/board.h
+          test -f trunk/configs/boards/ZTE_Q7/board.mk
+          test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          test -f trunk/user/camdiscover/camdiscover_q7_v3.c
+          test -f trunk/user/camdiscover/arpscan.c
+          test -f trunk/user/camdiscover/Makefile
+          test -f trunk/user/camdiscover/dhcpdetect.c
+          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_device_state.sh
+          test -f trunk/user/lan_autodiscover/lan_takeover.sh
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q '状态' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'lan_device_state.sh begin' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'lan_device_state.sh finish' trunk/user/lan_autodiscover/lan_autodiscover.sh
+
+      - name: Build ZTE_Q7
+        shell: bash
+        run: |
+          set -eux
+          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
+          VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+          echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
+          sed -i '/Q7固件版本/d' trunk/user/rc/rc.c
+          sed -i "/^[[:space:]]*\\/\\/ system ready$/i\\\tnvram_set(\"firmver_sub\", \"${VERSION_STRING}\"); /* Q7固件版本 */" trunk/user/rc/rc.c
+          cd trunk
+          rm -rf images romfs
+          mkdir -p images romfs
+          fakeroot ./build_firmware_ci ZTE_Q7
+          SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
+          test -n "$SRC"
+          cp -f "$SRC" "images/ZTE_Q7_${VERSION_STAMP}.trx"
+          rm -f images/ZTE_Q7.trx
+          ls -lh images/*.trx
+
+      - name: Upload Q7 firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTE_Q7_${{ env.VERSION_STAMP }}
+          path: trunk/images/*.trx
+          if-no-files-found: error
