@@ -60,7 +60,6 @@ jobs:
           grep -q 'lan_discovery_cycle' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'IP占用情况' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'arpscan' trunk/user/lan_autodiscover/lan_autodiscover.sh
-          grep -q 'ARB_PLACEHOLDER_DO_NOT_USE' /dev/null || true
 
       - name: Normalize Linux 3.4 conntrack Kconfig
         run: |
