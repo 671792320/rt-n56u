@@ -37,6 +37,7 @@ remove_existing() {
         old_ip="$(sed -n 's/^ip=//p' "$TAKEOVER_FILE" | head -n 1)"
         if valid_ip "$old_ip" && [ -n "$old_iface" ]; then
             ip addr del "$old_ip/24" dev "$old_iface" 2>/dev/null || :
+            log "撤销临时LAN地址：$old_iface $old_ip/24"
         fi
     fi
     rm -f "$TAKEOVER_FILE" "$USED_FILE"
@@ -49,7 +50,6 @@ collect_used_ips() {
             sed -n 's/^DEVICE type=[^ ]* IP=\([^ ]*\).*/\1/p' |
             sort -u > "$USED_FILE"
     fi
-    # 本机现有IPv4也不能被选作空闲地址。
     ip -4 addr show dev "$BR_IF" 2>/dev/null |
         sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' >> "$USED_FILE"
     sort -u "$USED_FILE" -o "$USED_FILE"
@@ -63,7 +63,6 @@ find_free_ip() {
     octets="$(printf '%s\n' "$NETWORK" | awk -F. '{print $1,$2,$3}')"
     set -- $octets
     a="$1"; b="$2"; c="$3"
-    # 网关/常见设备通常集中在低地址，高地址优先作为临时管理地址。
     for host in 250 249 248 247 246 245 244 243 242 241 240 239 238 237 236 235 234 233 232 231 230 229 228 227 226 225 224 223 222 221 220 219 218 217 216 215 214 213 212 211 210 209 208 207 206 205 204 203 202 201 200; do
         candidate="$a.$b.$c.$host"
         if ! is_used "$candidate"; then
@@ -77,6 +76,14 @@ find_free_ip() {
 IFACE="${1:-eth2.1}"
 NETWORK_RAW="${2:-}"
 mkdir -p "$RUNTIME_DIR"
+
+if [ "$IFACE" = "-r" ] || [ "$IFACE" = "--remove" ]; then
+    remove_existing
+    runtime_set lan_discovery_status_target_network ""
+    runtime_set lan_discovery_status_target_ip ""
+    runtime_set lan_discovery_status_target_iface ""
+    exit 0
+fi
 
 case "$IFACE" in
     eth2.1|br0) ;;
