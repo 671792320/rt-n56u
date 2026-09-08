@@ -89,6 +89,22 @@ jobs:
           PY
           grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
 
+      - name: 取消Web单客户端登录限制
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/user/httpd/httpd.c')
+          s = p.read_text()
+          old = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\tif (login_ip.len == 0)\n\t\treturn 2;\n\n\tif (is_uaddr_equal(&login_ip, ip_now))\n\t\treturn 3;\n\n\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {\n\t\treset_login_data();\n\t\treturn 2;\n\t}\n\n\treturn 0;\n}\n'''
+          new = '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\t/*\n\t * 取消Web管理端“单客户端登录”限制。\n\t * 每个HTTP请求仍由auth_check()独立校验用户名和密码，\n\t * 因此允许多个不同客户端同时登录不会绕过认证。\n\t */\n\treturn 2;\n}\n'''
+          if old not in s:
+              raise SystemExit('Web登录限制代码块未找到，拒绝继续构建')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -A18 -B2 'http_login_check' trunk/user/httpd/httpd.c
+
       - name: Build ZTE_Q7
         shell: bash
         run: |
