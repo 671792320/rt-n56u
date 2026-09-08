@@ -86,7 +86,7 @@ sync_runtime_status() {
     fi
 
     [ -f "$DEVICE_DB" ] || : > "$DEVICE_DB"
-    count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
+    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
     case "$count" in ''|*[!0-9]*) count=0;; esac
     runtime_set lan_discovery_status_count="$count"
 
@@ -150,6 +150,11 @@ stop_worker() {
     runtime_set lan_discovery_status_worker="已停止"
     killall camdiscover 2>/dev/null
     killall dhcpdetect 2>/dev/null
+    killall lanhealth 2>/dev/null
+    rm -f /tmp/lan_discovery_runtime/lanhealth.pid
+    runtime_set lan_discovery_status_health="未监视"
+    runtime_set lan_discovery_status_broadcast="0"
+    runtime_set lan_discovery_status_loop="0"
 }
 
 last_enable="-1"
@@ -158,6 +163,7 @@ last_link="-1"
 
 set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
+runtime_set lan_discovery_status_health="未监视"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
@@ -179,6 +185,7 @@ while :; do
         else
             runtime_set lan_discovery_status_enable="已禁用"
             echo "$(date '+%H:%M:%S') LAN监听已禁用，仅停止插拔事件监听，不关闭LAN接口" | logger -t lan-supervisor
+            stop_worker
         fi
     fi
 
@@ -209,7 +216,6 @@ while :; do
         fi
     fi
 
-    # LAN插入后工作进程持续存在；DHCP和设备发现由worker按各自NVRAM开关处理。
     if [ "$link" = "1" ]; then
         start_worker "$iface"
     fi
