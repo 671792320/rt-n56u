@@ -45,18 +45,48 @@ remove_existing() {
 
 collect_used_ips() {
     : > "$USED_FILE"
+
+    # 优先使用现有arpscan；它能一次性发现目标网段内已经在线的设备。
     if [ -x /usr/bin/arpscan ]; then
         /usr/bin/arpscan -i "$IFACE" -t 2 -s "$NETWORK/24" 2>/dev/null |
-            sed -n 's/^DEVICE type=[^ ]* IP=\([^ ]*\).*/\1/p' |
-            sort -u > "$USED_FILE"
+            sed -n 's/^DEVICE type=[^ ]* IP=\([^ ]*\).*/\1/p' >> "$USED_FILE"
     fi
+
+    # 即使arpscan不存在，也利用内核邻居表中已经发现的地址，避免重复占用。
+    ip neigh show dev "$IFACE" 2>/dev/null |
+        awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != "FAILED" {print $1}' >> "$USED_FILE"
+
     ip -4 addr show dev "$BR_IF" 2>/dev/null |
         sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' >> "$USED_FILE"
+
     sort -u "$USED_FILE" -o "$USED_FILE"
 }
 
 is_used() {
     grep -qx "$1" "$USED_FILE" 2>/dev/null
+}
+
+# 对候选地址做一次ARP探测。
+# 返回0表示未发现冲突，可以使用；返回1表示已有设备响应或探测工具不可用。
+# arping使用0.0.0.0作为源地址，避免尚未配置候选地址时造成错误判断。
+probe_free_ip() {
+    candidate="$1"
+    [ -x /usr/bin/arping ] && ARPING=/usr/bin/arping || ARPING="$(command -v arping 2>/dev/null)"
+    [ -n "$ARPING" ] || return 1
+
+    output="$($ARPING -I "$IFACE" -c 1 -s 0.0.0.0 "$candidate" 2>&1)"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        log "候选IP存在ARP响应，跳过：$candidate"
+        return 1
+    fi
+
+    # 某些BusyBox版本即使返回非0也可能打印明确的单播回复；再次按输出确认。
+    printf '%s\n' "$output" | grep -qiE 'Unicast reply|reply from|bytes from' && {
+        log "候选IP存在ARP/探测响应，跳过：$candidate"
+        return 1
+    }
+    return 0
 }
 
 find_free_ip() {
@@ -66,8 +96,17 @@ find_free_ip() {
     for host in 250 249 248 247 246 245 244 243 242 241 240 239 238 237 236 235 234 233 232 231 230 229 228 227 226 225 224 223 222 221 220 219 218 217 216 215 214 213 212 211 210 209 208 207 206 205 204 203 202 201 200; do
         candidate="$a.$b.$c.$host"
         if ! is_used "$candidate"; then
-            printf '%s' "$candidate"
-            return 0
+            # arping存在时再做一次实时冲突检测。
+            if [ -n "$(command -v arping 2>/dev/null)" ] || [ -x /usr/bin/arping ]; then
+                if probe_free_ip "$candidate"; then
+                    printf '%s' "$candidate"
+                    return 0
+                fi
+            else
+                # 极简固件没有arping时退回arpscan/邻居表结果，保持兼容。
+                printf '%s' "$candidate"
+                return 0
+            fi
         fi
     done
     return 1
