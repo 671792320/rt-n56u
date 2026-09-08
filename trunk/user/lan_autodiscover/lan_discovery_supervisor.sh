@@ -1,9 +1,10 @@
 #!/bin/sh
 # LAN事件监督程序。
-# 该程序常驻运行，只负责Q7 LAN口物理插拔事件监听和发现工作进程守护。
-# LAN监听、DHCP检测、设备发现开关分别控制各自功能，不关闭LAN接口。
+# Q7唯一RJ45使用本程序监听物理插拔，并统一管理发现worker与网络模式manager。
+# 已验证的DHCP开关逻辑由worker保持，本程序不直接修改DHCP服务。
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
+NETMGR_PIDFILE=/tmp/lan_network_manager.pid
 SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
 WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
@@ -11,7 +12,6 @@ LOG_FILE=/tmp/lan_discovery.log
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 mkdir -p "$RUNTIME_DIR"
 
-# 监督程序自身也必须单实例运行，否则多个监督程序可能同时拉起多个worker。
 if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
     echo "$(date '+%H:%M:%S') LAN监督程序已经运行" | logger -t lan-supervisor
     exit 0
@@ -19,7 +19,6 @@ fi
 trap 'rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 nv() { nvram get "$1" 2>/dev/null; }
-# 运行时状态只保存在/tmp，不写入持久NVRAM。
 runtime_set() {
     item="$1"
     key="${item%%=*}"
@@ -29,11 +28,8 @@ runtime_set() {
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
-set_supervisor_status() {
-    runtime_set lan_discovery_status_supervisor="$1"
-}
+set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 
-# Q7唯一RJ45对应交换机LAN4，使用mtk-esw原生PHY状态判断物理插拔。
 mtk_esw_lan4_state() {
     [ -x /sbin/mtk_esw ] || return 2
     state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
@@ -72,7 +68,52 @@ worker_running() {
     return 1
 }
 
-# 从实际系统状态更新页面显示字段，但不覆盖工作进程的业务状态。
+network_manager_running() {
+    [ -r "$NETMGR_PIDFILE" ] || return 1
+    pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
+    case "$pid" in
+        ''|*[!0-9]*) rm -f "$NETMGR_PIDFILE"; return 1;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+    rm -f "$NETMGR_PIDFILE"
+    return 1
+}
+
+start_network_manager() {
+    iface="$1"
+    if network_manager_running; then
+        runtime_set lan_discovery_status_network_manager="运行中"
+        return 0
+    fi
+    if [ ! -x /usr/bin/lan_network_manager.sh ]; then
+        runtime_set lan_discovery_status_network_manager="程序不存在"
+        echo "$(date '+%H:%M:%S') LAN网络模式管理器不存在" | logger -t lan-supervisor
+        return 1
+    fi
+    echo "$(date '+%H:%M:%S') LAN网络模式管理器启动：$iface" | logger -t lan-supervisor
+    /usr/bin/lan_network_manager.sh > /tmp/lan_network_manager.log 2>&1 &
+    echo "$!" > "$NETMGR_PIDFILE"
+    runtime_set lan_discovery_status_network_manager="运行中"
+    return 0
+}
+
+stop_network_manager() {
+    if network_manager_running; then
+        pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
+        echo "$(date '+%H:%M:%S') LAN网络模式管理器停止" | logger -t lan-supervisor
+        kill "$pid" 2>/dev/null
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
+    fi
+    rm -f "$NETMGR_PIDFILE"
+    [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :
+    [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :
+    runtime_set lan_discovery_status_network_manager="已停止"
+    runtime_set lan_discovery_status_target_network=""
+    runtime_set lan_discovery_status_target_ip=""
+    runtime_set lan_discovery_status_target_iface=""
+}
+
 sync_runtime_status() {
     iface="$1"
     if [ -e "/sys/class/net/$iface" ]; then
@@ -85,31 +126,23 @@ sync_runtime_status() {
         runtime_set lan_discovery_status_ip="$ip4"
         runtime_set lan_discovery_status_mac="$(printf '%s' "$mac" | tr '[:lower:]' '[:upper:]')"
     fi
-
     if is_link_up "$iface"; then
         runtime_set lan_discovery_status_link="UP"
     else
         runtime_set lan_discovery_status_link="DOWN"
         return
     fi
-
     [ -f "$DEVICE_DB" ] || : > "$DEVICE_DB"
     count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
     case "$count" in ''|*[!0-9]*) count=0;; esac
     runtime_set lan_discovery_status_count="$count"
-
-    # 业务状态由worker维护，supervisor只在LAN物理事件时写等待状态。
     if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
         runtime_set lan_discovery_status_state="设备发现未启用"
     elif ps 2>/dev/null | grep -q '[c]amdiscover'; then
         runtime_set lan_discovery_status_state="持续设备发现"
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
         runtime_set lan_discovery_status_state="DHCP检测"
-    elif worker_running && [ -f /tmp/dhcpdetect_lan.log ]; then
-        runtime_set lan_discovery_status_state="DHCP检测完成"
     fi
-
-    # DHCP检测结果以当前检测日志为准。
     if [ -f /tmp/dhcpdetect_lan.log ]; then
         line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
         gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
@@ -122,7 +155,6 @@ sync_runtime_status() {
             runtime_set lan_discovery_status_dhcp="未发现DHCP"
         fi
     fi
-
     last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) .*/\1/p')"
     [ -n "$last" ] && runtime_set lan_discovery_status_last="$last" || runtime_set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
@@ -133,7 +165,6 @@ start_worker() {
         runtime_set lan_discovery_status_worker="运行中"
         return 0
     fi
-    # 工作进程自己的锁目录如果仍存在但PID已经不存在，说明是异常残留，才允许清理。
     if [ -d "$WORKER_LOCKDIR" ]; then
         stale=""
         [ -r "$WORKER_LOCKDIR/pid" ] && stale="$(cat "$WORKER_LOCKDIR/pid" 2>/dev/null)"
@@ -182,22 +213,20 @@ stop_worker() {
 last_enable="-1"
 last_iface=""
 last_link="-1"
-
 set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
+runtime_set lan_discovery_status_network_manager="已停止"
 runtime_set lan_discovery_status_health="未监视"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
-
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
         runtime_set lan_discovery_status_if="$iface"
         echo "$(date '+%H:%M:%S') LAN监听接口：$iface" | logger -t lan-supervisor
     fi
-
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
         last_link="-1"
@@ -208,13 +237,10 @@ while :; do
             runtime_set lan_discovery_status_enable="已禁用"
             echo "$(date '+%H:%M:%S') LAN监听已禁用，仅停止插拔事件监听，不关闭LAN接口" | logger -t lan-supervisor
             stop_worker
+            stop_network_manager
         fi
     fi
-
-    if [ "$enable" != "1" ]; then
-        sleep 1
-        continue
-    fi
+    if [ "$enable" != "1" ]; then sleep 1; continue; fi
 
     if [ -e "/sys/class/net/$iface" ]; then
         if is_link_up "$iface"; then link=1; else link=0; fi
@@ -228,6 +254,8 @@ while :; do
             runtime_set lan_discovery_status_link="UP"
             runtime_set lan_discovery_status_state="DHCP检测"
             echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
+            # 先启动网络模式管理器；它等待DHCP检测结果，再建立目标临时IP/SNAT。
+            start_network_manager "$iface"
             start_worker "$iface"
         else
             runtime_set lan_discovery_status_link="DOWN"
@@ -235,13 +263,14 @@ while :; do
             runtime_set lan_discovery_status_dhcp="未检测"
             echo "$(date '+%H:%M:%S') LAN口已拔出：$iface" | logger -t lan-supervisor
             stop_worker
+            stop_network_manager
         fi
     fi
 
     if [ "$link" = "1" ]; then
+        start_network_manager "$iface"
         start_worker "$iface"
     fi
-
     sync_runtime_status "$iface"
     set_supervisor_status "运行中"
     sleep 1
