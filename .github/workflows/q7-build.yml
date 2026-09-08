@@ -24,6 +24,18 @@ jobs:
           ref: master
           fetch-depth: 1
 
+      - name: 注册LAN自动发现菜单
+        shell: bash
+        run: |
+          set -e
+          grep -q 'menuL1_title = new Array' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          sed -i '/^menuL1_icon = new Array/i menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");' trunk/user/www/n56u_ribbon_fixed/state.js
+          sed -i '/^menuL1_icon = new Array/a menuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_icon.push("icon-search")' trunk/user/www/n56u_ribbon_fixed/state.js
+
       - name: Prepare environment
         run: |
           sudo apt update
@@ -55,7 +67,8 @@ jobs:
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
-          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
+          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
           grep -q 'lan_discovery_dhcp_timeout' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'lan_discovery_cycle' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'IP占用情况' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
@@ -107,4 +120,4 @@ jobs:
           path: trunk/images/*.trx
           if-no-files-found: error
 
-# 中文备注：Q7正式构建只负责检查、编译和上传，不在构建时临时修改LAN发现源码。
+# 中文备注：Q7正式构建只保留确定需要的菜单注册，不再通过构建时脚本修改LAN发现源码。
