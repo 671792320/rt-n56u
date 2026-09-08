@@ -1,16 +1,17 @@
 #!/bin/sh
-# LAN监听、DHCP检测、主动ARP和设备发现后端程序。
+# LAN监听、DHCP检测、主动ARP、设备发现和二层网络健康监视后端程序。
 LOCKDIR=/var/run/lan_autodiscover.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     logger -t lan-autodiscover "LAN监听程序已经运行"
     exit 0
 fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
+trap 'stop_health; rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 # LAN设备结果和完整日志保存到临时目录，供页面及后续转发功能使用。
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 RUNTIME_DIR=/tmp/lan_discovery_runtime
+HEALTH_PIDFILE=/tmp/lan_discovery_runtime/lanhealth.pid
 mkdir -p /tmp "$RUNTIME_DIR"
 touch "$DEVICE_DB" "$LOG_FILE"
 
@@ -181,6 +182,33 @@ is_link_up() {
     return 1
 }
 
+start_health() {
+    iface="$1"
+    [ -x /usr/bin/lanhealth ] || { runtime_set lan_discovery_status_health="检测程序不存在"; return 0; }
+    if [ -f "$HEALTH_PIDFILE" ]; then
+        hpid="$(cat "$HEALTH_PIDFILE" 2>/dev/null)"
+        if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then return 0; fi
+        rm -f "$HEALTH_PIDFILE"
+    fi
+    runtime_set lan_discovery_status_health="检测启动中"
+    runtime_set lan_discovery_status_broadcast="0"
+    runtime_set lan_discovery_status_loop="0"
+    /usr/bin/lanhealth -i "$iface" > /tmp/lanhealth.log 2>&1 &
+    hpid=$!
+    printf '%s\n' "$hpid" > "$HEALTH_PIDFILE"
+    log_line "网络环路与广播风暴检测已启动"
+}
+stop_health() {
+    if [ -f "$HEALTH_PIDFILE" ]; then
+        hpid="$(cat "$HEALTH_PIDFILE" 2>/dev/null)"
+        [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+        rm -f "$HEALTH_PIDFILE"
+    fi
+    runtime_set lan_discovery_status_health="未监视"
+    runtime_set lan_discovery_status_broadcast="0"
+    runtime_set lan_discovery_status_loop="0"
+}
+
 sort_device_db() {
     [ -f "$DEVICE_DB" ] || return
     tmp="${DEVICE_DB}.tmp"
@@ -196,7 +224,7 @@ sort_device_db() {
 }
 sync_device_cache() {
     sort_device_db
-    count="$(grep -v 'type=SUBNET' "$DEVICE_DB" 2>/dev/null | wc -l | tr -d ' ')"
+    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
     runtime_set lan_discovery_status_count="${count:-0}"
 }
 reset_device_db() {
@@ -213,11 +241,20 @@ clear_subnet_records() {
 append_device() {
     clean="$(clean_device_line "$1")" || return
     ip="$(printf '%s\n' "$clean" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+    new_mac="$(printf '%s\n' "$clean" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
     [ -n "$ip" ] || return
+
+    old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
     tmp="${DEVICE_DB}.tmp"
     : > "$tmp"
-    awk -v ip="$ip" 'index($0," IP=" ip " ")==0 && index($0," IP=" ip)==0 {print}' "$DEVICE_DB" 2>/dev/null >> "$tmp"
+    awk -v ip="$ip" '$0 ~ /type=IP_CONFLICT / {next} index($0," IP=" ip " ")!=0 || index($0," IP=" ip)==0 {if (index($0," IP=" ip " ")!=0 || index($0," IP=" ip "")==0) print}' "$DEVICE_DB" 2>/dev/null > "$tmp"
+    # 上面的条件保持历史其它IP记录，同时排除同IP旧记录。
+    awk -v ip="$ip" 'BEGIN{} {if ($0 ~ /type=IP_CONFLICT /) next; if (index($0," IP=" ip " ") != 0) next; print}' "$DEVICE_DB" 2>/dev/null > "${tmp}.base"
+    mv -f "${tmp}.base" "$tmp"
     printf '%s\n' "$clean" >> "$tmp"
+    if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] && [ -n "$new_mac" ] && [ "$new_mac" != "-" ] && [ "$old_mac" != "$new_mac" ]; then
+        printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s\n' "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
+    fi
     mv -f "$tmp" "$DEVICE_DB"
     sync_device_cache
     printf '%s' "$clean"
@@ -236,6 +273,8 @@ register_subnet_from_ip() {
 }
 register_subnet_from_device_line() {
     line="$1"
+    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    [ "$type" = "SUBNET" ] && return
     ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
     [ -n "$ip" ] && register_subnet_from_ip "$ip"
 }
@@ -272,9 +311,12 @@ EOF
                 [ -n "$line" ] || continue
                 case "$line" in
                     DEVICE\ *)
-                        register_subnet_from_device_line "$line"
-                        clean="$(append_device "$line")"
-                        [ -n "$clean" ] && log_line "$clean"
+                        type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+                        if [ "$type" != "SUBNET" ]; then
+                            register_subnet_from_device_line "$line"
+                            clean="$(append_device "$line")"
+                            [ -n "$clean" ] && log_line "发现设备：$clean"
+                        fi
                         ;;
                     \[arpscan\]*) log_line "$line";;
                 esac
@@ -294,6 +336,7 @@ run_discovery() {
 
     runtime_set lan_discovery_status_state="DHCP检测"
     log_line "LAN口已插入 $iface"
+    start_health "$iface"
     : > /tmp/dhcpdetect_lan.log
     if [ "$dhcp_enable" = "1" ] && [ -x /usr/bin/dhcpdetect ]; then
         /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" >/tmp/dhcpdetect_lan.log 2>&1
@@ -370,7 +413,12 @@ run_discovery() {
             [ -n "$row" ] || continue
             printf '%s\n' "$row" >> /tmp/camdiscover_custom.conf
         done
-        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"
+        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"
+        [ "$onvif" = "1" ] && args="$args -O"
+        [ "$ssdp" = "1" ] && args="$args -S"
+        [ "$hik" = "1" ] && args="$args -H"
+        [ "$dahua" = "1" ] && args="$args -D"
+        [ "$raw" = "1" ] && args="$args -A"
         [ -s /tmp/camdiscover_custom.conf ] && args="$args -C /tmp/camdiscover_custom.conf"
         /usr/bin/camdiscover $args > /tmp/camdiscover_lan.log 2>&1 &
         pid=$!
@@ -390,9 +438,12 @@ run_discovery() {
                         [ -n "$line" ] || continue
                         case "$line" in
                             DEVICE\ *)
-                                register_subnet_from_device_line "$line"
-                                clean="$(append_device "$line")"
-                                [ -n "$clean" ] && log_line "$clean"
+                                type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+                                if [ "$type" != "SUBNET" ]; then
+                                    register_subnet_from_device_line "$line"
+                                    clean="$(append_device "$line")"
+                                    [ -n "$clean" ] && log_line "发现设备：$clean"
+                                fi
                                 ;;
                             *probe\ sent*|*probe\ FAILED*) log_line "$line";;
                             *listen\ *FAILED*) log_line "$line";;
@@ -458,10 +509,11 @@ while :; do
         if [ -e "/sys/class/net/$iface" ]; then
             if is_link_up "$iface"; then set_link_status "$iface" "UP"; else set_link_status "$iface" "DOWN"; fi
         fi
+        stop_health
         sleep 2
         continue
     fi
-    if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; sleep 2; continue; fi
+    if [ ! -e "/sys/class/net/$iface" ]; then set_link_status "$iface" "不存在"; stop_health; sleep 2; continue; fi
     if is_link_up "$iface"; then state=1; else state=0; fi
     if [ "$state" != "$last_state" ]; then
         last_state="$state"
@@ -471,12 +523,13 @@ while :; do
             run_discovery "$iface"
         else
             set_link_status "$iface" "DOWN"
+            stop_health
             runtime_set lan_discovery_status_state="等待接口"
             log_line "LAN口已拔出 $iface"
         fi
     fi
 
-    # 设备发现开关只控制camdiscover和主动ARP扫描，不停止LAN工作进程或DHCP流程。
+    # 设备发现开关只控制camdiscover和主动ARP扫描，不停止LAN工作进程、DHCP或网络健康监视。
     if [ "$state" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ]; then
@@ -486,5 +539,6 @@ while :; do
             runtime_set lan_discovery_status_state="设备发现未启用"
         fi
     fi
+    if [ "$state" = "1" ]; then start_health "$iface"; fi
     sleep 1
 done
