@@ -9,6 +9,9 @@
  * 4. Q7的eth2.1是VLAN接口，可能没有自己的IPv4地址；这种情况下使用br0的
  *    IPv4/掩码作为扫描参考和ARP源地址，但ARP帧仍然从eth2.1发出。
  * 5. 默认扫描本机接口所在/24网段；可以通过多个-s参数追加其它已发现网段。
+ * 6. DHCP检测完成后，如果检测到了上级网关，则自动把网关所在/24加入扫描，
+ *    这样Q7自身是192.168.2.1、现场网关是192.168.1.1时，也能继续主动扫描192.168.1.0/24。
+ * 7. 兼容802.1Q VLAN封装的ARP回包，并输出发送/接收统计，便于现场排查。
  */
 #include <arpa/inet.h>
 #include <getopt.h>
@@ -37,6 +40,10 @@ typedef struct {
     unsigned int mask;
     int prefix;
 } subnet_t;
+
+static unsigned long total_sent;
+static unsigned long total_received;
+static unsigned long total_valid;
 
 static int parse_ipv4(const char *text, unsigned int *out)
 {
@@ -215,41 +222,63 @@ static int send_arp_request(int fd, int ifindex, const unsigned char src_mac[6],
     to.sll_halen = ETH_ALEN;
     memset(to.sll_addr, 0xff, ETH_ALEN);
 
-    return sendto(fd, frame, sizeof(frame), 0,
-                  (struct sockaddr *)&to, sizeof(to)) == (ssize_t)sizeof(frame) ? 0 : -1;
+    if (sendto(fd, frame, sizeof(frame), 0,
+               (struct sockaddr *)&to, sizeof(to)) == (ssize_t)sizeof(frame)) {
+        total_sent++;
+        return 0;
+    }
+    return -1;
 }
 
-static void handle_arp(const unsigned char *buf, int len,
-                       const unsigned char self_mac[6], unsigned int self_ip)
+static int handle_arp(const unsigned char *buf, int len,
+                      const unsigned char self_mac[6], unsigned int self_ip)
 {
     const struct ethhdr *eth;
     const struct arphdr *arp;
     const unsigned char *p;
     unsigned int sender_ip;
     char ip[IP_TEXT_LEN], mac[MAC_TEXT_LEN];
-    unsigned short op;
+    unsigned short op, proto;
+    int off = ETH_HLEN;
 
-    if (len < (int)(ETH_HLEN + sizeof(struct arphdr) + 20))
-        return;
+    if (len < ETH_HLEN)
+        return 0;
+
+    total_received++;
     eth = (const struct ethhdr *)buf;
-    if (ntohs(eth->h_proto) != ETH_P_ARP)
-        return;
-    arp = (const struct arphdr *)(buf + ETH_HLEN);
+    proto = ntohs(eth->h_proto);
+
+    /* 兼容802.1Q VLAN封装的ARP回包。 */
+    if (proto == ETH_P_8021Q) {
+        if (len < ETH_HLEN + 4)
+            return 0;
+        proto = ntohs(*(const unsigned short *)(buf + 16));
+        off += 4;
+    }
+
+    if (proto != ETH_P_ARP)
+        return 0;
+    if (len < off + (int)sizeof(struct arphdr) + 20)
+        return 0;
+
+    arp = (const struct arphdr *)(buf + off);
     if (ntohs(arp->ar_pro) != ETH_P_IP || arp->ar_hln != 6 || arp->ar_pln != 4)
-        return;
+        return 0;
     op = ntohs(arp->ar_op);
     if (op != ARPOP_REPLY && op != ARPOP_REQUEST)
-        return;
+        return 0;
 
-    p = buf + ETH_HLEN + sizeof(struct arphdr);
+    p = buf + off + sizeof(struct arphdr);
     memcpy(&sender_ip, p + 6, 4);
     if (ntohl(sender_ip) == self_ip || same_mac(p, self_mac))
-        return;
+        return 0;
 
     ipv4_text(ntohl(sender_ip), ip, sizeof(ip));
     mac_text(p, mac, sizeof(mac));
+    total_valid++;
     printf("DEVICE type=ARP IP=%s MAC=%s\n", ip, mac);
     fflush(stdout);
+    return 1;
 }
 
 static int scan_subnet(int fd, int ifindex, const unsigned char mac[6],
@@ -272,6 +301,41 @@ static int scan_subnet(int fd, int ifindex, const unsigned char mac[6],
     return 0;
 }
 
+static void add_dhcp_gateway_subnet(subnet_t *subnets, int *subnet_count)
+{
+    FILE *f;
+    char line[512], gateway[IP_TEXT_LEN];
+    subnet_t s;
+    char network[IP_TEXT_LEN];
+
+    f = fopen("/tmp/dhcpdetect_lan.log", "r");
+    if (!f)
+        return;
+
+    gateway[0] = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = strstr(line, "gateway=");
+        if (!p)
+            continue;
+        p += 8;
+        if (sscanf(p, "%15s", gateway) == 1)
+            break;
+    }
+    fclose(f);
+
+    if (!gateway[0] || parse_ipv4(gateway, &s.network) < 0)
+        return;
+    s.mask = 0xffffff00U;
+    s.network &= s.mask;
+    s.prefix = 24;
+
+    if (add_subnet(subnets, subnet_count, &s) == 0) {
+        ipv4_text(s.network, network, sizeof(network));
+        printf("[arpscan] 根据DHCP网关自动加入网段 %s/24\n", network);
+        fflush(stdout);
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = "eth2.1";
@@ -286,6 +350,9 @@ int main(int argc, char **argv)
     char source_ip[IP_TEXT_LEN];
 
     memset(subnets, 0, sizeof(subnets));
+    total_sent = 0;
+    total_received = 0;
+    total_valid = 0;
 
     while ((opt = getopt(argc, argv, "i:t:s:h")) != -1) {
         if (opt == 'i') {
@@ -319,6 +386,9 @@ int main(int argc, char **argv)
         local.prefix = 24;
         add_subnet(subnets, &subnet_count, &local);
     }
+
+    /* DHCP检测得到的上级网关可能与Q7本机LAN网段不同，自动追加其/24。 */
+    add_dhcp_gateway_subnet(subnets, &subnet_count);
 
     fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
     if (fd < 0) {
@@ -368,6 +438,9 @@ int main(int argc, char **argv)
         }
     }
 
+    printf("[arpscan] 扫描完成：发送=%lu，收到ARP帧=%lu，有效设备响应=%lu\n",
+           total_sent, total_received, total_valid);
+    fflush(stdout);
     close(fd);
     return 0;
 }
