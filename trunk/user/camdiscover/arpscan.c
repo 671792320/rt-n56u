@@ -6,12 +6,14 @@
  * 2. 只处理ARP，不抓取普通IPv4流量，避免把局域网中的电脑、手机、服务器等
  *    普通主机全部当成“未知设备”被动计入设备列表。
  * 3. 一个进程批量发送整段ARP请求，再统一等待响应，避免启动数百个arping进程。
- * 4. Q7的eth2.1是VLAN接口，可能没有自己的IPv4地址；这种情况下使用br0的
- *    IPv4/掩码作为扫描参考和ARP源地址，但ARP帧仍然从eth2.1发出。
+ * 4. Q7的eth2.1是VLAN接口；ARP请求从实际LAN VLAN接口发送，ARP回包同时在
+ *    eth2.1和br0两个Linux层监听。两个接口最终都对应同一个Q7物理RJ45，不是两个物理端口。
  * 5. 默认扫描本机接口所在/24网段；可以通过多个-s参数追加其它已发现网段。
  * 6. DHCP检测完成后，如果检测到了上级网关，则自动把网关所在/24加入扫描，
  *    这样Q7自身是192.168.2.1、现场网关是192.168.1.1时，也能继续主动扫描192.168.1.0/24。
- * 7. 兼容802.1Q VLAN封装的ARP回包，并输出发送/接收统计，便于现场排查。
+ * 7. 扫描与本机不同网段时使用0.0.0.0作为ARP Sender Protocol Address，
+ *    避免伪造Q7本机地址导致跨网段ARP源地址不合理。
+ * 8. 兼容802.1Q VLAN封装的ARP回包，并输出发送/接收统计，便于现场排查。
  */
 #include <arpa/inet.h>
 #include <getopt.h>
@@ -34,6 +36,7 @@
 #define IP_TEXT_LEN 16
 #define BUF_SIZE 2048
 #define ETH_FRAME_MIN 60
+#define RX_SOCKET_MAX 2
 
 typedef struct {
     unsigned int network;
@@ -124,6 +127,19 @@ static int get_iface_index_mac(int fd, const char *ifname, int *ifindex,
         return -1;
     memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
     return 0;
+}
+
+static int get_iface_index(int fd, const char *ifname)
+{
+    struct ifreq ifr;
+
+    if (!ifname)
+        return -1;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0)
+        return -1;
+    return ifr.ifr_ifindex;
 }
 
 static int get_iface_ipv4(int fd, const char *ifname, unsigned int *ip, unsigned int *mask)
@@ -282,19 +298,27 @@ static int handle_arp(const unsigned char *buf, int len,
 }
 
 static int scan_subnet(int fd, int ifindex, const unsigned char mac[6],
-                       unsigned int src_ip, const subnet_t *s)
+                       unsigned int local_ip, unsigned int local_network,
+                       const subnet_t *s)
 {
     unsigned int host;
     unsigned int target;
+    unsigned int src_ip;
     char network[IP_TEXT_LEN];
+    char src_text[IP_TEXT_LEN];
 
     ipv4_text(s->network, network, sizeof(network));
     printf("[arpscan] 扫描网段 %s/%d\n", network, s->prefix);
+
+    /* 同网段使用Q7实际地址；其它网段不伪造Q7地址，使用ARP Probe的0.0.0.0源地址。 */
+    src_ip = (s->network == local_network) ? local_ip : 0;
+    ipv4_text(src_ip, src_text, sizeof(src_text));
+    printf("[arpscan] ARP源地址 %s\n", src_text);
     fflush(stdout);
 
     for (host = 1; host < 255; ++host) {
         target = s->network | host;
-        if (target == src_ip)
+        if (s->network == local_network && target == local_ip)
             continue;
         send_arp_request(fd, ifindex, mac, htonl(src_ip), htonl(target));
     }
@@ -336,12 +360,36 @@ static void add_dhcp_gateway_subnet(subnet_t *subnets, int *subnet_count)
     }
 }
 
+static int open_arp_rx_socket(int ifindex)
+{
+    int fd;
+    struct sockaddr_ll ba;
+
+    if (ifindex <= 0)
+        return -1;
+    fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+    if (fd < 0)
+        return -1;
+
+    memset(&ba, 0, sizeof(ba));
+    ba.sll_family = AF_PACKET;
+    ba.sll_ifindex = ifindex;
+    ba.sll_protocol = htons(ETH_P_ARP);
+    if (bind(fd, (struct sockaddr *)&ba, sizeof(ba)) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = "eth2.1";
-    int timeout = 2, opt, ifindex, fd, i;
+    int timeout = 2, opt, ifindex, rx_count, i;
+    int txfd = -1, rxfd[RX_SOCKET_MAX] = {-1, -1};
+    int br0_ifindex = -1;
     unsigned char mac[6], buf[BUF_SIZE];
-    unsigned int ip = 0, mask = 0;
+    unsigned int ip = 0, mask = 0, local_network = 0;
     subnet_t subnets[MAX_SUBNETS];
     int subnet_count = 0;
     fd_set rfds;
@@ -378,10 +426,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    local_network = ip & 0xffffff00U;
     ipv4_text(ip, source_ip, sizeof(source_ip));
     if ((mask & 0xffffff00U) == 0xffffff00U) {
         subnet_t local;
-        local.network = ip & 0xffffff00U;
+        local.network = local_network;
         local.mask = 0xffffff00U;
         local.prefix = 24;
         add_subnet(subnets, &subnet_count, &local);
@@ -390,57 +439,92 @@ int main(int argc, char **argv)
     /* DHCP检测得到的上级网关可能与Q7本机LAN网段不同，自动追加其/24。 */
     add_dhcp_gateway_subnet(subnets, &subnet_count);
 
-    fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-    if (fd < 0) {
-        perror("[arpscan] socket");
+    txfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+    if (txfd < 0) {
+        perror("[arpscan] tx socket");
         return 1;
     }
 
+    /* 发送端严格使用实际LAN VLAN接口，保持物理RJ45路径不变。 */
     {
         struct sockaddr_ll ba;
         memset(&ba, 0, sizeof(ba));
         ba.sll_family = AF_PACKET;
         ba.sll_ifindex = ifindex;
         ba.sll_protocol = htons(ETH_P_ARP);
-        if (bind(fd, (struct sockaddr *)&ba, sizeof(ba)) < 0) {
-            perror("[arpscan] bind");
-            close(fd);
+        if (bind(txfd, (struct sockaddr *)&ba, sizeof(ba)) < 0) {
+            perror("[arpscan] tx bind");
+            close(txfd);
             return 1;
+        }
+    }
+
+    rxfd[0] = open_arp_rx_socket(ifindex);
+    rx_count = rxfd[0] >= 0 ? 1 : 0;
+
+    /* Q7的LAN口最终挂在br0上，增加bridge层监听以兼容驱动/bridge收包路径。 */
+    if (!strcmp(ifname, "eth2.1")) {
+        int ctl = socket(AF_INET, SOCK_DGRAM, 0);
+        if (ctl >= 0) {
+            br0_ifindex = get_iface_index(ctl, "br0");
+            close(ctl);
+        }
+        if (br0_ifindex > 0 && br0_ifindex != ifindex && rx_count < RX_SOCKET_MAX) {
+            rxfd[rx_count] = open_arp_rx_socket(br0_ifindex);
+            if (rxfd[rx_count] >= 0)
+                rx_count++;
         }
     }
 
     printf("[arpscan] iface=%s ifindex=%d source_ip=%s subnet_count=%d timeout=%d\n",
            ifname, ifindex, source_ip, subnet_count, timeout);
+    printf("[arpscan] ARP发送接口=%s；ARP接收监听点=%d（同一物理RJ45的Linux逻辑层）\n",
+           ifname, rx_count);
     fflush(stdout);
 
     for (i = 0; i < subnet_count; ++i)
-        scan_subnet(fd, ifindex, mac, ip, &subnets[i]);
+        scan_subnet(txfd, ifindex, mac, ip, local_network, &subnets[i]);
 
     end = time(NULL) + timeout;
     while (time(NULL) < end) {
         int left = (int)(end - time(NULL));
-        int n;
+        int n, maxfd = -1;
         if (left < 1) left = 1;
         FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
+        for (i = 0; i < rx_count; ++i) {
+            if (rxfd[i] >= 0) {
+                FD_SET(rxfd[i], &rfds);
+                if (rxfd[i] > maxfd)
+                    maxfd = rxfd[i];
+            }
+        }
+        if (maxfd < 0)
+            break;
         tv.tv_sec = left;
         tv.tv_usec = 0;
-        n = select(fd + 1, &rfds, NULL, NULL, &tv);
+        n = select(maxfd + 1, &rfds, NULL, NULL, &tv);
         if (n <= 0) {
             if (n < 0)
                 continue;
             break;
         }
-        if (FD_ISSET(fd, &rfds)) {
-            n = recv(fd, buf, sizeof(buf), 0);
-            if (n > 0)
-                handle_arp(buf, n, mac, ip);
+        for (i = 0; i < rx_count; ++i) {
+            if (rxfd[i] >= 0 && FD_ISSET(rxfd[i], &rfds)) {
+                n = recv(rxfd[i], buf, sizeof(buf), 0);
+                if (n > 0)
+                    handle_arp(buf, n, mac, ip);
+            }
         }
     }
 
     printf("[arpscan] 扫描完成：发送=%lu，收到ARP帧=%lu，有效设备响应=%lu\n",
            total_sent, total_received, total_valid);
     fflush(stdout);
-    close(fd);
+
+    for (i = 0; i < rx_count; ++i)
+        if (rxfd[i] >= 0)
+            close(rxfd[i]);
+    if (txfd >= 0)
+        close(txfd);
     return 0;
 }
