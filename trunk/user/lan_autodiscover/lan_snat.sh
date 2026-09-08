@@ -5,7 +5,21 @@
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 STATE_FILE="$RUNTIME_DIR/lan_snat.state"
 LOGTAG=lan-autodiscover
-IPTABLES=/sbin/iptables
+
+# Padavan/Q7 实际环境中 iptables 位于 /bin/iptables；不同固件也可能位于
+# /sbin 或 /usr/sbin。禁止把路径写死，否则功能正常的iptables会被误判为不存在。
+find_iptables() {
+    if command -v iptables >/dev/null 2>&1; then
+        command -v iptables
+        return 0
+    fi
+    for p in /bin/iptables /sbin/iptables /usr/sbin/iptables; do
+        [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
+}
+
+IPTABLES="$(find_iptables 2>/dev/null)"
 
 log() {
     logger -t "$LOGTAG" "[snat] $*"
@@ -47,6 +61,10 @@ mkdir -p "$RUNTIME_DIR"
 
 case "$1" in
     down|remove|-r|--remove)
+        if [ -z "$IPTABLES" ]; then
+            rm -f "$STATE_FILE"
+            exit 0
+        fi
         cleanup
         exit 0
         ;;
@@ -66,7 +84,7 @@ case "$TARGET_NET:$TARGET_IP:$LAN_NET" in
     *) log "SNAT参数无效：target=$TARGET_NET target_ip=$TARGET_IP lan=$LAN_NET"; exit 1;;
 esac
 
-[ -x "$IPTABLES" ] || { log "iptables不存在，无法启用SNAT"; exit 1; }
+[ -n "$IPTABLES" ] || { log "iptables不存在，无法启用SNAT"; exit 1; }
 
 cleanup
 
