@@ -1,4 +1,4 @@
-name: 修复设备发现开关逻辑
+name: 修复设备发现开关与周期页面
 on:
   push:
     branches: [ master ]
@@ -6,125 +6,99 @@ permissions:
   contents: write
 jobs:
   fix:
-    if: github.event.head_commit.message != '修复设备发现开关独立逻辑'
+    if: github.event.head_commit.message != '修复设备发现开关与周期'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 修改设备发现开关逻辑
+      - name: 修正LAN发现逻辑与WebUI
         shell: bash
         run: |
+          set -e
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           worker = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
           s = worker.read_text(encoding='utf-8')
+
+          # 设备发现开关只控制camdiscover，不退出整个LAN工作进程。
           old = '''    if [ "$discover_enable" != "1" ] || [ ! -x /usr/bin/camdiscover ]; then
         runtime_set lan_discovery_status_state="设备发现未启用"
         return
     fi
-
-    # 发现周期不再清空设备数据库，保证页面和后续转发使用稳定结果。
-    sync_device_cache
-    runtime_set lan_discovery_status_state="持续设备发现"
-    log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
-    while is_link_up "$iface"; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            log_line "设备发现已关闭，停止设备发现进程"
-            break
-        fi
 '''
-          new = '''    # 设备发现开关只控制camdiscover，不影响LAN和DHCP工作进程。
-    if [ ! -x /usr/bin/camdiscover ]; then
+          new = '''    if [ ! -x /usr/bin/camdiscover ]; then
         runtime_set lan_discovery_status_state="设备发现程序不存在"
         return
     fi
 
-    # 设备列表持续保存在/tmp，LAN插拔和发现开关切换都不清空。
-    sync_device_cache
-    while is_link_up "$iface"; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            sleep 1
-            continue
-        fi
+    # 设备发现关闭时保持LAN工作进程运行，等待WebUI重新启用发现。
+    if [ "$discover_enable" != "1" ]; then
+        runtime_set lan_discovery_status_state="设备发现未启用"
+        log_line "设备发现已关闭，等待重新启用"
+    fi
+'''
+          if old in s:
+              s = s.replace(old, new, 1)
 
-        runtime_set lan_discovery_status_state="持续设备发现"
-        log_line "开始持续设备发现 $iface，探测周期 ${discover_cycle}s"
+          # 协议开关关闭时不传对应flag，避免把“-O 0”错误解析为开启。
+          old = '        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"\n'
+          new = '''        args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"
+        [ "$onvif" = "1" ] && args="$args -O"
+        [ "$ssdp" = "1" ] && args="$args -S"
+        [ "$hik" = "1" ] && args="$args -H"
+        [ "$dahua" = "1" ] && args="$args -D"
+        [ "$raw" = "1" ] && args="$args -A"
 '''
-          if old not in s:
-              raise SystemExit('未找到worker设备发现开关代码')
-          s = s.replace(old, new, 1)
-          old = '''        wait "$pid" 2>/dev/null
-        if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            break
-        fi
-'''
-          new = '''        wait "$pid" 2>/dev/null
-        if [ "$stop_discovery" = "1" ] || [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            sleep 1
-            continue
-        fi
-'''
-          if old not in s:
-              raise SystemExit('未找到worker发现停止处理代码')
-          s = s.replace(old, new, 1)
+          if old in s:
+              s = s.replace(old, new, 1)
           worker.write_text(s, encoding='utf-8')
 
-          supervisor = Path('trunk/user/lan_autodiscover/lan_discovery_supervisor.sh')
-          s = supervisor.read_text(encoding='utf-8')
-          old = '''    # 设备发现开关独立于LAN插拔。无需重新插拔网线即可立即停止或恢复发现。
-    if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
-        last_discover="$discover_enable"
-        if [ "$discover_enable" = "1" ]; then
-            runtime_set lan_discovery_status_state="启动设备发现"
-            echo "$(date '+%H:%M:%S') 设备发现已启用" | logger -t lan-supervisor
-            stop_worker
-            start_worker "$iface"
-        else
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            echo "$(date '+%H:%M:%S') 设备发现已禁用" | logger -t lan-supervisor
-            stop_worker
-        fi
-    fi
+          cam = Path('trunk/user/camdiscover/camdiscover.c')
+          s = cam.read_text(encoding='utf-8')
+          s = s.replace('int timeout=10,onvif=1,ssdp=1,hik=1,dahua=1,raw=1,', 'int timeout=10,onvif=0,ssdp=0,hik=0,dahua=0,raw=0,', 1)
+          cam.write_text(s, encoding='utf-8')
 
-    # 工作进程异常退出时自动恢复，但设备发现关闭时保持停止。
-    if [ "$link" = "1" ] && [ "$discover_enable" = "1" ]; then
-        start_worker "$iface"
-    fi
-'''
-          new = '''    # 设备发现开关只改变发现功能，不停止worker；DHCP和LAN监听保持独立运行。
-    if [ "$enable" = "1" ] && [ "$link" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
-        last_discover="$discover_enable"
-        if [ "$discover_enable" = "1" ]; then
-            runtime_set lan_discovery_status_state="启动设备发现"
-            echo "$(date '+%H:%M:%S') 设备发现已启用" | logger -t lan-supervisor
-        else
-            runtime_set lan_discovery_status_state="设备发现未启用"
-            echo "$(date '+%H:%M:%S') 设备发现已禁用" | logger -t lan-supervisor
-        fi
-    fi
+          page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          p = page.read_text(encoding='utf-8')
 
-    # LAN插入后worker始终运行；是否执行camdiscover由worker内部的设备发现开关决定。
-    if [ "$link" = "1" ]; then
-        start_worker "$iface"
-    fi
-'''
-          if old not in s:
-              raise SystemExit('未找到supervisor设备发现开关代码')
-          s = s.replace(old, new, 1)
-          supervisor.write_text(s, encoding='utf-8')
+          # 恢复DHCP等待时间输入框；已有则不重复添加。
+          if 'name="lan_discovery_dhcp_timeout"' not in p:
+              m = re.search(r'(<tr>\s*<th>DHCP检测</th><td>.*?</td>\s*</tr>)', p, re.S)
+              if not m:
+                  raise SystemExit('未找到DHCP检测页面行')
+              row = m.group(1) + '\n<tr><th>DHCP等待时间</th><td><input class="mini" name="lan_discovery_dhcp_timeout" onkeypress="return is_number(this,event);" value="<% nvram_get_x(\"\", \"lan_discovery_dhcp_timeout\"); %>"> 秒</td></tr>'
+              p = p[:m.start(1)] + row + p[m.end(1):]
+
+          # 恢复设备发现周期输入框；已有则不重复添加。
+          if 'name="lan_discovery_cycle"' not in p:
+              m = re.search(r'(<tr>\s*<th>设备发现</th><td>.*?</td>\s*</tr>)', p, re.S)
+              if not m:
+                  raise SystemExit('未找到设备发现页面行')
+              row = m.group(1) + '\n<tr><th>设备发现周期</th><td><input class="mini" name="lan_discovery_cycle" onkeypress="return is_number(this,event);" value="<% nvram_get_x(\"\", \"lan_discovery_cycle\"); %>"> 秒</td></tr>'
+              p = p[:m.start(1)] + row + p[m.end(1):]
+
+          page.write_text(p, encoding='utf-8')
+
+          # 中文备注：设备发现开关只控制发现功能；LAN与DHCP保持独立。
+          PY
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          grep -q '设备发现已关闭' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q '\[ "$onvif" = "1" \] && args="$args -O"' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'int timeout=10,onvif=0,ssdp=0,hik=0,dahua=0,raw=0' trunk/user/camdiscover/camdiscover.c
+          grep -q 'name="lan_discovery_cycle"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'name="lan_discovery_dhcp_timeout"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           git diff --check
-      - name: 提交正式源码
-        shell: bash
-        run: |
           git config user.name 'GitHub Actions'
           git config user.email 'actions@github.com'
-          git add trunk/user/lan_autodiscover/lan_autodiscover.sh trunk/user/lan_autodiscover/lan_discovery_supervisor.sh .github/workflows/_lan_fix_discover_switch.yml
-          git commit -m '修复设备发现开关独立逻辑'
+          git add trunk/user/lan_autodiscover/lan_autodiscover.sh trunk/user/camdiscover/camdiscover.c trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          git commit -m '修复设备发现开关与周期'
+          git push
+      - name: 清理本临时工作流
+        if: success()
+        shell: bash
+        run: |
           git rm .github/workflows/_lan_fix_discover_switch.yml
-          git commit --amend --no-edit
+          git commit -m '删除临时设备发现修复流程'
           git push
