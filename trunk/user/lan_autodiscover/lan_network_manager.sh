@@ -88,18 +88,21 @@ apply_target() {
 
     current_target="$(cat "$RUNTIME_DIR/lan_discovery_status_target_network" 2>/dev/null)"
     current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
+    address_ready=0
     if [ "$current_target" = "$target_net/24" ] && [ -n "$current_ip" ] && ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
-        return 0
+        address_ready=1
+        log "目标临时地址已存在：$current_ip/24，继续应用网络模式"
     fi
 
-    runtime_set lan_discovery_status_state "LAN目标网段接管"
-    if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
-        log "目标网段接管失败：$target_net/24"
-        return 1
+    if [ "$address_ready" != "1" ]; then
+        runtime_set lan_discovery_status_state "LAN目标网段接管"
+        if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
+            log "目标网段接管失败：$target_net/24"
+            return 1
+        fi
+        current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
+        [ -n "$current_ip" ] || return 1
     fi
-
-    current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
-    [ -n "$current_ip" ] || return 1
 
     mode="NO_DHCP"
     if dhcp_found; then mode="DHCP"; fi
@@ -111,6 +114,9 @@ apply_target() {
                 log "SNAT启用失败：$localnet/24 -> $target_net/24"
                 return 1
             }
+        else
+            log "SNAT程序不存在：无法启用无DHCP访问转发"
+            return 1
         fi
     else
         runtime_set lan_discovery_status_state "有DHCP：目标LAN协议发现"
