@@ -1,7 +1,10 @@
 #!/bin/sh
-# Q7 LAN临时接管：根据主动ARP发现的目标/24网段选择空闲地址，
+# Q7 LAN临时接管：根据主动ARP发现的目标/24网段选择空闲地址。
 # 给br0增加secondary IPv4，使后续三层/组播协议发现使用目标LAN源地址。
-# 不修改NVRAM，不替换Padavan原有LAN主地址。再次调用本程序会替换上一次临时地址。
+#
+# 重要：同一个目标网段重复调用时，必须复用已经成功接管的临时IP，
+# 不能每次先删除旧IP再重新挑选，否则会造成 .250 -> .249 -> .248 连续变化，
+# 从而让SNAT规则跟着变化，导致访问连接不稳定。
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 TAKEOVER_FILE="$RUNTIME_DIR/lan_takeover.state"
@@ -41,6 +44,32 @@ remove_existing() {
         fi
     fi
     rm -f "$TAKEOVER_FILE" "$USED_FILE"
+}
+
+# 检查当前临时接管地址是否仍然有效。
+# 同一目标网段重复调用时直接复用，不重新选择IP。
+reuse_existing() {
+    [ -r "$TAKEOVER_FILE" ] || return 1
+
+    old_iface="$(sed -n 's/^iface=//p' "$TAKEOVER_FILE" | head -n 1)"
+    old_ip="$(sed -n 's/^ip=//p' "$TAKEOVER_FILE" | head -n 1)"
+    old_network="$(sed -n 's/^network=//p' "$TAKEOVER_FILE" | head -n 1)"
+
+    [ "$old_iface" = "$BR_IF" ] || return 1
+    [ "$old_network" = "$NETWORK" ] || return 1
+    valid_ip "$old_ip" || return 1
+
+    # 已经配置在br0上的地址就是本程序此前成功选出的地址。
+    # 不再次ARP探测这个地址，因为本机已经拥有它，ARP探测会得到本机响应。
+    if ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $old_ip/24"; then
+        runtime_set lan_discovery_status_target_network "$NETWORK/24"
+        runtime_set lan_discovery_status_target_ip "$old_ip"
+        runtime_set lan_discovery_status_target_iface "$BR_IF"
+        log "复用已有临时LAN地址：$BR_IF $old_ip/24，目标网段=${NETWORK}/24"
+        return 0
+    fi
+
+    return 1
 }
 
 collect_used_ips() {
@@ -138,6 +167,13 @@ fi
 BR_IF=br0
 [ -e "/sys/class/net/$BR_IF" ] || BR_IF="$IFACE"
 
+# 同一目标网段已经接管成功时直接复用旧地址。
+# 这是保证SNAT源地址稳定的关键：只有目标网段变化或地址确实丢失时才重新选IP。
+if reuse_existing; then
+    exit 0
+fi
+
+# 如果存在旧接管状态但目标网段已经变化，先撤销旧地址，再重新选择。
 remove_existing
 collect_used_ips
 
