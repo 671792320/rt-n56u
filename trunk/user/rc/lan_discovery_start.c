@@ -4,10 +4,8 @@
 #include <stdlib.h>
 
 /*
- * Start the persistent LAN discovery supervisor once during real system init.
- * The supervisor itself remains alive regardless of the WebUI enable switch.
- * lan_discovery_enable only controls whether the discovery worker is started,
- * so disabling discovery never disables LAN link/IP event monitoring.
+ * Start persistent LAN discovery and network-mode managers once during real
+ * system init.  The managers themselves remain alive and react to LAN events.
  */
 static void __attribute__((constructor)) lan_discovery_constructor(void)
 {
@@ -27,6 +25,19 @@ static void __attribute__((constructor)) lan_discovery_constructor(void)
 		child = fork();
 		if (child == 0) {
 			execl("/usr/bin/lan_discovery_supervisor.sh", "lan_discovery_supervisor.sh", (char *)NULL);
+			_exit(127);
+		}
+		_exit(child < 0 ? 126 : 0);
+	}
+
+	pid = fork();
+	if (pid == 0) {
+		pid_t child;
+		setsid();
+		sleep(10);
+		child = fork();
+		if (child == 0) {
+			execl("/usr/bin/lan_network_manager.sh", "lan_network_manager.sh", (char *)NULL);
 			_exit(127);
 		}
 		_exit(child < 0 ? 126 : 0);
