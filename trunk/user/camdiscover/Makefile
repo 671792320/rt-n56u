@@ -13,7 +13,7 @@ EXEC=camdiscover
 DHCP_EXEC=dhcpdetect
 ARP_EXEC=arpscan
 HEALTH_EXEC=lanhealth
-OBJS=camdiscover_q7_v2.o
+OBJS=camdiscover_q7_v3.o
 DHCP_OBJS=dhcpdetect.o
 ARP_OBJS=arpscan.o
 HEALTH_OBJS=lanhealth.o
@@ -46,4 +46,4 @@ romfs:
 	$(ROMFSINST) /usr/bin/$(HEALTH_EXEC)
 
 clean:
-	rm -f $(EXEC) $(OBJS) $(DHCP_EXEC) $(DHCP_OBJS) $(ARP_EXEC) $(ARP_OBJS) $(HEALTH_EXEC) $(HEALTH_OBJS) camdiscover_q7_final.o
+	rm -f $(EXEC) $(OBJS) $(DHCP_EXEC) $(DHCP_OBJS) $(ARP_EXEC) $(ARP_OBJS) $(HEALTH_EXEC) $(HEALTH_OBJS) camdiscover_q7_final.o camdiscover_q7_v2.o
