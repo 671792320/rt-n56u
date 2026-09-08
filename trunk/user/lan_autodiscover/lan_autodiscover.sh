@@ -1,5 +1,5 @@
 #!/bin/sh
-# LAN监听、DHCP检测和设备发现后端程序。
+# LAN监听、DHCP检测、主动ARP和设备发现后端程序。
 LOCKDIR=/var/run/lan_autodiscover.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     logger -t lan-autodiscover "LAN监听程序已经运行"
@@ -10,13 +10,15 @@ trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 # LAN设备结果和完整日志保存到临时目录，供页面及后续转发功能使用。
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
-mkdir -p /tmp
-touch "$DEVICE_DB" "$LOG_FILE"
 RUNTIME_DIR=/tmp/lan_discovery_runtime
-mkdir -p "$RUNTIME_DIR"
+mkdir -p /tmp "$RUNTIME_DIR"
+touch "$DEVICE_DB" "$LOG_FILE"
 
 nv() { nvram get "$1" 2>/dev/null; }
-# 运行时状态只保存在/tmp，不写入持久NVRAM。
+cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
+now() { date '+%H:%M:%S'; }
+
+# 运行时状态只保存在/tmp，不把状态写入持久NVRAM。
 runtime_set() {
     item="$1"
     key="${item%%=*}"
@@ -24,9 +26,10 @@ runtime_set() {
     tmp="${RUNTIME_DIR}/.${key}.tmp"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
-cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
-now() { date '+%H:%M:%S'; }
-sanitize_text() { printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'; }
+
+sanitize_text() {
+    printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\\([0-9A-Fa-f]\)/\1/g'
+}
 sanitize_mac() {
     m="$(sanitize_text "$1")"
     m="$(printf '%s' "$m" | sed 's/\\//g' | tr '[:lower:]' '[:upper:]')"
@@ -47,7 +50,7 @@ iface_ipv4() {
 iface_mac() {
     iface="$1"
     mac="$(sanitize_mac "$(cat "/sys/class/net/$iface/address" 2>/dev/null)")"
-    if [ "$mac" = "-" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then mac="$(sanitize_mac "$(cat /sys/class/net/br0/address 2>/dev/null)")"; fi
+    if [ "$mac" = "-" ] && [ "$iface" != "br0" ] && [ -e /sys/class/net/br0 ]; then mac="$(sanitize_mac "$(cat "/sys/class/net/br0/address" 2>/dev/null)")"; fi
     if [ "$mac" = "-" ]; then mac="$(sanitize_mac "$(nv lan_hwaddr)")"; fi
     printf '%s' "${mac:--}"
 }
@@ -79,7 +82,15 @@ clean_device_line() {
         *) return 1;;
     esac
     [ -n "$type" ] || type="IP"
-    printf 'DEVICE type=%s IP=%s MAC=%s' "$type" "$ip" "$mac"
+    if [ "$type" = "SUBNET" ]; then
+        prefix="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\([0-9][0-9]*\).*/\1/p')"
+        [ -n "$prefix" ] || prefix=24
+        printf 'DEVICE type=SUBNET IP=%s INFO=%s' "$ip" "$prefix"
+    else
+        printf 'DEVICE type=%s IP=%s MAC=%s' "$type" "$ip" "$mac"
+        info="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\(.*\)$/\1/p')"
+        [ -n "$info" ] && printf ' INFO=%s' "$info"
+    fi
 }
 log_line() {
     line="$(sanitize_text "$(now) $*" | sed 's/\\//g')"
@@ -95,6 +106,7 @@ log_line() {
     runtime_set lan_discovery_status_last="$(now)"
     logger -t lan-autodiscover "$(sanitize_text "$*")"
 }
+
 # Q7唯一RJ45对应MTK交换机LAN4，使用mtk-esw原生PHY状态检测物理插拔。
 mtk_esw_lan4_state() {
     [ -x /sbin/mtk_esw ] || return 2
@@ -168,6 +180,7 @@ is_link_up() {
     fi
     return 1
 }
+
 sort_device_db() {
     [ -f "$DEVICE_DB" ] || return
     tmp="${DEVICE_DB}.tmp"
@@ -183,12 +196,19 @@ sort_device_db() {
 }
 sync_device_cache() {
     sort_device_db
-    count="$(wc -l < "$DEVICE_DB" 2>/dev/null | tr -d ' ')"
+    count="$(grep -v 'type=SUBNET' "$DEVICE_DB" 2>/dev/null | wc -l | tr -d ' ')"
     runtime_set lan_discovery_status_count="${count:-0}"
 }
 reset_device_db() {
     : > "$DEVICE_DB"
     runtime_set lan_discovery_status_count="0"
+}
+clear_subnet_records() {
+    [ -f "$DEVICE_DB" ] || return
+    tmp="${DEVICE_DB}.tmp"
+    grep -v 'DEVICE type=SUBNET ' "$DEVICE_DB" > "$tmp" 2>/dev/null || :
+    mv -f "$tmp" "$DEVICE_DB"
+    sync_device_cache
 }
 append_device() {
     clean="$(clean_device_line "$1")" || return
@@ -202,6 +222,70 @@ append_device() {
     sync_device_cache
     printf '%s' "$clean"
 }
+register_subnet_from_ip() {
+    ip="$1"
+    case "$ip" in
+        *.*.*.*) ;;
+        *) return;;
+    esac
+    subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0<=255 && $3+0<=255 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}')"
+    [ -n "$subnet" ] || return
+    if ! grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null; then
+        append_device "DEVICE type=SUBNET IP=${subnet} INFO=24"
+    fi
+}
+register_subnet_from_device_line() {
+    line="$1"
+    ip="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+    [ -n "$ip" ] && register_subnet_from_ip "$ip"
+}
+
+run_arpscan() {
+    iface="$1"
+    [ "$(cfg lan_discovery_raw 1)" = "1" ] || return 0
+    [ -x /usr/bin/arpscan ] || { log_line "主动ARP扫描程序不存在"; return 0; }
+
+    args="-i $iface -t 1"
+    subnet_count=0
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        network="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([0-9.]*\) INFO=\([0-9][0-9]*\).*/\1\/\2/p')"
+        [ -n "$network" ] || continue
+        args="$args -s $network"
+        subnet_count=$((subnet_count + 1))
+    done <<EOF
+$(grep '^DEVICE type=SUBNET ' "$DEVICE_DB" 2>/dev/null)
+EOF
+
+    runtime_set lan_discovery_status_state="主动ARP扫描"
+    log_line "开始主动ARP扫描，已知网段 ${subnet_count} 个"
+    : > /tmp/arpscan_lan.log
+    /usr/bin/arpscan $args > /tmp/arpscan_lan.log 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+            kill "$pid" 2>/dev/null
+            return 0
+        fi
+        if [ -f /tmp/arpscan_lan.log ]; then
+            while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                case "$line" in
+                    DEVICE\ *)
+                        register_subnet_from_device_line "$line"
+                        clean="$(append_device "$line")"
+                        [ -n "$clean" ] && log_line "$clean"
+                        ;;
+                    \[arpscan\]*) log_line "$line";;
+                esac
+            done < /tmp/arpscan_lan.log
+            : > /tmp/arpscan_lan.log
+        fi
+        sleep 1
+    done
+    wait "$pid" 2>/dev/null
+}
+
 run_discovery() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
@@ -241,8 +325,12 @@ run_discovery() {
         return
     fi
 
+    # 网线重新插入时保留设备列表，但重新建立本次现场的网段集合，避免把上一现场的网段拿来扫描。
+    clear_subnet_records
+    register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"
     sync_device_cache
     runtime_set lan_discovery_status_state="持续设备发现"
+
     while is_link_up "$iface"; do
         if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
             runtime_set lan_discovery_status_state="设备发现未启用"
@@ -250,7 +338,6 @@ run_discovery() {
             break
         fi
 
-        # 每一轮读取最新配置，WebUI修改后下一轮立即生效。
         discover_cycle="$(cfg lan_discovery_cycle 10)"
         case "$discover_cycle" in
             ''|*[!0-9]*) discover_cycle=10;;
@@ -271,8 +358,12 @@ run_discovery() {
         [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"
         [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
         round_start="$(date +%s)"
-        log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
 
+        if [ "$raw" = "1" ]; then
+            run_arpscan "$iface"
+        fi
+
+        log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
         : > /tmp/camdiscover_lan.log
         : > /tmp/camdiscover_custom.conf
         printf '%s\n' "$custom" | while IFS= read -r row; do
@@ -299,6 +390,7 @@ run_discovery() {
                         [ -n "$line" ] || continue
                         case "$line" in
                             DEVICE\ *)
+                                register_subnet_from_device_line "$line"
                                 clean="$(append_device "$line")"
                                 [ -n "$clean" ] && log_line "$clean"
                                 ;;
@@ -375,7 +467,6 @@ while :; do
         last_state="$state"
         if [ "$state" = "1" ]; then
             set_link_status "$iface" "UP"
-            # 网线插拔不清空设备列表；设备列表仅在/tmp生命周期结束时自然清空，或由WebUI手动清空。
             sync_device_cache
             run_discovery "$iface"
         else
@@ -385,7 +476,7 @@ while :; do
         fi
     fi
 
-    # 设备发现开关只控制camdiscover，不停止LAN工作进程或DHCP流程。
+    # 设备发现开关只控制camdiscover和主动ARP扫描，不停止LAN工作进程或DHCP流程。
     if [ "$state" = "1" ] && [ "$discover_enable" != "$last_discover" ]; then
         last_discover="$discover_enable"
         if [ "$discover_enable" = "1" ]; then
