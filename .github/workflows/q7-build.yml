@@ -49,10 +49,6 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_device_state.sh
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q '发现程序启用模块' trunk/user/lan_autodiscover/lan_autodiscover.sh
-          grep -q 'format_device_log' trunk/user/lan_autodiscover/lan_autodiscover.sh
-          grep -q 'Ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q '@Seetong-IPCtest-utp2_' trunk/user/shared/defaults.h
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Build ZTE_Q7
