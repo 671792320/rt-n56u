@@ -104,7 +104,7 @@ if old_cycle in s:
     s = s.replace(old_cycle, new_cycle, 1)
 p.write_text(s)
 
-# WebUI：增加Ping列并读取后端综合状态。
+# Q7 WebUI：增加Ping列、读取后端状态，并保持现有页面逻辑。
 p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
 s = p.read_text()
 s = replace_once(
@@ -140,7 +140,15 @@ s = replace_once(
 s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
 p.write_text(s)
 
-# Q7默认无线名称必须保持Seetong首字母大写；定义位于defaults.h。
+# Q7默认无线名称：保持Seetong首字母大写。
 p = Path('trunk/user/shared/defaults.h')
 s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
 p.write_text(s)
+
+# Q7共享默认参数使用独立头文件，避免defaults.h同名冲突。
+for rel in ('trunk/user/shared/shutils.h', 'trunk/user/shared/defaults.c'):
+    p = Path(rel)
+    s = p.read_text()
+    if '#include "defaults.h"' in s:
+        s = s.replace('#include "defaults.h"', '#include "q7_defaults.h"', 1)
+    p.write_text(s)
