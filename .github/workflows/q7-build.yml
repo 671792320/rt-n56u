@@ -51,6 +51,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_lan_state_fix.py
 
+      - name: Fix Q7 temporary IP and SNAT stability
+        run: |
+          set -eux
+          python3 trunk/tools/q7_tempip_snat_fix.py
+
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -69,9 +74,12 @@ jobs:
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/tools/q7_menu_patch.py
           test -f trunk/tools/q7_lan_state_fix.py
+          test -f trunk/tools/q7_tempip_snat_fix.py
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
+          sh -n trunk/user/lan_autodiscover/lan_snat.sh
+          sh -n trunk/user/lan_autodiscover/lan_network_manager.sh
 
       - name: Build ZTE_Q7
         run: |
