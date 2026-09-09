@@ -70,21 +70,23 @@ jobs:
 
           p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
           s = p.read_text()
-          old = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"\n    [ "$onvif" = "1" ] && args="$args -O"\n    [ "$ssdp" = "1" ] && args="$args -S"\n    [ "$hik" = "1" ] && args="$args -H"\n    [ "$dahua" = "1" ] && args="$args -D"\n    [ "$raw" = "1" ] && args="$args -A"'''
-          new = '''    args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port -O $onvif -S $ssdp -H $hik -D $dahua -A $raw"'''
+          old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
+          new = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        mac_found="$(printf '%s\\n' "$line" | sed -n 's/.* MAC=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        /usr/bin/lan_device_state.sh arp "$ip_found" "$mac_found" 2>/dev/null || :\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           if old in s:
-              s = s.replace(old, new, 1)
+              s = s.replace(old, new, 2)
 
-          old = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
-          new = '''        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh begin\n            run_arpscan "$iface"\n        fi\n        run_camdiscover "$iface" "$discover_cycle"\n        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh finish\n        fi'''
+          # camdiscover输出中的ARP以外协议响应记入当前轮协议事件。
+          old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
+          new = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           if old in s:
-              s = s.replace(old, new, 1)
-
+              s = s.replace(old, new, 2)
           p.write_text(s)
 
+          # 数据接口仍保持原生格式；设备Ping状态通过设备记录中的PING字段向WebUI提供。
           p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
           s = p.read_text()
-          s = s.replace('''STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan_discovery_status_role"); %>|<% nvram_get_x("", "lan_discovery_status_ip"); %>|<% nvram_get_x("", "lan_discovery_status_mac"); %>|<% nvram_get_x("", "lan_discovery_status_link"); %>|<% nvram_get_x("", "lan_discovery_status_dhcp"); %>|<% nvram_get_x("", "lan_discovery_status_state"); %>|<% nvram_get_x("", "lan_discovery_status_count"); %>|<% nvram_get_x("", "lan_discovery_status_last"); %>|<% nvram_get_x("", "lan_discovery_status_health"); %>|<% nvram_get_x("", "lan_discovery_status_broadcast"); %>|<% nvram_get_x("", "lan_discovery_status_loop"); %>|<% nvram_get_x("", "lan_discovery_status_total"); %>''', '''STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan_discovery_status_role"); %>|<% nvram_get_x("", "lan_discovery_status_ip"); %>|<% nvram_get_x("", "lan_discovery_status_mac"); %>|<% nvram_get_x("", "lan_discovery_status_link"); %>|<% nvram_get_x("", "lan_discovery_status_dhcp"); %>|<% nvram_get_x("", "lan_discovery_status_state"); %>|<% nvram_get_x("", "lan_discovery_status_count"); %>|<% nvram_get_x("", "lan_discovery_status_last"); %>|<% nvram_get_x("", "lan_discovery_status_health"); %>|<% nvram_get_x("", "lan_discovery_status_broadcast"); %>|<% nvram_get_x("", "lan_discovery_status_loop"); %>|<% nvram_get_x("", "lan_discovery_status_total"); %>''')
+          if 'lan_discovery_status_total' not in s:
+              raise SystemExit('状态数据接口异常')
           p.write_text(s)
           PY
 
