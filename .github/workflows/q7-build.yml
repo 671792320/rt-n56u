@@ -71,18 +71,19 @@ jobs:
           p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
           s = p.read_text()
           old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          new = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        mac_found="$(printf '%s\\n' "$line" | sed -n 's/.* MAC=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        /usr/bin/lan_device_state.sh arp "$ip_found" "$mac_found" 2>/dev/null || :\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          if old in s:
-              s = s.replace(old, new, 2)
+          if s.count(old) != 4:
+              raise SystemExit('未找到预期的4处设备记录处理位置')
 
-          # camdiscover输出中的ARP以外协议响应记入当前轮协议事件。
-          old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          new = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          if old in s:
-              s = s.replace(old, new, 2)
+          # ARP扫描产生的设备记录：记录到当前轮ARP证据。
+          new_arp = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        mac_found="$(printf '%s\\n' "$line" | sed -n 's/.* MAC=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        /usr/bin/lan_device_state.sh arp "$ip_found" "$mac_found" 2>/dev/null || :\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
+          s = s.replace(old, new_arp, 2)
+
+          # camdiscover产生的协议响应：记录到当前轮协议证据。
+          new_proto = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
+          s = s.replace(old, new_proto, 2)
           p.write_text(s)
 
-          # 数据接口仍保持原生格式；设备Ping状态通过设备记录中的PING字段向WebUI提供。
+          # 数据接口保持原生格式，设备Ping和协议状态写入设备数据库，由页面统一显示。
           p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
           s = p.read_text()
           if 'lan_discovery_status_total' not in s:
@@ -128,14 +129,14 @@ jobs:
           p = Path('trunk/user/rc/rc.c')
           s = p.read_text()
           marker = '\tklogctl(8, NULL, nvram_get_int("console_loglevel"));'
-          insert = '''#if defined(BOARD_ZTE_Q7)\n\t/* Q7无线名称使用设备LAN MAC地址后四位，避免多台Q7名称重复。 */\n\tsnprintf(tmp, sizeof(tmp), "@seetong-IPCtest-utp2_%s", lan_mac);\n\tnvram_set("wl_ssid", tmp);\n\t/* Q7无线默认密码。 */\n\tnvram_set("wl_wpa_psk", "88888888");\n#endif\n\n'''
+          insert = '''#if defined(BOARD_ZTE_Q7)\n\t/* Q7无线名称使用设备LAN MAC地址后四位，避免多台Q7名称重复。 */\n\tsnprintf(tmp, sizeof(tmp), "@Seetong-IPCtest-utp2_%s", lan_mac);\n\tnvram_set("wl_ssid", tmp);\n\t/* Q7无线默认密码。 */\n\tnvram_set("wl_wpa_psk", "88888888");\n#endif\n\n'''
           if marker not in s:
               raise SystemExit('未找到无线参数初始化位置')
-          if '@seetong-IPCtest-utp2_' not in s:
+          if '@Seetong-IPCtest-utp2_' not in s:
               s = s.replace(marker, insert + marker, 1)
           p.write_text(s)
           PY
-          grep -q '@seetong-IPCtest-utp2_' trunk/user/rc/rc.c
+          grep -q '@Seetong-IPCtest-utp2_' trunk/user/rc/rc.c
           grep -q 'nvram_set("wl_wpa_psk", "88888888")' trunk/user/rc/rc.c
           cd trunk
           rm -rf images romfs
