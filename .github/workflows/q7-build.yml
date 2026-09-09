@@ -51,7 +51,6 @@ jobs:
           set -eux
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
           s = p.read_text()
@@ -78,9 +77,13 @@ jobs:
           s = s.replace(old, new_arp, 2)
           new_proto = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           s = s.replace(old, new_proto, 2)
+          old_begin = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
+          new_begin = '''        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh begin\n            run_arpscan "$iface"\n        fi\n        run_camdiscover "$iface" "$discover_cycle"\n        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh finish\n        fi'''
+          if old_begin in s:
+              s = s.replace(old_begin, new_begin, 1)
           p.write_text(s)
 
-          # WebUI设备表：增加独立Ping列，并直接使用后端STATUS作为在线状态。
+          # WebUI：设备列表按IP合并，增加独立Ping状态列；在线状态直接采用后端综合判断。
           p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
           s = p.read_text()
           old = 'function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||\'-\',info:info||\'-\',protocols:[],conflict:false,proto_fail:false,miss:0};}'
@@ -106,18 +109,13 @@ jobs:
           if old not in s:
               raise SystemExit('未找到设备表输出')
           s = s.replace(old, new, 1)
-          s = s.replace('<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>', '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>', 1)
+          old = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>'
+          new = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>'
+          if old not in s:
+              raise SystemExit('未找到设备表头')
+          s = s.replace(old, new, 1)
           s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
-          s = s.replace("'<tr><td colspan=\\'5\\' class=\\'muted\\'>暂无设备</td></tr>'", "'<tr><td colspan=\\'6\\' class=\\'muted\\'>暂无设备</td></tr>'", 1)
           p.write_text(s)
-
-          # 数据接口保持原生格式。
-          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
-          s = p.read_text()
-          if 'lan_discovery_status_total' not in s:
-              raise SystemExit('状态数据接口异常')
-          p.write_text(s)
-          PY
 
       - name: Verify Q7 sources
         shell: bash
