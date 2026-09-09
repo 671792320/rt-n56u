@@ -40,7 +40,7 @@
 
 #if defined(BOARD_ZTE_Q7)
 /* Q7使用设备LAN MAC最后四位生成默认无线名称。 */
-#define DEF_WLAN_2G_SSID	"@seetong-IPCtest-utp2_%s"
+#define DEF_WLAN_2G_SSID	"@Seetong-IPCtest-utp2_%s"
 #define DEF_WLAN_2G_PSK		"88888888"
 #else
 #define DEF_WLAN_2G_SSID	BOARD_PID "_%s"
