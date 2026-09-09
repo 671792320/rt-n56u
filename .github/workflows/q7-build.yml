@@ -70,52 +70,121 @@ jobs:
 
           p = Path('trunk/user/lan_autodiscover/lan_autodiscover.sh')
           s = p.read_text()
-          old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          if s.count(old) != 4:
-              raise SystemExit('未找到预期的4处设备记录处理位置')
-          new_arp = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        mac_found="$(printf '%s\\n' "$line" | sed -n 's/.* MAC=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        /usr/bin/lan_device_state.sh arp "$ip_found" "$mac_found" 2>/dev/null || :\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          s = s.replace(old, new_arp, 2)
-          new_proto = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
-          s = s.replace(old, new_proto, 2)
+
+          # 统一中文模块状态和设备发现日志，避免把内部DEVICE格式直接显示给用户。
+          helper = r'''
+module_cn() {
+    [ "$1" = "1" ] && printf '启用' || printf '停用'
+}
+
+format_device_log() {
+    line="$1"
+    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    ip="$(printf '%s\n' "$line" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
+    mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
+    response_len="$(printf '%s\n' "$line" | sed -n 's/.*response_len=\([0-9][0-9]*\).*/\1/p')"
+    [ -n "$ip" ] || return 0
+    [ -n "$mac" ] || mac="-"
+    case "$mac" in
+        ''|-) ;;
+        *) ;;
+    esac
+    case "$mac" in
+        ''|-) mac="$(ip neigh show "$ip" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}')";;
+    esac
+    [ -n "$mac" ] || mac="-"
+    case "$type" in
+        HIK|HIK-SADP|hik|hik-sadp) protocol="HIK";;
+        DAHUA|DAHUA-DHIP|dahua|dahua-dhip) protocol="DAHUA";;
+        ONVIF|onvif) protocol="ONVIF";;
+        SSDP|ssdp) protocol="SSDP";;
+        ARP|arp) protocol="ARP";;
+        *) protocol="$type";;
+    esac
+    if [ -n "$response_len" ]; then
+        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=${response_len}字节"
+    elif [ "$protocol" = "ARP" ]; then
+        log_line "发现设备：IP=$ip 协议=ARP MAC=$mac 回包响应=收到ARP回复"
+    else
+        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=已收到"
+    fi
+}
+
+device_state_event() {
+    line="$1"
+    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    ip="$(printf '%s\n' "$line" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
+    mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
+    [ -n "$ip" ] || return 0
+    case "$type" in
+        ARP|arp)
+            /usr/bin/lan_device_state.sh arp "$ip" "$mac" 2>/dev/null || :
+            ;;
+        SUBNET|subnet)
+            ;;
+        *)
+            /usr/bin/lan_device_state.sh proto "$ip" "$type" 2>/dev/null || :
+            ;;
+    esac
+}
+'''
+          if 'format_device_log() {' not in s:
+              marker = 'append_device() {\n'
+              if marker not in s:
+                  raise SystemExit('未找到设备记录处理函数')
+              s = s.replace(marker, helper + '\n' + marker, 1)
+
+          # 所有DEVICE记录统一交给状态跟踪和中文日志函数；不再依赖固定出现次数。
+          s = s.replace('                    clean="$(append_device "$line")"\n                    [ -n "$clean" ] && log_line "发现设备：$clean"',
+                        '                    device_state_event "$line"\n                    clean="$(append_device "$line")"\n                    [ -n "$clean" ] && format_device_log "$line"')
+          s = s.replace('                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"',
+                        '                        device_state_event "$line"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && format_device_log "$line"')
+
+          # 清掉旧的英文模块日志，使用中文启用/停用状态。
+          old_log = '    log_line "[camdiscover] probes enabled: ONVIF=$onvif SSDP=$ssdp HIK=$hik DAHUA=$dahua ARP=$raw"'
+          new_log = '    log_line "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"'
+          if old_log in s:
+              s = s.replace(old_log, new_log, 1)
+
+          # 主动发现状态围绕一整轮建立 begin/finish，且重复应用不会继续插入。
           old_begin = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
           new_begin = '''        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh begin\n            run_arpscan "$iface"\n        fi\n        run_camdiscover "$iface" "$discover_cycle"\n        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh finish\n        fi'''
           if old_begin in s:
               s = s.replace(old_begin, new_begin, 1)
+
           p.write_text(s)
 
-          # WebUI：设备列表按IP合并，增加独立Ping状态列；在线状态直接采用后端综合判断。
+          # WebUI：一个IP一条记录，同时显示协议、MAC和Ping状态。
           p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
           s = p.read_text()
-          old = 'function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||\'-\',info:info||\'-\',protocols:[],conflict:false,proto_fail:false,miss:0};}'
-          new = 'function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||\'-\',info:info||\'-\',protocols:[],conflict:false,proto_fail:false,miss:0,ping:\'检测中\',backend_status:\'\'};}'
-          if old not in s:
-              raise SystemExit('未找到设备记录函数')
-          s = s.replace(old, new, 1)
+          old = "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0};}"
+          new = "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0,ping:'检测中',backend_status:''};}"
+          if old in s:
+              s = s.replace(old, new, 1)
 
-          old = 'else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type===\'ARP\')currentArp[ip]=1;}}'
-          new = 'else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||\'\';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||\'\';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||\'\';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type===\'ARP\')currentArp[ip]=1;}}'
-          if old not in s:
-              raise SystemExit('未找到设备解析位置')
-          s = s.replace(old, new, 1)
+          old = "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type==='ARP')currentArp[ip]=1;}}"
+          new = "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||'';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||'';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||'';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type==='ARP')currentArp[ip]=1;}}"
+          if old in s:
+              s = s.replace(old, new, 1)
 
-          old = 'function infer_status(row,type){if(row.conflict)return \'IP冲突\';if(row.proto_fail)return \'协议异常\';if(row.miss>=3)return \'暂时离线\';return \'正常\';}'
-          new = 'function infer_status(row,type){if(row.conflict)return \'IP冲突\';if(row.backend_status===\'正常\'||row.backend_status===\'暂时离线\'||row.backend_status===\'IP冲突\')return row.backend_status;if(row.ping===\'通\')return \'正常\';if(row.proto_fail)return \'协议异常\';if(row.miss>=3)return \'暂时离线\';return \'正常\';}'
-          if old not in s:
-              raise SystemExit('未找到在线状态函数')
-          s = s.replace(old, new, 1)
+          old = "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '正常';}"
+          new = "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.backend_status==='在线'||row.backend_status==='暂时离线'||row.backend_status==='IP冲突')return row.backend_status;if(row.ping==='通')return '在线';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '正常';}"
+          if old in s:
+              s = s.replace(old, new, 1)
 
-          old = 'var vals=[st,protocol,r.ip,displayMac,r.info||\'-\'];'
-          new = 'var vals=[st,protocol,r.ip,displayMac,r.ping||\'检测中\',r.info||\'-\'];'
-          if old not in s:
-              raise SystemExit('未找到设备表输出')
-          s = s.replace(old, new, 1)
+          old = "var vals=[st,protocol,r.ip,displayMac,r.info||'-'];"
+          new = "var vals=[st,protocol,r.ip,displayMac,r.ping||'检测中',r.info||'-'];"
+          if old in s:
+              s = s.replace(old, new, 1)
+
           old = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>'
           new = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>'
-          if old not in s:
-              raise SystemExit('未找到设备表头')
-          s = s.replace(old, new, 1)
+          if old in s:
+              s = s.replace(old, new, 1)
+
           s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
           p.write_text(s)
+          PY
 
       - name: Verify Q7 sources
         shell: bash
@@ -135,9 +204,12 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '状态' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'format_device_log' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'device_state_event' trunk/user/lan_autodiscover/lan_autodiscover.sh
           grep -q 'lan_device_state.sh begin' trunk/user/lan_autodiscover/lan_autodiscover.sh
           grep -q 'lan_device_state.sh finish' trunk/user/lan_autodiscover/lan_autodiscover.sh
           grep -q 'Ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
 
       - name: Build ZTE_Q7
         shell: bash
