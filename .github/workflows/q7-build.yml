@@ -51,6 +51,7 @@ jobs:
           set -eux
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
           s = p.read_text()
@@ -73,17 +74,44 @@ jobs:
           old = '''                        register_subnet_from_ip "$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           if s.count(old) != 4:
               raise SystemExit('未找到预期的4处设备记录处理位置')
-
-          # ARP扫描产生的设备记录：记录到当前轮ARP证据。
           new_arp = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        mac_found="$(printf '%s\\n' "$line" | sed -n 's/.* MAC=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        /usr/bin/lan_device_state.sh arp "$ip_found" "$mac_found" 2>/dev/null || :\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           s = s.replace(old, new_arp, 2)
-
-          # camdiscover产生的协议响应：记录到当前轮协议证据。
           new_proto = '''                        ip_found="$(printf '%s\\n' "$line" | sed -n 's/.* IP=\\([^ ]*\\).*/\\1/p')"\n                        protocol_type="$(printf '%s\\n' "$line" | sed -n 's/.*type=\\([^ ]*\\).*/\\1/p')"\n                        register_subnet_from_ip "$ip_found"\n                        if [ "$protocol_type" != "ARP" ] && [ "$protocol_type" != "SUBNET" ] && [ -n "$protocol_type" ]; then\n                            /usr/bin/lan_device_state.sh proto "$ip_found" "$protocol_type" 2>/dev/null || :\n                        fi\n                        clean="$(append_device "$line")"\n                        [ -n "$clean" ] && log_line "发现设备：$clean"'''
           s = s.replace(old, new_proto, 2)
           p.write_text(s)
 
-          # 数据接口保持原生格式，设备Ping和协议状态写入设备数据库，由页面统一显示。
+          # WebUI设备表：增加独立Ping列，并直接使用后端STATUS作为在线状态。
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text()
+          old = 'function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||\'-\',info:info||\'-\',protocols:[],conflict:false,proto_fail:false,miss:0};}'
+          new = 'function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||\'-\',info:info||\'-\',protocols:[],conflict:false,proto_fail:false,miss:0,ping:\'检测中\',backend_status:\'\'};}'
+          if old not in s:
+              raise SystemExit('未找到设备记录函数')
+          s = s.replace(old, new, 1)
+
+          old = 'else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type===\'ARP\')currentArp[ip]=1;}}'
+          new = 'else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||\'\';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||\'\';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||\'\';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type===\'ARP\')currentArp[ip]=1;}}'
+          if old not in s:
+              raise SystemExit('未找到设备解析位置')
+          s = s.replace(old, new, 1)
+
+          old = 'function infer_status(row,type){if(row.conflict)return \'IP冲突\';if(row.proto_fail)return \'协议异常\';if(row.miss>=3)return \'暂时离线\';return \'正常\';}'
+          new = 'function infer_status(row,type){if(row.conflict)return \'IP冲突\';if(row.backend_status===\'正常\'||row.backend_status===\'暂时离线\'||row.backend_status===\'IP冲突\')return row.backend_status;if(row.ping===\'通\')return \'正常\';if(row.proto_fail)return \'协议异常\';if(row.miss>=3)return \'暂时离线\';return \'正常\';}'
+          if old not in s:
+              raise SystemExit('未找到在线状态函数')
+          s = s.replace(old, new, 1)
+
+          old = 'var vals=[st,protocol,r.ip,displayMac,r.info||\'-\'];'
+          new = 'var vals=[st,protocol,r.ip,displayMac,r.ping||\'检测中\',r.info||\'-\'];'
+          if old not in s:
+              raise SystemExit('未找到设备表输出')
+          s = s.replace(old, new, 1)
+          s = s.replace('<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>', '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>', 1)
+          s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
+          s = s.replace("'<tr><td colspan=\\'5\\' class=\\'muted\\'>暂无设备</td></tr>'", "'<tr><td colspan=\\'6\\' class=\\'muted\\'>暂无设备</td></tr>'", 1)
+          p.write_text(s)
+
+          # 数据接口保持原生格式。
           p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
           s = p.read_text()
           if 'lan_discovery_status_total' not in s:
@@ -111,6 +139,7 @@ jobs:
           grep -q '状态' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'lan_device_state.sh begin' trunk/user/lan_autodiscover/lan_autodiscover.sh
           grep -q 'lan_device_state.sh finish' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'Ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
 
       - name: Build ZTE_Q7
         shell: bash
