@@ -20,14 +20,14 @@
 
 #include <string.h>
 
-#include "q7_defaults.h"
+#include "defaults.h"
 
 #define MAX_FILE_LINE_SIZE	2048
 #define ARRAY_SIZE(x)		((unsigned)(sizeof(x) / sizeof((x)[0])))
 
 /*
  * Reads file and returns contents
- * @param	path	path to file
+ * @param	path	file path
  * @return	contents of file or NULL if an error occurred
  */
 extern char * file2str(const char *path, size_t chunk_size);
@@ -35,6 +35,7 @@ extern char * file2str(const char *path, size_t chunk_size);
 /* 
  * Waits for a file descriptor to become available for reading or unblocked signal
  * @param	fd	file descriptor
+ * @param	timeout	seconds to wait before timing out or 0 for no timeout
  * @return	1 if descriptor changed status or 0 if timed out or -1 on error
  */
 extern int waitfor(int fd, int timeout);
