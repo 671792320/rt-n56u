@@ -1,4 +1,18 @@
 from pathlib import Path
+import subprocess
+
+
+# b4e2fa8 是进入真实编译前最后一个共享源码保持原样的Q7构建基线。
+# 每次CI构建先从该提交恢复共享C源码，再应用Q7专用改动，避免测试阶段的误改进入编译。
+Q7_SOURCE_BASE = 'b4e2fa89b376dfd384323a3fcd6f8c94a6b64165'
+
+
+def restore_from_git(ref, path):
+    content = subprocess.check_output(
+        ['git', 'show', f'{ref}:{path}'],
+        text=True,
+    )
+    Path(path).write_text(content)
 
 
 def replace_once(text, old, new, label, required=False):
@@ -8,6 +22,10 @@ def replace_once(text, old, new, label, required=False):
         raise SystemExit(f'未找到需要修改的内容：{label}')
     return text
 
+
+# 恢复共享目录原始C源码，确保之前测试过程中对defaults.c/shutils.h的临时修改不会污染正式构建。
+for rel in ('trunk/user/shared/defaults.c', 'trunk/user/shared/shutils.h'):
+    restore_from_git(Q7_SOURCE_BASE, rel)
 
 # 内核默认关闭连接跟踪事件链，保持Q7现有构建兼容性。
 p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
@@ -104,7 +122,7 @@ if old_cycle in s:
     s = s.replace(old_cycle, new_cycle, 1)
 p.write_text(s)
 
-# Q7 WebUI：增加Ping列、读取后端状态，并保持现有页面逻辑。
+# WebUI：增加Ping列、读取后端状态，并保持现有页面逻辑。
 p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
 s = p.read_text()
 s = replace_once(
@@ -142,10 +160,11 @@ p.write_text(s)
 
 # Q7默认无线名称：保持Seetong首字母大写。
 p = Path('trunk/user/shared/defaults.h')
+s = p.read_text()
 s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
 p.write_text(s)
 
-# Q7共享默认参数使用独立头文件，避免defaults.h同名冲突。
+# Q7共享C源码恢复后，构建阶段统一使用独立头文件名，彻底避免defaults.h名称碰撞。
 for rel in ('trunk/user/shared/shutils.h', 'trunk/user/shared/defaults.c'):
     p = Path(rel)
     s = p.read_text()
