@@ -1,0 +1,83 @@
+name: Q7 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    name: ZTE_Q7
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Prepare toolchain
+        run: |
+          set -eux
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+
+      - name: Apply Q7 patches
+        run: |
+          set -eux
+          python3 trunk/tools/q7_build_patch.py
+
+      - name: Verify Q7 sources
+        run: |
+          set -eux
+          test -f trunk/build_firmware_ci
+          test -f trunk/configs/templates/ZTE_Q7.config
+          test -f trunk/configs/boards/ZTE_Q7/board.h
+          test -f trunk/configs/boards/ZTE_Q7/board.mk
+          test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
+          test -f trunk/user/camdiscover/camdiscover_q7_v3.c
+          test -f trunk/user/camdiscover/arpscan.c
+          test -f trunk/user/camdiscover/Makefile
+          test -f trunk/user/camdiscover/dhcpdetect.c
+          test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_device_state.sh
+          test -f trunk/user/lan_autodiscover/lan_takeover.sh
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q '发现程序启用模块' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'format_device_log' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'Ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q '@Seetong-IPCtest-utp2_' trunk/user/rc/rc.c
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+
+      - name: Build ZTE_Q7
+        run: |
+          set -eux
+          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
+          VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+          echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
+          sed -i '/Q7固件版本/d' trunk/user/rc/rc.c
+          sed -i "/^[[:space:]]*\\/\\/ system ready$/i\\\tnvram_set(\"firmver_sub\", \"${VERSION_STRING}\"); /* Q7固件版本 */" trunk/user/rc/rc.c
+          cd trunk
+          rm -rf images romfs
+          mkdir -p images romfs
+          fakeroot ./build_firmware_ci ZTE_Q7
+          SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
+          test -n "$SRC"
+          cp -f "$SRC" "images/ZTE_Q7_${VERSION_STAMP}.trx"
+          rm -f images/ZTE_Q7.trx
+          ls -lh images/*.trx
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTE_Q7_${{ env.VERSION_STAMP }}
+          path: trunk/images/*.trx
+          if-no-files-found: error
