@@ -1,18 +1,4 @@
 from pathlib import Path
-import subprocess
-
-
-# b4e2fa8 是进入真实编译前最后一个共享源码保持原样的Q7构建基线。
-# 每次CI构建先从该提交恢复共享C源码，再应用Q7专用改动，避免测试阶段的误改进入编译。
-Q7_SOURCE_BASE = 'b4e2fa89b376dfd384323a3fcd6f8c94a6b64165'
-
-
-def restore_from_git(ref, path):
-    content = subprocess.check_output(
-        ['git', 'show', f'{ref}:{path}'],
-        text=True,
-    )
-    Path(path).write_text(content)
 
 
 def replace_once(text, old, new, label, required=False):
@@ -22,10 +8,6 @@ def replace_once(text, old, new, label, required=False):
         raise SystemExit(f'未找到需要修改的内容：{label}')
     return text
 
-
-# 恢复共享目录原始C源码，确保之前测试过程中对defaults.c/shutils.h的临时修改不会污染正式构建。
-for rel in ('trunk/user/shared/defaults.c', 'trunk/user/shared/shutils.h'):
-    restore_from_git(Q7_SOURCE_BASE, rel)
 
 # 内核默认关闭连接跟踪事件链，保持Q7现有构建兼容性。
 p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
@@ -43,8 +25,35 @@ p = Path('trunk/user/httpd/httpd.c')
 s = p.read_text()
 s = replace_once(
     s,
-    '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\tif (login_ip.len == 0)\n\t\treturn 2;\n\n\tif (is_uaddr_equal(&login_ip, ip_now))\n\t\treturn 3;\n\n\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {\n\t\treset_login_data();\n\t\treturn 2;\n\t}\n\n\treturn 0;\n}\n''',
-    '''static int\nhttp_login_check(const uaddr *ip_now)\n{\n\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\treturn 2;\n}\n''',
+    '''static int
+http_login_check(const uaddr *ip_now)
+{
+\tif (is_uaddr_localhost(ip_now))
+\t\treturn 1;
+
+\tif (login_ip.len == 0)
+\t\treturn 2;
+
+\tif (is_uaddr_equal(&login_ip, ip_now))
+\t\treturn 3;
+
+\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {
+\t\treset_login_data();
+\t\treturn 2;
+\t}
+
+\treturn 0;
+}
+''',
+    '''static int
+http_login_check(const uaddr *ip_now)
+{
+\tif (is_uaddr_localhost(ip_now))
+\t\treturn 1;
+
+\treturn 2;
+}
+''',
     'http登录兼容处理',
 )
 p.write_text(s)
@@ -117,7 +126,14 @@ old_log = '    log_line "[camdiscover] probes enabled: ONVIF=$onvif SSDP=$ssdp H
 new_log = '    log_line "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"'
 s = replace_once(s, old_log, new_log, '中文模块日志')
 old_cycle = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
-new_cycle = '''        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh begin\n            run_arpscan "$iface"\n        fi\n        run_camdiscover "$iface" "$discover_cycle"\n        if [ "$raw" = "1" ]; then\n            /usr/bin/lan_device_state.sh finish\n        fi'''
+new_cycle = '''        if [ "$raw" = "1" ]; then
+            /usr/bin/lan_device_state.sh begin
+            run_arpscan "$iface"
+        fi
+        run_camdiscover "$iface" "$discover_cycle"
+        if [ "$raw" = "1" ]; then
+            /usr/bin/lan_device_state.sh finish
+        fi'''
 if old_cycle in s:
     s = s.replace(old_cycle, new_cycle, 1)
 p.write_text(s)
@@ -164,7 +180,7 @@ s = p.read_text()
 s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
 p.write_text(s)
 
-# Q7共享C源码恢复后，构建阶段统一使用独立头文件名，彻底避免defaults.h名称碰撞。
+# 编译链使用独立头文件名，避免defaults.h与WebUI文件名冲突。
 for rel in ('trunk/user/shared/shutils.h', 'trunk/user/shared/defaults.c'):
     p = Path(rel)
     s = p.read_text()
