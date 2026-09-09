@@ -140,7 +140,7 @@ s = replace_once(
 s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
 p.write_text(s)
 
-# Q7默认无线名称必须保持Seetong首字母大写。
-p = Path('trunk/user/rc/rc.c')
-s = p.read_text().replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
+# Q7默认无线名称必须保持Seetong首字母大写；定义位于defaults.h。
+p = Path('trunk/user/shared/defaults.h')
+s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
 p.write_text(s)
