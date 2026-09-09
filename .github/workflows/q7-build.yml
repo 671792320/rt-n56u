@@ -50,6 +50,8 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          sh -n trunk/user/lan_autodiscover/lan_device_state.sh
+          sh -n trunk/user/lan_autodiscover/lan_takeover.sh
 
       - name: Build ZTE_Q7
         run: |
