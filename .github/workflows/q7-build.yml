@@ -46,6 +46,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_menu_patch.py
 
+      - name: Fix Q7 LAN discovery state and Ping
+        run: |
+          set -eux
+          python3 trunk/tools/q7_lan_state_fix.py
+
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -63,6 +68,7 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/tools/q7_menu_patch.py
+          test -f trunk/tools/q7_lan_state_fix.py
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
