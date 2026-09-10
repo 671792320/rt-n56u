@@ -133,6 +133,17 @@ apply_target() {
     return 0
 }
 
+# 只检查/补回SNAT，不重新接管IP，不改变临时源地址。
+# 这样即使Padavan其他组件重建iptables，也能在下一轮自动恢复。
+check_snat() {
+    target_net="$1"
+    localnet="$2"
+    current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
+    [ -n "$target_net" ] && [ -n "$localnet" ] && [ -n "$current_ip" ] || return 1
+    [ -x /usr/bin/lan_snat.sh ] || return 1
+    /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1
+}
+
 last_mode=""
 last_target=""
 while :; do
@@ -141,6 +152,8 @@ while :; do
             log "LAN拔出，撤销临时地址和SNAT"
             cleanup_network
         fi
+        last_mode=""
+        last_target=""
         sleep 1
         continue
     fi
@@ -166,6 +179,10 @@ while :; do
             apply_target "$target"
             last_mode="$mode"
             last_target="$target"
+        elif [ "$mode" = "NO_DHCP" ]; then
+            # 运行过程中其他Padavan组件可能刷新iptables；这里只补规则，
+            # 不调用takeover、不更换临时IP，也不删除现有SNAT规则。
+            check_snat "$target" "$localnet" || log "SNAT周期检查发现规则缺失或补回失败"
         fi
     fi
 
