@@ -56,6 +56,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_tempip_snat_fix.py
 
+      - name: Fix Q7 target switch transaction
+        run: |
+          set -eux
+          python3 trunk/tools/q7_snat_transition_fix.py
+
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -75,6 +80,7 @@ jobs:
           test -f trunk/tools/q7_menu_patch.py
           test -f trunk/tools/q7_lan_state_fix.py
           test -f trunk/tools/q7_tempip_snat_fix.py
+          test -f trunk/tools/q7_snat_transition_fix.py
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
