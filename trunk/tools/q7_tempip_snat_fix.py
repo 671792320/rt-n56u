@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 
 def replace_once(text, old, new, label):
@@ -12,181 +11,60 @@ def replace_once(text, old, new, label):
 # LAN网络管理：把临时目标IP同步到运行时NVRAM，供WebUI直接显示。
 # 不执行nvram commit，因此仍然是临时状态；拔线时立即清空。
 # ============================================================
-p = Path('trunk/user/lan_autodiscover/lan_network_manager.sh')
-s = p.read_text()
-s = replace_once(
-    s,
-    '''    runtime_set lan_discovery_status_target_network ""
-    runtime_set lan_discovery_status_target_ip ""
-    runtime_set lan_discovery_status_target_iface ""
-''',
-    '''    runtime_set lan_discovery_status_target_network ""
-    runtime_set lan_discovery_status_target_ip ""
-    runtime_set lan_discovery_status_target_iface ""
-    nvram set lan_discovery_status_target_network="" 2>/dev/null || :
-    nvram set lan_discovery_status_target_ip="" 2>/dev/null || :
-    nvram set lan_discovery_status_target_iface="" 2>/dev/null || :
-''',
+manager_path = Path('trunk/user/lan_autodiscover/lan_network_manager.sh')
+manager_text = manager_path.read_text()
+manager_text = replace_once(
+    manager_text,
+    '''    runtime_set lan_discovery_status_target_network ""\n    runtime_set lan_discovery_status_target_ip ""\n    runtime_set lan_discovery_status_target_iface ""\n''',
+    '''    runtime_set lan_discovery_status_target_network ""\n    runtime_set lan_discovery_status_target_ip ""\n    runtime_set lan_discovery_status_target_iface ""\n    nvram set lan_discovery_status_target_network="" 2>/dev/null || :\n    nvram set lan_discovery_status_target_ip="" 2>/dev/null || :\n    nvram set lan_discovery_status_target_iface="" 2>/dev/null || :\n''',
     '清理临时IP状态',
 )
-s = replace_once(
-    s,
-    '''    {
-        printf 'mode=%s\\n' "$mode"
-        printf 'local_net=%s\\n' "$localnet"
-        printf 'target_net=%s\\n' "$target_net"
-        printf 'target_ip=%s\\n' "$current_ip"
-    } > "$STATE_FILE"
-''',
-    '''    {
-        printf 'mode=%s\\n' "$mode"
-        printf 'local_net=%s\\n' "$localnet"
-        printf 'target_net=%s\\n' "$target_net"
-        printf 'target_ip=%s\\n' "$current_ip"
-    } > "$STATE_FILE"
-    # 仅运行时写入NVRAM，WebUI可读取；不执行commit，重启自动消失。
-    nvram set lan_discovery_status_target_network="$target_net/24" 2>/dev/null || :
-    nvram set lan_discovery_status_target_ip="$current_ip" 2>/dev/null || :
-    nvram set lan_discovery_status_target_iface="$BR_IF" 2>/dev/null || :
-''',
+manager_text = replace_once(
+    manager_text,
+    '''    {\n        printf 'mode=%s\\n' "$mode"\n        printf 'local_net=%s\\n' "$localnet"\n        printf 'target_net=%s\\n' "$target_net"\n        printf 'target_ip=%s\\n' "$current_ip"\n    } > "$STATE_FILE"\n''',
+    '''    {\n        printf 'mode=%s\\n' "$mode"\n        printf 'local_net=%s\\n' "$localnet"\n        printf 'target_net=%s\\n' "$target_net"\n        printf 'target_ip=%s\\n' "$current_ip"\n    } > "$STATE_FILE"\n    # 仅运行时写入NVRAM，WebUI可读取；不执行commit，重启自动消失。\n    nvram set lan_discovery_status_target_network="$target_net/24" 2>/dev/null || :\n    nvram set lan_discovery_status_target_ip="$current_ip" 2>/dev/null || :\n    nvram set lan_discovery_status_target_iface="$BR_IF" 2>/dev/null || :\n''',
     '同步临时IP到WebUI',
 )
+manager_path.write_text(manager_text)
 
 # ============================================================
 # SNAT：改为“只补规则，不先删除规则”，并提供check动作。
 # ============================================================
-p = Path('trunk/user/lan_autodiscover/lan_snat.sh')
-s = s.read_text()
+snat_path = Path('trunk/user/lan_autodiscover/lan_snat.sh')
+snat_text = snat_path.read_text()
 
-# 将原cleanup保留给down/remove专用；up不再先删除规则。
-old_case = '''case "$1" in
-    down|remove|-r|--remove)
-        if [ -z "$IPTABLES" ]; then
-            rm -f "$STATE_FILE"
-            exit 0
-        fi
-        cleanup
-        exit 0
-        ;;
-    up)
-        TARGET_NET="$2"
-        TARGET_IP="$3"
-        LAN_NET="$4"
-        ;;
-    *)
-        log "用法：$0 up 目标网段 目标临时IP 本地LAN网段；$0 down"
-        exit 2
-        ;;
-esac
-'''
-new_case = '''case "$1" in
-    down|remove|-r|--remove)
-        if [ -z "$IPTABLES" ]; then
-            rm -f "$STATE_FILE"
-            exit 0
-        fi
-        cleanup
-        exit 0
-        ;;
-    check)
-        TARGET_NET="$2"
-        TARGET_IP="$3"
-        LAN_NET="$4"
-        ;;
-    up)
-        TARGET_NET="$2"
-        TARGET_IP="$3"
-        LAN_NET="$4"
-        ;;
-    *)
-        log "用法：$0 up|check 目标网段 目标临时IP 本地LAN网段；$0 down"
-        exit 2
-        ;;
-esac
-'''
-s = replace_once(s, old_case, new_case, 'SNAT动作')
+old_case = '''case "$1" in\n    down|remove|-r|--remove)\n        if [ -z "$IPTABLES" ]; then\n            rm -f "$STATE_FILE"\n            exit 0\n        fi\n        cleanup\n        exit 0\n        ;;\n    up)\n        TARGET_NET="$2"\n        TARGET_IP="$3"\n        LAN_NET="$4"\n        ;;\n    *)\n        log "用法：$0 up 目标网段 目标临时IP 本地LAN网段；$0 down"\n        exit 2\n        ;;\nesac\n'''
+new_case = '''case "$1" in\n    down|remove|-r|--remove)\n        if [ -z "$IPTABLES" ]; then\n            rm -f "$STATE_FILE"\n            exit 0\n        fi\n        cleanup\n        exit 0\n        ;;\n    check)\n        TARGET_NET="$2"\n        TARGET_IP="$3"\n        LAN_NET="$4"\n        ;;\n    up)\n        TARGET_NET="$2"\n        TARGET_IP="$3"\n        LAN_NET="$4"\n        ;;\n    *)\n        log "用法：$0 up|check 目标网段 目标临时IP 本地LAN网段；$0 down"\n        exit 2\n        ;;\nesac\n'''
+snat_text = replace_once(snat_text, old_case, new_case, 'SNAT动作')
 
-old_cleanup_up = '''cleanup
-
-# 允许本机承担路由器职责；即使Padavan其他模块已开启，重复设置也是幂等的。
-[ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :
-
-rule_add filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT
-rule_add filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-rule_add nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"
-'''
-new_cleanup_up = '''# 允许本机承担路由器职责；即使Padavan其他模块已开启，重复设置也是幂等的。
-[ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :
-
-# 不再删除后重建：规则存在就保持原样，规则缺失才自动补回。
-rule_add filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT
-rule_add filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-rule_add nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"
-
-# check只负责确认并补齐规则，不改动状态文件中的源地址。
-if [ "$1" = "check" ]; then
-    log "SNAT规则检查完成：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
-    exit 0
-fi
-'''
-s = replace_once(s, old_cleanup_up, new_cleanup_up, 'SNAT稳定补规则')
-p.write_text(s)
+old_cleanup_up = '''cleanup\n\n# 允许本机承担路由器职责；即使Padavan其他模块已开启，重复设置也是幂等的。\n[ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :\n\nrule_add filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT\nrule_add filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\nrule_add nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"\n'''
+new_cleanup_up = '''# 允许本机承担路由器职责；即使Padavan其他模块已开启，重复设置也是幂等的。\n[ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :\n\n# 不再删除后重建：规则存在就保持原样，规则缺失才自动补回。\nrule_add filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT\nrule_add filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\nrule_add nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"\n\n# check只负责确认并补齐规则，不改动状态文件中的源地址。\nif [ "$1" = "check" ]; then\n    log "SNAT规则检查完成：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"\n    exit 0\nfi\n'''
+snat_text = replace_once(snat_text, old_cleanup_up, new_cleanup_up, 'SNAT稳定补规则')
+snat_path.write_text(snat_text)
 
 # ============================================================
 # LAN网络管理：每2秒自检一次SNAT；状态文件存在时也不能认为规则一定存在。
 # ============================================================
-p = Path('trunk/user/lan_autodiscover/lan_network_manager.sh')
-s = p.read_text()
-old_loop_tail = '''        if [ "$mode:$target" != "$last_mode:$last_target" ] || [ ! -f "$STATE_FILE" ]; then
-            apply_target "$target"
-            last_mode="$mode"
-            last_target="$target"
-        fi
-    fi
-
-    sleep 2
-done
-'''
-new_loop_tail = '''        if [ "$mode:$target" != "$last_mode:$last_target" ] || [ ! -f "$STATE_FILE" ]; then
-            apply_target "$target"
-            last_mode="$mode"
-            last_target="$target"
-        elif [ "$mode" = "NO_DHCP" ]; then
-            # 运行过程中如果其他Padavan组件刷新iptables，SNAT会被清掉；这里主动补回。
-            current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
-            [ -n "$current_ip" ] && [ -x /usr/bin/lan_snat.sh ] && \\
-                /usr/bin/lan_snat.sh check "$target" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1 || :
-        fi
-    fi
-
-    sleep 2
-done
-'''
-s = replace_once(s, old_loop_tail, new_loop_tail, 'SNAT周期自检')
-p.write_text(s)
+manager_path = Path('trunk/user/lan_autodiscover/lan_network_manager.sh')
+manager_text = manager_path.read_text()
+old_loop_tail = '''        if [ "$mode:$target" != "$last_mode:$last_target" ] || [ ! -f "$STATE_FILE" ]; then\n            apply_target "$target"\n            last_mode="$mode"\n            last_target="$target"\n        fi\n    fi\n\n    sleep 2\ndone\n'''
+new_loop_tail = '''        if [ "$mode:$target" != "$last_mode:$last_target" ] || [ ! -f "$STATE_FILE" ]; then\n            apply_target "$target"\n            last_mode="$mode"\n            last_target="$target"\n        elif [ "$mode" = "NO_DHCP" ]; then\n            # 运行过程中如果其他Padavan组件刷新iptables，SNAT会被清掉；这里主动补回。\n            current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"\n            if [ -n "$current_ip" ] && [ -x /usr/bin/lan_snat.sh ]; then\n                /usr/bin/lan_snat.sh check "$target" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1 || :\n            fi\n        fi\n    fi\n\n    sleep 2\ndone\n'''
+manager_text = replace_once(manager_text, old_loop_tail, new_loop_tail, 'SNAT周期自检')
+manager_path.write_text(manager_text)
 
 # ============================================================
 # WebUI：显示目标临时IP专属颜色，并计入IP占用。
 # ============================================================
-p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
-s = p.read_text()
-
-# initial_status 增加运行时临时目标地址。
+web_path = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+web_text = web_path.read_text()
 old_status = "loop:'<% nvram_get_x(\"\", \"lan_discovery_status_loop\"); %>'"
 new_status = old_status + ",target_ip:'<% nvram_get_x(\"\", \"lan_discovery_status_target_ip\"); %>',target_network:'<% nvram_get_x(\"\", \"lan_discovery_status_target_network\"); %>'"
-s = replace_once(s, old_status, new_status, 'WebUI临时IP状态')
-
-# 插入临时IP专属样式。
+web_text = replace_once(web_text, old_status, new_status, 'WebUI临时IP状态')
 style_marker = '</head>'
-style = '''<style>
-.ip-cell.ip-target{background:#f0ad4e!important;color:#fff!important;border-color:#eea236!important;font-weight:bold;}
-.ip-cell.ip-target:hover{background:#ec971f!important;}
-</style>\n'''
-s = replace_once(s, style_marker, style + style_marker, '临时IP颜色')
-
-# 用新版矩阵渲染函数替换旧实现。
-start = s.find('function render_matrix(byIp){')
-end = s.find('function infer_status', start)
+style = '''<style>\n.ip-cell.ip-target{background:#f0ad4e!important;color:#fff!important;border-color:#eea236!important;font-weight:bold;}\n.ip-cell.ip-target:hover{background:#ec971f!important;}\n</style>\n'''
+web_text = replace_once(web_text, style_marker, style + style_marker, '临时IP颜色')
+start = web_text.find('function render_matrix(byIp){')
+end = web_text.find('function infer_status', start)
 if start < 0 or end < 0:
     raise SystemExit('未找到render_matrix函数')
 new_render = r'''function render_matrix(byIp){
@@ -237,7 +115,7 @@ new_render = r'''function render_matrix(byIp){
     else if(matrix_selected_ip)detail.textContent=matrix_selected_ip+' ｜ 当前未发现响应（不代表绝对不存在设备）';else detail.textContent='点击IP方块查看详细信息';box.appendChild(detail);
 }
 '''
-s = s[:start] + new_render + s[end:]
-p.write_text(s)
+web_text = web_text[:start] + new_render + web_text[end:]
+web_path.write_text(web_text)
 
-print('Q7临时IP、SNAT稳定性和IP矩阵修复已生成')
+print('Q7临时IP、SNAT稳定性和IP矩阵修复补丁已生成')
