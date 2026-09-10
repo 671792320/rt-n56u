@@ -47,11 +47,6 @@ network_from_ip() {
     printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'
 }
 
-dhcp_found() {
-    [ -f "$DHCP_LOG" ] || return 1
-    grep -q '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null
-}
-
 dhcp_finished() {
     [ -f "$DHCP_LOG" ] || return 1
     grep -qE '^\[dhcpdetect\] DHCP server found|no DHCP server reply' "$DHCP_LOG" 2>/dev/null
@@ -104,17 +99,26 @@ update_runtime_targets() {
     sort -u "$tmp" > "$TARGETS_FILE"
     rm -f "$tmp"
 
-    # 保留旧WebUI单值字段用于兼容，同时把完整目标列表放入新状态文件。
     first="$(head -n 1 "$TARGETS_FILE" 2>/dev/null)"
-    first_net="${first%%|*}"
-    first_ip="${first#*|}"
-    [ -n "$first_net" ] && runtime_set lan_discovery_status_target_network "$first_net" || :
-    [ -n "$first_ip" ] && runtime_set lan_discovery_status_target_ip "$first_ip" || :
-    [ -n "$first_net" ] && runtime_set lan_discovery_status_target_iface "$BR_IF" || :
+    if [ -n "$first" ]; then
+        first_net="${first%%|*}"
+        first_ip="${first#*|}"
+        runtime_set lan_discovery_status_target_network "$first_net"
+        runtime_set lan_discovery_status_target_ip "$first_ip"
+        runtime_set lan_discovery_status_target_iface "$BR_IF"
+    else
+        clear_target_status
+    fi
 }
 
 target_is_active() {
     grep -q "^$1/24|" "$TARGETS_FILE" 2>/dev/null
+}
+
+state_ip_for() {
+    target_net="$1"
+    takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"
+    sed -n 's/^ip=//p' "$takeover_file" 2>/dev/null | head -n 1
 }
 
 apply_target() {
@@ -133,15 +137,13 @@ apply_target() {
         return 1
     fi
 
-    current_ip="$(sed -n "s/^ip=//p" "$(/usr/bin/lan_takeover.sh -? 2>/dev/null)" 2>/dev/null | head -n 1)"
-    [ -n "$current_ip" ] || current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
+    current_ip="$(state_ip_for "$target_net")"
     [ -n "$current_ip" ] || {
         log "无法取得目标网段临时地址：$target_net/24"
         return 1
     }
 
-    # 无论目标DHCP状态如何，都给手机侧流量做目标网段SNAT，
-    # 这样目标设备的回包只需要回到自己的同网段临时地址，不要求目标网关知道192.168.2.0/24。
+    # 无论目标是否存在DHCP，都使用目标网段独立SNAT保证回包稳定。
     if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1; then
         log "SNAT启用失败：$localnet/24 -> $target_net/24"
         return 1
@@ -175,9 +177,7 @@ remove_stale_targets() {
 check_snat() {
     target_net="$1"
     localnet="$2"
-    current_ip="$(cat "$RUNTIME_DIR/lan_discovery_status_target_ip" 2>/dev/null)"
-    takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"
-    current_ip="$(sed -n 's/^ip=//p' "$takeover_file" 2>/dev/null | head -n 1)"
+    current_ip="$(state_ip_for "$target_net")"
     [ -n "$target_net" ] && [ -n "$localnet" ] && [ -n "$current_ip" ] || return 1
     [ -x /usr/bin/lan_snat.sh ] || return 1
     /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1
@@ -197,10 +197,17 @@ process_targets() {
         [ -n "$target" ] || continue
         mode="NO_DHCP"
         is_dhcp_target "$target" && mode="DHCP"
-        apply_target "$target" "$mode" || log "保留未成功目标，下一轮继续：$target/24"
+        apply_target "$target" "$mode" || log "本轮未成功处理目标，下一轮继续：$target/24"
     done < "$candidates"
     rm -f "$candidates"
     remove_stale_targets
+
+    # 对所有已成功管理的目标补一次SNAT，不能只检查最后一个目标。
+    while IFS='|' read -r target_with_mask target_ip; do
+        [ -n "$target_with_mask" ] || continue
+        target_net="${target_with_mask%/24}"
+        check_snat "$target_net" "$localnet" || log "SNAT周期检查失败：$target_net/24"
+    done < "$TARGETS_FILE"
 }
 
 while :; do
