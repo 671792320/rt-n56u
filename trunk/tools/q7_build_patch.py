@@ -174,10 +174,11 @@ s = replace_once(
 s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
 p.write_text(s)
 
-# Q7默认无线名称：保持Seetong首字母大写。
+# Q7默认无线名称：使用新的IPCTEST-UTP-T2格式。
 p = Path('trunk/user/shared/defaults.h')
 s = p.read_text()
-s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCtest-utp2_')
+s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCTEST-UTP-T2_')
+s = s.replace('@Seetong-IPCtest-utp2_', '@Seetong-IPCTEST-UTP-T2_')
 p.write_text(s)
 
 # 编译链使用独立头文件名，避免defaults.h与WebUI文件名冲突。
