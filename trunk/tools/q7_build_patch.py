@@ -125,7 +125,8 @@ s = s.replace(
 old_log = '    log_line "[camdiscover] probes enabled: ONVIF=$onvif SSDP=$ssdp HIK=$hik DAHUA=$dahua ARP=$raw"'
 new_log = '    log_line "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"'
 s = replace_once(s, old_log, new_log, '中文模块日志')
-old_cycle = '''        [ "$raw" = "1" ] && run_arpscan "$iface"\n        run_camdiscover "$iface" "$discover_cycle"'''
+old_cycle = '''        [ "$raw" = "1" ] && run_arpscan "$iface"
+        run_camdiscover "$iface" "$discover_cycle"'''
 new_cycle = '''        if [ "$raw" = "1" ]; then
             /usr/bin/lan_device_state.sh begin
             run_arpscan "$iface"
@@ -177,8 +178,8 @@ p.write_text(s)
 # Q7默认无线名称：使用新的IPCTEST-UTP-T2格式。
 p = Path('trunk/user/shared/defaults.h')
 s = p.read_text()
-s = s.replace('@seetong-IPCtest-utp2_', '@Seetong-IPCTEST-UTP-T2_')
-s = s.replace('@Seetong-IPCtest-utp2_', '@Seetong-IPCTEST-UTP-T2_')
+s = s.replace('@seetong-IPCtest-utp2_', '@Seetong_IPCTEST-UTP-T2_')
+s = s.replace('@Seetong-IPCTEST-UTP-T2_', '@Seetong_IPCTEST-UTP-T2_')
 p.write_text(s)
 
 # 编译链使用独立头文件名，避免defaults.h与WebUI文件名冲突。
