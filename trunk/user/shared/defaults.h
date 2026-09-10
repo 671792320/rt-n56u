@@ -16,7 +16,7 @@
  */
 
 #ifndef _defaults_h_
-#define _defaults_h
+#define _defaults_h_
 
 #include <ralink_board.h>
 
@@ -40,7 +40,7 @@
 
 #if defined(BOARD_ZTE_Q7)
 /* Q7默认无线名称：前缀 + WiFi MAC最后三位，避免SSID过长。 */
-#define DEF_WLAN_2G_SSID	"@Seetong-IPCTEST-UTP-T2_%s"
+#define DEF_WLAN_2G_SSID	"@Seetong_IPCTEST-UTP-T2_%s"
 #define DEF_WLAN_2G_PSK		"88888888"
 #else
 #define DEF_WLAN_2G_SSID	BOARD_PID "_%s"
