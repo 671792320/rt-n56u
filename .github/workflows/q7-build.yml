@@ -23,8 +23,6 @@ jobs:
           # Q7编译不需要Chrome，避免第三方源Hash Sum mismatch导致构建失败
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           sudo rm -f /etc/apt/sources.list.d/google-chrome.sources
-
-          # 清理旧的软件包索引，重新获取干净的索引
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
           sudo apt-get update
@@ -54,7 +52,7 @@ jobs:
       - name: Fix Q7 temporary IP and SNAT stability
         run: |
           set -eux
-          python3 trunk/tools/q7_tempip_snat_fix.py
+          python3 trunk/tools/q7_tempip_snat_fix_v2.py
 
       - name: Fix Q7 target switch transaction
         run: |
@@ -80,6 +78,7 @@ jobs:
           test -f trunk/tools/q7_menu_patch.py
           test -f trunk/tools/q7_lan_state_fix.py
           test -f trunk/tools/q7_tempip_snat_fix.py
+          test -f trunk/tools/q7_tempip_snat_fix_v2.py
           test -f trunk/tools/q7_snat_transition_fix.py
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
