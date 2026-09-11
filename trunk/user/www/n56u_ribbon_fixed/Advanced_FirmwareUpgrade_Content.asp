@@ -77,7 +77,7 @@ $j.fn.fileName = function(){
                 <div class="alert alert-info" style="margin: 10px;"><#FW_desc1#><ol><li><#FW_desc2#></li><li><#FW_desc3#></li><li><#FW_desc4#></li><li><#FW_desc5#></li><li><#FW_desc6#></li></ol></div>
                                     <table width="100%" cellpadding="4" cellspacing="0" class="table">
                                         <tr><th width="50%"><#FW_item1#></th><td><input type="text" class="input" value="<% nvram_get_x("", "productid"); %>" readonly="1"></td></tr>
-                                        <tr><th><#FW_item2#></th><td><input type="text" name="firmver" class="input" value="3.4.3.9-099_26-03-1" readonly="1"></td></tr>
+                                        <tr><th><#FW_item2#></th><td><input type="text" name="firmver" class="input" value="ZVFWVERVZ" readonly="1"></td></tr>
                                         <tr><th><#FW_item5#></th><td><input type="file" name="file" size="36" /></td></tr>
                                         <tr><td colspan="2"><center><input type="button" name="button" class="btn btn-primary" style="width: 219px;" onclick="fwUpload();" value="<#CTL_upload#>" /></center></td></tr>
                                     </table>
