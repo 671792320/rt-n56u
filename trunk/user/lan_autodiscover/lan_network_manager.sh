@@ -44,7 +44,7 @@ local_ip() {
 }
 
 network_from_ip() {
-    printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'
+    printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'
 }
 
 dhcp_finished() {
@@ -64,9 +64,13 @@ target_from_db() {
         /^DEVICE type=SUBNET / {
             ip=""
             for(i=1;i<=NF;i++) if($i ~ /^IP=/) {ip=substr($i,4); break}
-            if(ip != "" && ip != local_net) print ip
+            # 严禁把无效的0.0.0.0或本机网段带入目标网段列表。
+            if(ip != "" && ip != "0.0.0.0" && ip != local_net) print ip
         }
-    ' "$DEVICE_DB" 2>/dev/null | sort -u
+    ' "$DEVICE_DB" 2>/dev/null |
+        while IFS= read -r ipaddr; do
+            network_from_ip "$ipaddr"
+        done | sort -u
 }
 
 is_dhcp_target() {
@@ -94,7 +98,7 @@ update_runtime_targets() {
         [ -r "$f" ] || continue
         net="$(sed -n 's/^network=//p' "$f" | head -n 1)"
         ipaddr="$(sed -n 's/^ip=//p' "$f" | head -n 1)"
-        [ -n "$net" ] && [ -n "$ipaddr" ] && printf '%s|%s\n' "$net/24" "$ipaddr" >> "$tmp"
+        [ -n "$net" ] && [ "$net" != "0.0.0.0" ] && [ -n "$ipaddr" ] && printf '%s|%s\n' "$net/24" "$ipaddr" >> "$tmp"
     done
     sort -u "$tmp" > "$TARGETS_FILE"
     rm -f "$tmp"
@@ -125,6 +129,7 @@ apply_target() {
     target_net="$1"
     mode="$2"
     [ -n "$target_net" ] || return 1
+    [ "$target_net" != "0.0.0.0" ] || { log "忽略无效目标网段：0.0.0.0/24"; return 1; }
     localip="$(local_ip)"
     localnet="$(network_from_ip "$localip")"
     [ -n "$localnet" ] || return 1
@@ -178,7 +183,7 @@ check_snat() {
     target_net="$1"
     localnet="$2"
     current_ip="$(state_ip_for "$target_net")"
-    [ -n "$target_net" ] && [ -n "$localnet" ] && [ -n "$current_ip" ] || return 1
+    [ -n "$target_net" ] && [ "$target_net" != "0.0.0.0" ] && [ -n "$localnet" ] && [ -n "$current_ip" ] || return 1
     [ -x /usr/bin/lan_snat.sh ] || return 1
     /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1
 }
@@ -189,12 +194,13 @@ process_targets() {
     : > "$candidates"
     target_from_dhcp >> "$candidates"
     target_from_db "$localnet" >> "$candidates"
-    grep -v "^$localnet$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"
+    grep -vE "^$localnet$|^0\.0\.0\.0$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"
     mv -f "$candidates.sorted" "$candidates"
 
     : > "$TARGETS_FILE"
     while IFS= read -r target; do
         [ -n "$target" ] || continue
+        [ "$target" != "0.0.0.0" ] || continue
         mode="NO_DHCP"
         is_dhcp_target "$target" && mode="DHCP"
         apply_target "$target" "$mode" || log "本轮未成功处理目标，下一轮继续：$target/24"
@@ -206,6 +212,7 @@ process_targets() {
     while IFS='|' read -r target_with_mask target_ip; do
         [ -n "$target_with_mask" ] || continue
         target_net="${target_with_mask%/24}"
+        [ "$target_net" != "0.0.0.0" ] || continue
         check_snat "$target_net" "$localnet" || log "SNAT周期检查失败：$target_net/24"
     done < "$TARGETS_FILE"
 }
