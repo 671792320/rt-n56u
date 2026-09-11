@@ -45,11 +45,14 @@ if 'ej_lan_discovery_targets' not in s:
     pos = s.find(marker)
     if pos < 0:
         raise SystemExit('Q7原生接入失败：找不到lan_discovery_devices EJ函数')
-    func_end = s.find('\n}\n', pos)
+
+    # 使用现有Padavan下一个EJ函数的边界定位，不能用第一个'}'。
+    next_marker = '\n// traffic monitor\nstatic int\nej_netdev'
+    func_end = s.find(next_marker, pos)
     if func_end < 0:
-        raise SystemExit('Q7原生接入失败：lan_discovery_devices EJ函数结构异常')
-    func_end += 3
-    helper = '''\nstatic int\nej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)\n{\n\tFILE *fp;\n\tchar line[128];\n\tint first = 1;\n\n\t/* 运行态目标列表只读/tmp，不写入NVRAM。 */\n\tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_targets.state", "r");\n\tif (!fp)\n\t\treturn 0;\n\n\twhile (fgets(line, sizeof(line), fp)) {\n\t\tchar *p;\n\n\t\tline[strcspn(line, "\\r\\n")] = '\\0';\n\t\tif (line[0] == '\\0')\n\t\t\tcontinue;\n\t\tp = strchr(line, '|');\n\t\tif (!p || !p[1])\n\t\t\tcontinue;\n\t\tif (!first)\n\t\t\twebsWrite(wp, ";");\n\t\twebsWrite(wp, "%s", line);\n\t\tfirst = 0;\n\t}\n\n\tfclose(fp);\n\treturn 0;\n}\n'''
+        raise SystemExit('Q7原生接入失败：找不到ej_netdev边界')
+
+    helper = '''\nstatic int\nej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)\n{\n\tFILE *fp;\n\tchar line[128];\n\tint first = 1;\n\n\t/* 运行态目标列表只读/tmp，不写入NVRAM。 */\n\tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_targets.state", "r");\n\tif (!fp)\n\t\treturn 0;\n\n\twhile (fgets(line, sizeof(line), fp)) {\n\t\tchar *p;\n\n\t\tline[strcspn(line, "\\r\\n")] = '\\0';\n\t\tif (line[0] == '\\0')\n\t\t\tcontinue;\n\t\tp = strchr(line, '|');\n\t\tif (!p || !p[1])\n\t\t\tcontinue;\n\t\tif (!first)\n\t\t\twebsWrite(wp, ";");\n\t\twebsWrite(wp, "%s", line);\n\t\tfirst = 0;\n\t}\n\n\tfclose(fp);\n\treturn 0;\n}\n\n'''
     s = s[:func_end] + helper + s[func_end:]
     reg = '{ "lan_discovery_devices", ej_lan_discovery_devices},\n'
     s = replace_once('web_ex.c', s, reg, reg + '\t{ "lan_discovery_targets", ej_lan_discovery_targets},\n', 'EJ注册表位置')
