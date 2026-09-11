@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 PAGE = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
 DATA = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp')
@@ -51,18 +52,22 @@ def main():
     if new_info not in page and old_info in page:
         page = page.replace(old_info, new_info, 1)
 
-    # 设备表的数据列由前置脚本或旧版本源码决定，不再因为变量名变化而误判失败。
-    # 如果仍存在旧的5列数组，则升级为6列；如果已经是6列则保持不动。
-    old_vals = "var vals=[st,protocol,r.ip,displayMac,r.info||'-'];"
-    existing_vals = "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];"
-    if existing_vals not in page and old_vals in page:
-        page = page.replace(old_vals, existing_vals, 1)
+    # 设备表必须保持Padavan页面当前的数据列顺序：状态、协议、IP、MAC、Ping、信息。
+    # 前置Q7脚本可能采用不同的空白、引号或信息表达式，因此这里按结构匹配，不能只匹配一条固定字符串。
+    vals_pattern = re.compile(r"var\s+vals\s*=\s*\[st\s*,\s*protocol\s*,\s*r\.ip\s*,\s*displayMac\s*,\s*[^\]]*\]\s*;")
+    desired_vals = "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];"
+    if "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];" not in page:
+        page, n_vals = vals_pattern.subn(desired_vals, page, count=1)
+        if n_vals == 0:
+            # 如果前置代码已经改成了row数组/不同变量名，至少要求源码同时具备六列渲染所需字段。
+            if 'r.ping' not in page or 'clean_device_info' not in page:
+                raise SystemExit('Q7 WebUI源码修复失败：设备表缺少Ping/信息字段渲染结构')
 
     old_header = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>'
     new_header = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>'
     if new_header not in page and old_header in page:
         page = page.replace(old_header, new_header, 1)
-    page = page.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
+    page = re.sub(r'colspan="5"([^>]*)class="muted"([^>]*)>暂无设备', r'colspan="6"\1class="muted"\2>暂无设备', page, count=1)
 
     if 'function render_target_states(s)' not in page:
         fn = "function render_target_states(s){var box=document.getElementById('target_states');if(!box)return;var raw=String(s||'').replace(/\\r/g,'');var arr=raw.split(';');var rows=[];for(var i=0;i<arr.length;i++){var line=String(arr[i]||'').replace(/^\\s+|\\s+$/g,'');if(!line)continue;var p=line.split('|');if(p.length<2)continue;var net=String(p[0]||'').trim();var ip=String(p[1]||'').trim();if(!/^((\\d{1,3}\\.){3}\\d{1,3})\\/24$/.test(net)||!/^((\\d{1,3}\\.){3}\\d{1,3})$/.test(ip))continue;rows.push({net:net,ip:ip});}rows.sort(function(a,b){return ip_key(a.net.split('/')[0])-ip_key(b.net.split('/')[0]);});if(!rows.length){box.innerHTML='<div class=\"muted\">当前没有生效的目标网段</div>';return;}var html='<table class=\"table table-bordered table-condensed\"><thead><tr><th>目标网段</th><th>临时IP（SNAT地址）</th><th>状态</th></tr></thead><tbody>';for(var j=0;j<rows.length;j++){html+='<tr><td>'+rows[j].net+'</td><td><strong>'+rows[j].ip+'</strong></td><td>已启用（SNAT）</td></tr>';}html+='</tbody></table>';box.innerHTML=html;}\n"
@@ -86,6 +91,7 @@ def main():
         'render_target_states(o.targets)',
         'id="target_states"',
         '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>',
+        "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];",
     ]
     for item in page_required:
         if item not in page:
