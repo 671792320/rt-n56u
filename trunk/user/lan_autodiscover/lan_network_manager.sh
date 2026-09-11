@@ -34,10 +34,112 @@ cleanup_network() { [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/d
 update_runtime_targets() { tmp="$RUNTIME_DIR/.lan_discovery_targets.tmp"; : > "$tmp"; for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; ipaddr="$(sed -n 's/^ip=//p' "$f" | head -n 1)"; [ -n "$net" ] && [ "$net" != "0.0.0.0" ] && [ -n "$ipaddr" ] && printf '%s|%s\n' "$net/24" "$ipaddr" >> "$tmp"; done; sort -u "$tmp" > "$TARGETS_FILE"; rm -f "$tmp"; targets_text="$(awk 'BEGIN{ORS=""} {if(NR>1) printf ";"; printf "%s",$0}' "$TARGETS_FILE" 2>/dev/null)"; nvram set lan_discovery_status_targets "$targets_text" 2>/dev/null || :; first="$(head -n 1 "$TARGETS_FILE" 2>/dev/null)"; if [ -n "$first" ]; then first_net="${first%%|*}"; first_ip="${first#*|}"; runtime_set lan_discovery_status_target_network "$first_net"; runtime_set lan_discovery_status_target_ip "$first_ip"; runtime_set lan_discovery_status_target_iface "$BR_IF"; else clear_target_status; fi; }
 target_is_active() { grep -q "^$1/24|" "$TARGETS_FILE" 2>/dev/null; }
 state_ip_for() { target_net="$1"; takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"; sed -n 's/^ip=//p' "$takeover_file" 2>/dev/null | head -n 1; }
-apply_target() { target_net="$1"; mode="$2"; [ -n "$target_net" ] || return 1; [ "$target_net" != "0.0.0.0" ] || { log "忽略无效目标网段：0.0.0.0/24"; return 1; }; localip="$(local_ip)"; localnet="$(network_from_ip "$localip")"; [ -n "$localnet" ] || return 1; [ "$target_net" != "$localnet" ] || return 0; runtime_set lan_discovery_status_state "目标网段管理：$mode"; if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then log "目标网段接管失败：$target_net/24"; return 1; fi; current_ip="$(state_ip_for "$target_net")"; [ -n "$current_ip" ] || { log "无法取得目标网段临时地址：$target_net/24"; return 1; }; if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1; then log "SNAT启用失败：$localnet/24 → $target_net/24"; return 1; fi; update_runtime_targets; { printf 'last_mode=%s\n' "$mode"; printf 'local_net=%s\n' "$localnet"; printf 'last_target_net=%s\n' "$target_net"; printf 'last_target_ip=%s\n' "$current_ip"; } > "$STATE_FILE"; log "目标网段=$target_net/24，模式=$mode，临时地址=$current_ip"; return 0; }
+apply_target() {
+    target_net="$1"
+    mode="$2"
+    source_net="$3"
+    [ -n "$target_net" ] || return 1
+    [ "$target_net" != "0.0.0.0" ] || { log "忽略无效目标网段：0.0.0.0/24"; return 1; }
+    localip="$(local_ip)"
+    localnet="$(network_from_ip "$localip")"
+    [ -n "$localnet" ] || return 1
+    [ "$target_net" != "$localnet" ] || return 0
+    [ -n "$source_net" ] || source_net="$localnet"
+    [ "$target_net" != "$source_net" ] || return 0
+    runtime_set lan_discovery_status_state "目标网段管理：$mode"
+    if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
+        log "目标网段接管失败：$target_net/24"
+        return 1
+    fi
+    current_ip="$(state_ip_for "$target_net")"
+    [ -n "$current_ip" ] || { log "无法取得目标网段临时地址：$target_net/24"; return 1; }
+    if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
+        log "SNAT启用失败：$source_net/24 → $target_net/24"
+        return 1
+    fi
+    update_runtime_targets
+    {
+        printf 'last_mode=%s\n' "$mode"
+        printf 'local_net=%s\n' "$localnet"
+        printf 'source_net=%s\n' "$source_net"
+        printf 'last_target_net=%s\n' "$target_net"
+        printf 'last_target_ip=%s\n' "$current_ip"
+    } > "$STATE_FILE"
+    log "目标网段=$target_net/24，模式=$mode，SNAT源=$source_net/24，临时地址=$current_ip"
+    return 0
+}
 remove_stale_targets() { for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; [ -n "$net" ] || continue; if ! target_is_active "$net"; then log "目标网段已不再发现，正在清理：$net/24"; [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down "$net" >> "$LOG_FILE" 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r "$net" >> "$LOG_FILE" 2>&1 || :; fi; done; update_runtime_targets; }
-check_snat() { target_net="$1"; localnet="$2"; current_ip="$(state_ip_for "$target_net")"; [ -n "$target_net" ] && [ "$target_net" != "0.0.0.0" ] && [ -n "$localnet" ] && [ -n "$current_ip" ] || return 1; [ -x /usr/bin/lan_snat.sh ] || return 1; /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$localnet" >> "$LOG_FILE" 2>&1; }
-process_targets() { localnet="$1"; candidates="$RUNTIME_DIR/.lan_target_candidates.tmp"; : > "$candidates"; target_from_dhcp >> "$candidates"; target_from_db "$localnet" >> "$candidates"; grep -vE "^$localnet$|^0\.0\.0\.0$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"; mv -f "$candidates.sorted" "$candidates"; : > "$TARGETS_FILE"; while IFS= read -r target; do [ -n "$target" ] || continue; [ "$target" != "0.0.0.0" ] || continue; mode="未检测到DHCP"; is_dhcp_target "$target" && mode="检测到DHCP"; apply_target "$target" "$mode" || log "本轮未成功处理目标，下一轮继续：$target/24"; done < "$candidates"; rm -f "$candidates"; remove_stale_targets; while IFS='|' read -r target_with_mask target_ip; do [ -n "$target_with_mask" ] || continue; target_net="${target_with_mask%/24}"; [ "$target_net" != "0.0.0.0" ] || continue; check_snat "$target_net" "$localnet" || log "SNAT周期检查失败：$target_net/24"; done < "$TARGETS_FILE"; }
+check_snat() {
+    target_net="$1"
+    takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"
+    snat_file="$RUNTIME_DIR/lan_snat_$(printf '%s' "$target_net" | tr '.' '_').state"
+    current_ip="$(sed -n 's/^ip=//p' "$takeover_file" 2>/dev/null | head -n 1)"
+    source_net="$(sed -n 's/^lan_net=//p' "$snat_file" 2>/dev/null | head -n 1)"
+    [ -n "$target_net" ] && [ "$target_net" != "0.0.0.0" ] && [ -n "$current_ip" ] && [ -n "$source_net" ] || return 1
+    [ -x /usr/bin/lan_snat.sh ] || return 1
+    /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1
+}
+process_targets() {
+    localnet="$1"
+    candidates="$RUNTIME_DIR/.lan_target_candidates.tmp"
+    active="$RUNTIME_DIR/.lan_target_active.tmp"
+    dhcp_nets="$RUNTIME_DIR/.lan_dhcp_nets.tmp"
+    : > "$candidates"
+    : > "$dhcp_nets"
+    target_from_dhcp >> "$dhcp_nets"
+    target_from_dhcp >> "$candidates"
+    target_from_db "$localnet" >> "$candidates"
+    grep -vE "^$localnet$|^0\.0\.0\.0$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"
+    mv -f "$candidates.sorted" "$candidates"
+
+    dhcp_source_net="$(head -n 1 "$dhcp_nets" 2>/dev/null)"
+    if [ -n "$dhcp_source_net" ]; then
+        # br0只有一个二层广播域，所以只要存在DHCP，就关闭Q7自身DHCP，避免手机拿到错误租约。
+        runtime_set lan_discovery_status_state "混合模式：发现DHCP网段，关闭Q7 DHCP"
+        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "0" ]; then
+            nvram set dhcp_enable_x=0
+            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
+        fi
+    else
+        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "1" ]; then
+            nvram set dhcp_enable_x=1
+            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
+        fi
+    fi
+
+    : > "$active"
+    while IFS= read -r target; do
+        [ -n "$target" ] || continue
+        [ "$target" != "0.0.0.0" ] || continue
+
+        if grep -qx "$target" "$dhcp_nets" 2>/dev/null; then
+            # DHCP目标网段直接桥接：只清理这个网段自己的旧SNAT/临时IP，不影响其他无DHCP网段。
+            log "目标网段=$target/24 检测到DHCP：使用直接桥接，不建立SNAT"
+            /usr/bin/lan_snat.sh down "$target" >> "$LOG_FILE" 2>&1 || :
+            /usr/bin/lan_takeover.sh -r "$target" >> "$LOG_FILE" 2>&1 || :
+            continue
+        fi
+
+        # 存在DHCP时，手机实际地址来自DHCP网段，因此这里必须用DHCP网段作为SNAT源网段。
+        source_net="$localnet"
+        [ -n "$dhcp_source_net" ] && source_net="$dhcp_source_net"
+        printf '%s\n' "$target" >> "$active"
+        mode="未检测到DHCP"
+        [ -n "$dhcp_source_net" ] && mode="混合模式：无DHCP目标，SNAT经由$dhcp_source_net/24"
+        apply_target "$target" "$mode" "$source_net" || log "本轮未成功处理目标，下一轮继续：$target/24"
+    done < "$candidates"
+
+    remove_stale_targets "$active"
+    update_runtime_targets
+    while IFS='|' read -r target_with_mask target_ip; do
+        [ -n "$target_with_mask" ] || continue
+        target_net="${target_with_mask%/24}"
+        [ "$target_net" != "0.0.0.0" ] || continue
+        check_snat "$target_net" || log "SNAT周期检查失败：$target_net/24"
+    done < "$TARGETS_FILE"
+    rm -f "$candidates" "$active" "$dhcp_nets"
+}
+
 
 while :; do
     if ! link_up; then

@@ -856,6 +856,72 @@ init_router(void)
 	nvram_convert_old_params();
 
 	nvram_need_commit = nvram_restore_defaults();
+	/* Q7固定固件版本：WebUI直接读取firmver_sub。 */
+	if (strcmp(nvram_safe_get("firmver_sub"), "3.4.3.9-099_26-03-1") != 0) {
+		nvram_set("firmver_sub", "3.4.3.9-099_26-03-1");
+		nvram_need_commit = 1;
+	}
+
+	/* Q7固定固件版本：WebUI直接读取firmver_sub，启动阶段写入并随NVRAM一起提交。 */
+	if (strcmp(nvram_safe_get("firmver_sub"), "3.4.3.9-099_26-03-1") != 0) {
+		nvram_set("firmver_sub", "3.4.3.9-099_26-03-1");
+		nvram_need_commit = 1;
+	}
+
+	/* Q7 SSID迁移：只处理本项目历史默认SSID，不覆盖用户自行设置的SSID。 */
+	{
+		const char *ssid = nvram_safe_get("rt_ssid");
+		const char *mac = nvram_safe_get("rt0_hwaddr");
+		if (!mac || !*mac)
+			mac = nvram_safe_get("lan_hwaddr");
+		char suffix[5] = {0};
+		char new_ssid[64];
+		int legacy = 1;
+		int i;
+
+		if (!strncmp(ssid, "@seetong-IPCtest-utp2_", 22) ||
+		    !strncmp(ssid, "@Seetong_IPCTEST-UTP-T2_", sizeof("@Seetong_IPCTEST-UTP-T2_") - 1) ||
+		    !strncmp(ssid, "@Seetong_IPCTEST-TUP-T2_", sizeof("@Seetong_IPCTEST-TUP-T2_") - 1))
+			legacy = 1;
+
+		if (legacy) {
+			/* 优先从无线MAC取最后4位；MAC格式为 XX:XX:XX:XX:XX:XX。 */
+			if (mac && strlen(mac) >= 17) {
+				suffix[0] = mac[12];
+				suffix[1] = mac[13];
+				suffix[2] = mac[15];
+				suffix[3] = mac[16];
+			}
+			/* 无线MAC不可用时，再使用现有SSID末尾的4位十六进制后缀。 */
+			if (strlen(suffix) != 4) {
+				const char *u = strrchr(ssid, '_');
+				if (u && strlen(u + 1) == 4) {
+					int ok = 1;
+					for (i = 0; i < 4; i++) {
+						char c = u[1 + i];
+						if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+							ok = 0;
+							break;
+						}
+					}
+					if (ok)
+						memcpy(suffix, u + 1, 4);
+				}
+			}
+			if (strlen(suffix) == 4) {
+				for (i = 0; i < 4; i++) {
+					if (suffix[i] >= 'a' && suffix[i] <= 'f')
+						suffix[i] = (char)(suffix[i] - 'a' + 'A');
+				}
+				suffix[4] = 0;
+				snprintf(new_ssid, sizeof(new_ssid), "@Seetong_IPCTEST-TUP-T2_%s", suffix);
+				if (strcmp(ssid, new_ssid) != 0) {
+					nvram_set("rt_ssid", new_ssid);
+					nvram_need_commit = 1;
+				}
+			}
+		}
+	}
 
 	get_eeprom_params();
 

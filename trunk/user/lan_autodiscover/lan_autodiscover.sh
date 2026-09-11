@@ -192,6 +192,53 @@ clear_subnet_records() {
     sync_device_cache
 }
 
+
+module_cn() {
+    [ "$1" = "1" ] && printf '启用' || printf '停用'
+}
+
+format_device_log() {
+    line="$1"
+    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    ip="$(printf '%s\n' "$line" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
+    mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
+    response_len="$(printf '%s\n' "$line" | sed -n 's/.*response_len=\([0-9][0-9]*\).*/\1/p')"
+    [ -n "$ip" ] || return 0
+    [ -n "$mac" ] || mac="-"
+    case "$mac" in
+        ''|-) mac="$(ip neigh show "$ip" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}')";;
+    esac
+    [ -n "$mac" ] || mac="-"
+    case "$type" in
+        ONVIF|onvif) protocol="ONVIF";;
+        SSDP|ssdp) protocol="SSDP";;
+        HIK|HIK-SADP|hik|hik-sadp) protocol="HIK";;
+        DAHUA|DAHUA-DHIP|dahua|dahua-dhip) protocol="DAHUA";;
+        ARP|arp) protocol="ARP";;
+        *) protocol="$type";;
+    esac
+    if [ -n "$response_len" ]; then
+        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=${response_len}字节"
+    elif [ "$protocol" = "ARP" ]; then
+        log_line "发现设备：IP=$ip 协议=ARP MAC=$mac 回包响应=收到ARP回复"
+    else
+        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=已收到"
+    fi
+}
+
+device_state_event() {
+    line="$1"
+    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    ip="$(printf '%s\n' "$line" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
+    mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
+    [ -n "$ip" ] || return 0
+    case "$type" in
+        ARP|arp) /usr/bin/lan_device_state.sh arp "$ip" "$mac" 2>/dev/null || :;;
+        SUBNET|subnet) :;;
+        *) /usr/bin/lan_device_state.sh proto "$ip" "$type" 2>/dev/null || :;;
+    esac
+}
+
 append_device() {
     clean="$(clean_device_line "$1")" || return
     ip="$(printf '%s\n' "$clean" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
@@ -317,11 +364,13 @@ EOF
                         type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+                        device_state_event "$line"
                         clean="$(append_device "$line")"
-                        [ -n "$clean" ] && log_line "发现设备：$clean"
+                        [ -n "$clean" ] && format_device_log "$line"
                         ;;
                     \[arpscan\]*)
-                        log_line "$line"
+                        arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"
+                        log_line "【ARP扫描】$arp_line"
                         ;;
                 esac
             done < "$ARP_LOG"
@@ -337,10 +386,11 @@ EOF
                     type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
                     [ "$type" = "SUBNET" ] && continue
                     register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+                    device_state_event "$line"
                     clean="$(append_device "$line")"
-                    [ -n "$clean" ] && log_line "发现设备：$clean"
+                    [ -n "$clean" ] && format_device_log "$line"
                     ;;
-                \[arpscan\]*) log_line "$line";;
+                \[arpscan\]*) arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"; log_line "【ARP扫描】$arp_line";;
             esac
         done < "$ARP_LOG"
     fi
@@ -392,7 +442,7 @@ run_camdiscover() {
     write_custom_config "$custom"
 
     log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
-    log_line "[camdiscover] probes enabled: ONVIF=$onvif SSDP=$ssdp HIK=$hik DAHUA=$dahua ARP=$raw"
+    log_line "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"
     : > "$CAM_LOG"
     args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"
     [ "$onvif" = "1" ] && args="$args -O"
@@ -417,10 +467,11 @@ run_camdiscover() {
                         type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+                        device_state_event "$line"
                         clean="$(append_device "$line")"
-                        [ -n "$clean" ] && log_line "发现设备：$clean"
+                        [ -n "$clean" ] && format_device_log "$line"
                         ;;
-                    *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line "$line";;
+                    *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line "【设备探测】$line";;
                 esac
             done < "$CAM_LOG"
             : > "$CAM_LOG"
@@ -461,8 +512,14 @@ run_discovery() {
         custom="$(nv lan_discovery_custom)"
         read_standard_config "$custom"
         cycle_start="$(date +%s)"
-        [ "$raw" = "1" ] && run_arpscan "$iface"
+        if [ "$raw" = "1" ]; then
+            /usr/bin/lan_device_state.sh begin
+            run_arpscan "$iface"
+        fi
         run_camdiscover "$iface" "$discover_cycle"
+        if [ "$raw" = "1" ]; then
+            /usr/bin/lan_device_state.sh finish
+        fi
         if ! is_link_up "$iface"; then break; fi
 
         elapsed=$(( $(date +%s) - cycle_start ))

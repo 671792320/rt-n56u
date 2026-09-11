@@ -4121,6 +4121,41 @@ ej_lan_discovery_devices(int eid, webs_t wp, int argc, char **argv)
 	return 0;
 }
 
+static int
+ej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)
+{
+	FILE *fp;
+	char line[128];
+	int first = 1;
+
+	/* 运行态目标列表只读/tmp；状态文件不存在时回退到旧状态变量，保证WebUI接口不中断。 */
+	fp = fopen("/tmp/lan_discovery_runtime/lan_discovery_targets.state", "r");
+	if (!fp) {
+		const char *fallback = nvram_safe_get("lan_discovery_status_targets");
+		if (fallback && *fallback)
+			websWrite(wp, "%s", fallback);
+		return 0;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		char *p;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		if (line[0] == '\0')
+			continue;
+		p = strchr(line, '|');
+		if (!p || !p[1])
+			continue;
+		if (!first)
+			websWrite(wp, ";");
+		websWrite(wp, "%s", line);
+		first = 0;
+	}
+
+	fclose(fp);
+	return 0;
+}
+
 struct ej_handler ej_handlers[] =
 {
 	{ "nvram_get_x", ej_nvram_get_x},
@@ -4136,6 +4171,7 @@ struct ej_handler ej_handlers[] =
 	{ "firmware_caps_hook", ej_firmware_caps_hook},
 	{ "json_system_status", ej_system_status_hook},
 	{ "lan_discovery_devices", ej_lan_discovery_devices},
+	{ "lan_discovery_targets", ej_lan_discovery_targets},
 
 	{ "netdev", ej_netdev},
 	{ "bandwidth", ej_bandwidth},

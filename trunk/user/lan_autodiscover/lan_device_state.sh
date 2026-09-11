@@ -30,20 +30,53 @@ get_neigh_mac() {
 # Ping仅作为独立探测结果显示，不作为唯一在线依据。
 ping_device() {
     ip="$1"
-    if ! command -v ping >/dev/null 2>&1; then
-        printf '不可用'
-        return 2
+    ping_bin=""
+
+    for candidate in /bin/ping /sbin/ping /usr/bin/ping /usr/sbin/ping; do
+        if [ -x "$candidate" ]; then
+            ping_bin="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$ping_bin" ] && command -v ping >/dev/null 2>&1; then
+        ping_bin="$(command -v ping)"
     fi
-    if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-        printf '通'
-        return 0
+
+    if [ -n "$ping_bin" ]; then
+        if "$ping_bin" -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+            printf '通'
+            return 0
+        fi
+        printf '不通'
+        return 1
     fi
-    printf '不通'
-    return 1
+
+    if command -v busybox >/dev/null 2>&1; then
+        if busybox ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+            printf '通'
+            return 0
+        fi
+        # BusyBox存在但没有ping applet时，继续标记为不可用。
+        if busybox ping --help >/dev/null 2>&1; then
+            printf '不通'
+            return 1
+        fi
+    fi
+
+    printf '不可用'
+    return 2
 }
 
 is_ip() {
-    case "$1" in *.*.*.*) return 0;; *) return 1;; esac
+    ip="$1"
+    case "$ip" in *.*.*.*) ;; *) return 1;; esac
+    last="${ip##*.}"
+    case "$last" in
+        ''|*[!0-9]*) return 1;;
+        0|255) return 1;;
+    esac
+    return 0
 }
 
 add_protocol() {
@@ -163,8 +196,10 @@ finish)
             esac
 
             detail="$(printf '%s\n' "$row" | sed -n 's/.*INFO=\(.*\)$/\1/p')"
+            # INFO只保存设备描述；历史轮次附加的Ping/STATUS/PING/MISS一律剥离。
+            detail="$(printf '%s\n' "$detail" | sed 's/^Ping：[[:space:]]*[^；]*；[[:space:]]*//;s/[[:space:]]*STATUS=[^ ]*//g;s/[[:space:]]*PING=[^ ]*//g;s/[[:space:]]*MISS=[0-9][0-9]*//g;s/[[:space:]]*$//')"
             case "$detail" in
-                ''|-) ;;
+                ''|-|设备可达) ;;
                 *)
                     case "$info" in
                         '') info="$detail";;

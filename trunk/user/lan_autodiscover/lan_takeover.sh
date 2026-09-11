@@ -4,6 +4,7 @@
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 LOGTAG=lan-autodiscover
+LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"
 runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
 log() { msg="$(date '+%H:%M:%S') 【临时地址】$*"; logger -t "$LOGTAG" "$msg"; printf '%s\n' "$msg"; }
 valid_ip() { case "$1" in *.*.*.*) return 0;; *) return 1;; esac; }
@@ -31,6 +32,11 @@ collect_used_ips() {
     if [ -x /usr/bin/arpscan ]; then /usr/bin/arpscan -i "$IFACE" -t 2 -s "$NETWORK/24" 2>/dev/null | sed -n 's/^DEVICE type=[^ ]* IP=\([^ ]*\).*/\1/p' >> "$used_file"; fi
     ip neigh show dev "$IFACE" 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != "FAILED" {print $1}' >> "$used_file"
     ip -4 addr show dev "$BR_IF" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' >> "$used_file"
+    # 所有已有临时地址状态都视为占用，防止两个状态文件重复选择同一个完整IP。
+    for state in "$RUNTIME_DIR"/lan_takeover_*.state; do
+        [ -r "$state" ] || continue
+        sed -n 's/^ip=//p' "$state" | head -n 1 >> "$used_file"
+    done
     sort -u "$used_file" -o "$used_file"
 }
 is_used() { grep -qx "$1" "$RUNTIME_DIR/lan_takeover_used.txt" 2>/dev/null; }
@@ -50,16 +56,32 @@ find_free_ip() {
     done
     return 1
 }
+ip_owned_by_other_state() {
+    wanted="$1"
+    for state in "$RUNTIME_DIR"/lan_takeover_*.state; do
+        [ -r "$state" ] || continue
+        [ "$state" = "$STATE_FILE" ] && continue
+        old_ip="$(sed -n 's/^ip=//p' "$state" | head -n 1)"
+        [ "$old_ip" = "$wanted" ] && return 0
+    done
+    return 1
+}
+
 reuse_existing() {
     [ -r "$STATE_FILE" ] || return 1
     old_iface="$(sed -n 's/^iface=//p' "$STATE_FILE" | head -n 1)"; old_ip="$(sed -n 's/^ip=//p' "$STATE_FILE" | head -n 1)"; old_network="$(sed -n 's/^network=//p' "$STATE_FILE" | head -n 1)"
     [ "$old_iface" = "$BR_IF" ] && [ "$old_network" = "$NETWORK" ] && valid_ip "$old_ip" && [ "$old_ip" != "0.0.0.0" ] || return 1
-    if ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $old_ip/24"; then
+    if ! ip_owned_by_other_state "$old_ip" && ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $old_ip/24"; then
         runtime_set lan_discovery_status_target_network "$NETWORK/24"; runtime_set lan_discovery_status_target_ip "$old_ip"; runtime_set lan_discovery_status_target_iface "$BR_IF"; log "复用成功：接口=$BR_IF 地址=$old_ip/24 目标网段=${NETWORK}/24"; return 0
     fi
     return 1
 }
 IFACE="${1:-eth2.1}"; NETWORK_RAW="${2:-}"; mkdir -p "$RUNTIME_DIR"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "已有临时IP分配事务正在执行，本轮跳过，防止重复占用同一地址"
+    exit 1
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || :' EXIT INT TERM
 if [ "$IFACE" = "-r" ] || [ "$IFACE" = "--remove" ]; then
     if [ -n "$NETWORK_RAW" ]; then NETWORK="$(normalize_network "$NETWORK_RAW")"; [ -n "$NETWORK" ] && remove_one "$NETWORK"; else remove_all; fi
     runtime_set lan_discovery_status_target_network ""; runtime_set lan_discovery_status_target_ip ""; runtime_set lan_discovery_status_target_iface ""; exit 0
@@ -69,10 +91,15 @@ NETWORK="$(normalize_network "$NETWORK_RAW")"
 if [ -z "$NETWORK" ] || [ "$NETWORK" = "0.0.0.0" ]; then log "参数错误：无效目标网段=$NETWORK_RAW"; exit 1; fi
 BR_IF=br0; [ -e "/sys/class/net/$BR_IF" ] || BR_IF="$IFACE"; STATE_FILE="$(state_file_for "$NETWORK")"
 if reuse_existing; then exit 0; fi
-remove_one "$NETWORK"; collect_used_ips; FREE_IP="$(find_free_ip)"
+remove_one "$NETWORK"
+collect_used_ips
+FREE_IP="$(find_free_ip)"
+# 再次读取当前地址与全部状态，确保在真正添加前没有重复占用。
+[ -n "$FREE_IP" ] && ! is_used "$FREE_IP" || FREE_IP=""
 if [ -z "$FREE_IP" ] || [ "$FREE_IP" = "0.0.0.0" ]; then log "未找到可用临时地址：目标网段=${NETWORK}/24"; exit 1; fi
 if ip addr add "$FREE_IP/24" dev "$BR_IF" 2>/dev/null; then
-    { printf 'iface=%s\n' "$BR_IF"; printf 'ip=%s\n' "$FREE_IP"; printf 'network=%s\n' "$NETWORK"; printf 'created=%s\n' "$(date +%s)"; } > "$STATE_FILE"
+    tmp_state="$STATE_FILE.tmp.$$"
+    { printf 'iface=%s\n' "$BR_IF"; printf 'ip=%s\n' "$FREE_IP"; printf 'network=%s\n' "$NETWORK"; printf 'created=%s\n' "$(date +%s)"; } > "$tmp_state" && mv -f "$tmp_state" "$STATE_FILE"
     runtime_set lan_discovery_status_target_network "$NETWORK/24"; runtime_set lan_discovery_status_target_ip "$FREE_IP"; runtime_set lan_discovery_status_target_iface "$BR_IF"; log "接管成功：接口=$BR_IF 地址=$FREE_IP/24 目标网段=${NETWORK}/24"; exit 0
 fi
 log "添加失败：接口=$BR_IF 地址=$FREE_IP/24"; exit 1

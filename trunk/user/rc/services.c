@@ -175,6 +175,37 @@ run_telnetd(void)
 	eval("telnetd");
 }
 
+static int
+is_lan_discovery_run(void)
+{
+	return pids("lan_discovery_supervisor");
+}
+
+void
+start_lan_discovery(void)
+{
+	if (nvram_invmatch("lan_discovery_enable", "1"))
+		return;
+
+	if (!is_lan_discovery_run())
+		eval("/usr/bin/lan_discovery_supervisor.sh");
+}
+
+void
+stop_lan_discovery(void)
+{
+	char* svcs[] = { "lan_discovery_supervisor", NULL };
+	kill_services(svcs, 3, 1);
+	kill_pidfile_s("/tmp/lan_network_manager.pid", SIGTERM);
+	kill_pidfile_s("/tmp/lan_autodiscover_worker.pid", SIGTERM);
+	if (check_if_file_exist("/usr/bin/lan_snat.sh"))
+		eval("/usr/bin/lan_snat.sh", "down");
+	if (check_if_file_exist("/usr/bin/lan_takeover.sh"))
+		eval("/usr/bin/lan_takeover.sh", "-r");
+	unlink("/tmp/lan_network_manager.pid");
+	unlink("/tmp/lan_autodiscover_worker.pid");
+}
+
 void
 start_telnetd(void)
 {
@@ -619,6 +650,7 @@ start_services_once(int is_ap_mode)
 	start_watchdog_cpu();
 	start_crond();
 	start_networkmap(1);
+	start_lan_discovery();
 	start_rstats();
 #if defined(APP_MENTOHUST)
 	start_mentohust();
@@ -656,6 +688,7 @@ stop_services(int stopall)
 	stop_ttyd();
 #endif
 	stop_networkmap();
+	stop_lan_discovery();
 	stop_lltd();
 	stop_detect_internet();
 	stop_rstats();

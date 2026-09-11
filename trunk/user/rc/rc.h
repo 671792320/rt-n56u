@@ -510,6 +510,8 @@ void stop_logger(void);
 void start_watchdog_cpu(void);
 void restart_watchdog_cpu(void);
 int start_services_once(int is_ap_mode);
+void start_lan_discovery(void);
+void stop_lan_discovery(void);
 void stop_services(int stopall);
 void stop_services_lan_wan(void);
 void stop_misc(void);

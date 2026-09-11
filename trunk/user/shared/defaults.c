@@ -18,7 +18,7 @@
 #include <ralink_boards.h>
 #include "nvram_linux.h"
 #include "netutils.h"
-#include "defaults.h"
+#include "q7_defaults.h"
 
 #define STR1(x) #x
 #define STR(x) STR1(x)
