@@ -15,6 +15,7 @@ BOARD_PATTERN=s/ZVMODELVZ/$(CONFIG_FIRMWARE_PRODUCT_ID)/g
 COPYR_PATTERN=s/ZVCOPYRVZ/$(LABEL_COPYRIGHT_TEXT)/g
 DWURL_PATTERN=s/ZVDWURLVZ/$(PROJECT_HOME_URL)/g
 DWURL_MOD_PATTERN=s/ZVMODWURLVZ/$(PROJECT_HOME_URL_MOD)/g
+FIRMWARE_VERSION_PATTERN=s/ZVFWVERVZ/3.4.3.9-$(FIRMWARE_BUILDS_VER)_$(FIRMWARE_BUILDS_REV)/g
 
 WEBUI_NAME=n56u_ribbon_fixed
 
@@ -126,6 +127,8 @@ endif
 	sed $(DWURL_PATTERN) -i $(ROMFS_DIR)/www/EN.dict
 	sed $(DWURL_MOD_PATTERN) -i $(ROMFS_DIR)/www/EN.dict
 	rm -f $(ROMFS_DIR)/www/EN.header
+	# 将当前构建提交号写入WebUI固件版本显示
+	sed $(FIRMWARE_VERSION_PATTERN) -i $(ROMFS_DIR)/www/Advanced_FirmwareUpgrade_Content.asp
 	rm -f $(ROMFS_DIR)/www/bootstrap/js/bootstrap.js
 	rm -f $(ROMFS_DIR)/www/bootstrap/js/engage.itoggle.js
 	rm -f $(ROMFS_DIR)/www/bootstrap/js/jquery.backgroundpos.min.js
