@@ -17,15 +17,19 @@ required_snat = [
     'state_file_for()',
     'cleanup_all()',
     'cleanup_one()',
-    'SNAT状态检查并同步',
+    'check|up)',
+    'rule_add_first nat POSTROUTING',
+    'acquire_lock()',
 ]
 required_takeover = [
     'state_file_for()',
     'remove_one()',
     'remove_all()',
-    '复用已有临时LAN地址',
+    '复用成功：接口=$BR_IF',
 ]
 
+# 校验实际代码结构，不依赖旧版中文日志文本。
+# 日志格式可以继续调整，但多网段事务、并发锁和幂等SNAT结构必须保留。
 for marker in required_manager:
     if marker not in manager:
         raise SystemExit(f'Q7多网段管理器缺少关键内容：{marker}')
