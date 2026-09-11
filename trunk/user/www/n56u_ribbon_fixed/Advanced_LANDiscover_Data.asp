@@ -6,6 +6,6 @@ STATUS|<% nvram_get_x("", "lan_discovery_status_if"); %>|<% nvram_get_x("", "lan
 ---DEVICES---
 <% lan_discovery_devices(); %>
 ---TARGETS---
-<% nvram_get_x("", "lan_discovery_status_targets"); %>
+<% lan_discovery_targets(); %>
 ---CUSTOM---
 <% nvram_get_x("", "lan_discovery_custom"); %>
