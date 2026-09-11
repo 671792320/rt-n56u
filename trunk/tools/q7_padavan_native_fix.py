@@ -72,8 +72,7 @@ rc_mk.write_text(s, encoding='utf-8')
 web_ex = Path('trunk/user/httpd/web_ex.c')
 s = web_ex.read_text(encoding='utf-8')
 if 'ej_lan_discovery_targets' not in s:
-    # 函数定义必须位于EJ注册表(struct ej_handler数组)之外；
-    # 注册项则继续放在数组内部，避免把static函数定义插入初始化器。
+    # 函数定义必须位于EJ注册表数组之外，注册项继续位于数组内部。
     reg = '{ "lan_discovery_devices", ej_lan_discovery_devices},\n'
     table = 'struct ej_handler ej_handlers[] =\n{\n'
     if reg not in s:
@@ -88,10 +87,14 @@ ej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)
 \tchar line[128];
 \tint first = 1;
 
-\t/* 运行态目标列表只读/tmp，不写入NVRAM。 */
+\t/* 运行态目标列表只读/tmp；状态文件不存在时回退到旧状态变量，保证WebUI接口不中断。 */
 \tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_targets.state", "r");
-\tif (!fp)
+\tif (!fp) {
+\t\tconst char *fallback = nvram_safe_get("lan_discovery_status_targets");
+\t\tif (fallback && *fallback)
+\t\t\twebsWrite(wp, "%s", fallback);
 \t\treturn 0;
+\t}
 
 \twhile (fgets(line, sizeof(line), fp)) {
 \t\tchar *p;
