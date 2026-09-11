@@ -121,10 +121,11 @@ jobs:
           grep -q 'dhcp_source_net=' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '检测到DHCP：使用直接桥接' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '混合模式：无DHCP目标' trunk/user/lan_autodiscover/lan_network_manager.sh
-          grep -q 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
+          # 下列检查包含shell通配符、美元符号等字面量，必须使用-F，不能让grep正则语义干扰校验。
+          grep -Fq 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
-          grep -q 'LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"' trunk/user/lan_autodiscover/lan_takeover.sh
-          grep -q 'lan_takeover.lock' trunk/user/lan_autodiscover/lan_takeover.sh
+          grep -Fq 'LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"' trunk/user/lan_autodiscover/lan_takeover.sh
+          grep -Fq 'lan_takeover.lock' trunk/user/lan_autodiscover/lan_takeover.sh
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
