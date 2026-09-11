@@ -1,15 +1,13 @@
 #!/bin/sh
-# Q7 LAN网络模式管理器。
-# 手机通常使用Q7自己的LAN网段；所有发现到的目标网段统一通过临时IP+SNAT访问。
-# DHCP只做一次全局判断：目标二层存在DHCP时关闭Q7 DHCP，避免两个DHCP服务器冲突。
-# 不再按目标网段分别做“DHCP直连/非DHCP SNAT”两套模式。
-# 每个目标网段独立维护临时IP、SNAT和状态，不再因为切换一个网段而删除其他网段。
+# Q7 LAN网络管理器。
+# 手机始终使用Q7自己的LAN网段；所有发现到的目标网段统一通过临时IP+SNAT访问。
+# 不再检测目标网段是否存在DHCP，也不再根据DHCP改变Q7自身DHCP或访问模式。
+# 每个目标网段独立维护临时IP、SNAT和状态。
 
 IFACE=eth2.1
 BR_IF=br0
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 DEVICE_DB=/tmp/lan_discovery_devices.txt
-DHCP_LOG=/tmp/dhcpdetect_lan.log
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 LOG_FILE=/tmp/lan_discovery.log
@@ -26,11 +24,8 @@ log() {
 runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
 link_up() { [ -x /sbin/mtk_esw ] || return 0; state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"; [ "$state" = "1" ]; }
 local_ip() { ip_from_nvram="$(nvram get lan_ipaddr 2>/dev/null)"; case "$ip_from_nvram" in *.*.*.*) printf '%s\n' "$ip_from_nvram"; return 0;; esac; ip -4 addr show dev "$BR_IF" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' | head -n 1; }
-# 这里必须输出换行。原实现使用awk printf但没有\\n，来自DHCP和设备库的两个网段会被拼成一个参数。
+# 这里必须输出换行，避免多个设备网段被拼成一个错误参数。
 network_from_ip() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'; }
-dhcp_finished() { [ -f "$DHCP_LOG" ] || return 1; grep -qE '^\[dhcpdetect\] DHCP server found|no DHCP server reply' "$DHCP_LOG" 2>/dev/null; }
-# DHCP只用于判断目标二层是否存在DHCP，以及提取一个可用的源网段；不再把某个目标网段切成“直接桥接模式”。
-target_from_dhcp() { grep '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null | sed -n 's/.* gateway=\([0-9.]*\).*/\1/p' | while IFS= read -r g; do network_from_ip "$g"; done | sort -u; }
 target_from_db() { local_net="$1"; awk -v local_net="$local_net" '/^DEVICE type=SUBNET / {ip=""; for(i=1;i<=NF;i++) if($i ~ /^IP=/) {ip=substr($i,4); break} if(ip != "" && ip != "0.0.0.0" && ip != local_net) print ip}' "$DEVICE_DB" 2>/dev/null | while IFS= read -r ipaddr; do network_from_ip "$ipaddr"; done | sort -u; }
 clear_target_status() { runtime_set lan_discovery_status_target_network ""; runtime_set lan_discovery_status_target_ip ""; runtime_set lan_discovery_status_target_iface ""; nvram set lan_discovery_status_targets "" 2>/dev/null || :; }
 cleanup_network() { [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :; rm -f "$STATE_FILE" "$TARGETS_FILE"; clear_target_status; }
@@ -68,7 +63,7 @@ apply_target() {
         printf 'last_target_net=%s\n' "$target_net"
         printf 'last_target_ip=%s\n' "$current_ip"
     } > "$STATE_FILE"
-    log "目标网段=$target_net/24，模式=$mode，SNAT源=$source_net/24，临时地址=$current_ip"
+    log "目标网段=$target_net/24，统一SNAT，源网段=$source_net/24，临时地址=$current_ip"
     return 0
 }
 remove_stale_targets() { active_file="$1"; for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; [ -n "$net" ] || continue; if ! target_is_active "$active_file" "$net"; then log "目标网段已不再发现，正在清理：$net/24"; [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down "$net" >> "$LOG_FILE" 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r "$net" >> "$LOG_FILE" 2>&1 || :; fi; done; update_runtime_targets; }
@@ -86,43 +81,23 @@ process_targets() {
     localnet="$1"
     candidates="$RUNTIME_DIR/.lan_target_candidates.tmp"
     active="$RUNTIME_DIR/.lan_target_active.tmp"
-    dhcp_nets="$RUNTIME_DIR/.lan_dhcp_nets.tmp"
     : > "$candidates"
-    : > "$dhcp_nets"
 
-    # 只做一次全局DHCP判断：它只决定手机应该由谁分配地址，不决定目标网段是否使用SNAT。
-    target_from_dhcp >> "$dhcp_nets"
-    target_from_dhcp >> "$candidates"
+    # 统一模式：只根据设备发现结果得到目标网段。
+    # 无论目标网段有没有DHCP，均不改变Q7 DHCP，均使用临时IP+SNAT访问。
     target_from_db "$localnet" >> "$candidates"
     grep -vE "^$localnet$|^0\.0\.0\.0$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"
     mv -f "$candidates.sorted" "$candidates"
 
-    dhcp_source_net="$(head -n 1 "$dhcp_nets" 2>/dev/null)"
-    if [ -n "$dhcp_source_net" ]; then
-        # Q7与目标设备共享二层时，如果目标LAN有DHCP，不能同时开两个DHCP服务器。
-        runtime_set lan_discovery_status_state "统一SNAT模式：发现DHCP，关闭Q7 DHCP"
-        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "0" ]; then
-            nvram set dhcp_enable_x=0
-            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
-        fi
-        source_net="$dhcp_source_net"
-    else
-        runtime_set lan_discovery_status_state "统一SNAT模式：无DHCP，使用Q7 DHCP"
-        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "1" ]; then
-            nvram set dhcp_enable_x=1
-            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
-        fi
-        source_net="$localnet"
-    fi
+    runtime_set lan_discovery_status_state "统一SNAT模式：Q7 DHCP保持现有配置"
 
     : > "$active"
     while IFS= read -r target; do
         [ -n "$target" ] || continue
         [ "$target" != "0.0.0.0" ] || continue
         printf '%s\n' "$target" >> "$active"
-        # 无论该目标网段自身是否有DHCP，统一采用：临时目标IP + SNAT。
-        mode="统一SNAT访问"
-        apply_target "$target" "$mode" "$source_net" || log "本轮未成功处理目标，下一轮继续：$target/24"
+        # 所有目标网段统一：Q7源网段 → 目标网段临时IP。
+        apply_target "$target" "统一SNAT访问" "$localnet" || log "本轮未成功处理目标，下一轮继续：$target/24"
     done < "$candidates"
 
     remove_stale_targets "$active"
@@ -133,7 +108,7 @@ process_targets() {
         [ "$target_net" != "0.0.0.0" ] || continue
         check_snat "$target_net" || log "SNAT周期检查失败：$target_net/24"
     done < "$TARGETS_FILE"
-    rm -f "$candidates" "$active" "$dhcp_nets"
+    rm -f "$candidates" "$active"
 }
 
 while :; do
@@ -141,9 +116,9 @@ while :; do
         if [ -f "$STATE_FILE" ] || ls "$RUNTIME_DIR"/lan_takeover_*.state >/dev/null 2>&1; then log "LAN网线已拔出，正在撤销全部临时地址和SNAT"; cleanup_network; fi
         sleep 1; continue
     fi
-    loops=0
-    while [ ! -f "$DHCP_LOG" ] || ! dhcp_finished; do link_up || break; loops=$((loops + 1)); [ "$loops" -ge 12 ] && break; sleep 1; done
-    localip="$(local_ip)"; localnet="$(network_from_ip "$localip")"; [ -n "$localnet" ] || { sleep 2; continue; }
+    localip="$(local_ip)"
+    localnet="$(network_from_ip "$localip")"
+    [ -n "$localnet" ] || { sleep 2; continue; }
     process_targets "$localnet"
     sleep 2
 done
