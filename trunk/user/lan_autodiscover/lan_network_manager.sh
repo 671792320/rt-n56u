@@ -24,7 +24,8 @@ log() {
 runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
 link_up() { [ -x /sbin/mtk_esw ] || return 0; state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"; [ "$state" = "1" ]; }
 local_ip() { ip_from_nvram="$(nvram get lan_ipaddr 2>/dev/null)"; case "$ip_from_nvram" in *.*.*.*) printf '%s\n' "$ip_from_nvram"; return 0;; esac; ip -4 addr show dev "$BR_IF" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' | head -n 1; }
-network_from_ip() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'; }
+# 这里必须输出换行。原实现使用awk printf但没有\\n，来自DHCP和设备库的两个网段会被拼成一个参数。
+network_from_ip() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'; }
 dhcp_finished() { [ -f "$DHCP_LOG" ] || return 1; grep -qE '^\[dhcpdetect\] DHCP server found|no DHCP server reply' "$DHCP_LOG" 2>/dev/null; }
 target_from_dhcp() { grep '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null | sed -n 's/.* gateway=\([0-9.]*\).*/\1/p' | while IFS= read -r g; do network_from_ip "$g"; done | sort -u; }
 target_from_db() { local_net="$1"; awk -v local_net="$local_net" '/^DEVICE type=SUBNET / {ip=""; for(i=1;i<=NF;i++) if($i ~ /^IP=/) {ip=substr($i,4); break} if(ip != "" && ip != "0.0.0.0" && ip != local_net) print ip}' "$DEVICE_DB" 2>/dev/null | while IFS= read -r ipaddr; do network_from_ip "$ipaddr"; done | sort -u; }
@@ -32,7 +33,7 @@ is_dhcp_target() { wanted="$1"; target_from_dhcp | grep -qx "$wanted"; }
 clear_target_status() { runtime_set lan_discovery_status_target_network ""; runtime_set lan_discovery_status_target_ip ""; runtime_set lan_discovery_status_target_iface ""; nvram set lan_discovery_status_targets "" 2>/dev/null || :; }
 cleanup_network() { [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :; rm -f "$STATE_FILE" "$TARGETS_FILE"; clear_target_status; }
 update_runtime_targets() { tmp="$RUNTIME_DIR/.lan_discovery_targets.tmp"; : > "$tmp"; for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; ipaddr="$(sed -n 's/^ip=//p' "$f" | head -n 1)"; [ -n "$net" ] && [ "$net" != "0.0.0.0" ] && [ -n "$ipaddr" ] && printf '%s|%s\n' "$net/24" "$ipaddr" >> "$tmp"; done; sort -u "$tmp" > "$TARGETS_FILE"; rm -f "$tmp"; targets_text="$(awk 'BEGIN{ORS=""} {if(NR>1) printf ";"; printf "%s",$0}' "$TARGETS_FILE" 2>/dev/null)"; nvram set lan_discovery_status_targets "$targets_text" 2>/dev/null || :; first="$(head -n 1 "$TARGETS_FILE" 2>/dev/null)"; if [ -n "$first" ]; then first_net="${first%%|*}"; first_ip="${first#*|}"; runtime_set lan_discovery_status_target_network "$first_net"; runtime_set lan_discovery_status_target_ip "$first_ip"; runtime_set lan_discovery_status_target_iface "$BR_IF"; else clear_target_status; fi; }
-target_is_active() { grep -q "^$1/24|" "$TARGETS_FILE" 2>/dev/null; }
+target_is_active() { active_file="$1"; target_net="$2"; [ -r "$active_file" ] && grep -qx "$target_net" "$active_file" 2>/dev/null; }
 state_ip_for() { target_net="$1"; takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"; sed -n 's/^ip=//p' "$takeover_file" 2>/dev/null | head -n 1; }
 apply_target() {
     target_net="$1"
@@ -68,7 +69,7 @@ apply_target() {
     log "目标网段=$target_net/24，模式=$mode，SNAT源=$source_net/24，临时地址=$current_ip"
     return 0
 }
-remove_stale_targets() { for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; [ -n "$net" ] || continue; if ! target_is_active "$net"; then log "目标网段已不再发现，正在清理：$net/24"; [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down "$net" >> "$LOG_FILE" 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r "$net" >> "$LOG_FILE" 2>&1 || :; fi; done; update_runtime_targets; }
+remove_stale_targets() { active_file="$1"; for f in "$RUNTIME_DIR"/lan_takeover_*.state; do [ -r "$f" ] || continue; net="$(sed -n 's/^network=//p' "$f" | head -n 1)"; [ -n "$net" ] || continue; if ! target_is_active "$active_file" "$net"; then log "目标网段已不再发现，正在清理：$net/24"; [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down "$net" >> "$LOG_FILE" 2>&1 || :; [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r "$net" >> "$LOG_FILE" 2>&1 || :; fi; done; update_runtime_targets; }
 check_snat() {
     target_net="$1"
     takeover_file="$RUNTIME_DIR/lan_takeover_$(printf '%s' "$target_net" | tr '.' '_').state"
@@ -117,6 +118,7 @@ process_targets() {
             log "目标网段=$target/24 检测到DHCP：使用直接桥接，不建立SNAT"
             /usr/bin/lan_snat.sh down "$target" >> "$LOG_FILE" 2>&1 || :
             /usr/bin/lan_takeover.sh -r "$target" >> "$LOG_FILE" 2>&1 || :
+            printf '%s\n' "$target" >> "$active"
             continue
         fi
 
@@ -139,7 +141,6 @@ process_targets() {
     done < "$TARGETS_FILE"
     rm -f "$candidates" "$active" "$dhcp_nets"
 }
-
 
 while :; do
     if ! link_up; then
