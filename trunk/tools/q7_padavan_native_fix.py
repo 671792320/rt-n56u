@@ -72,10 +72,14 @@ rc_mk.write_text(s, encoding='utf-8')
 web_ex = Path('trunk/user/httpd/web_ex.c')
 s = web_ex.read_text(encoding='utf-8')
 if 'ej_lan_discovery_targets' not in s:
-    # 不假定其它EJ函数的相对顺序；直接插入到EJ注册表之前。
+    # 函数定义必须位于EJ注册表(struct ej_handler数组)之外；
+    # 注册项则继续放在数组内部，避免把static函数定义插入初始化器。
     reg = '{ "lan_discovery_devices", ej_lan_discovery_devices},\n'
+    table = 'struct ej_handler ej_handlers[] =\n{\n'
     if reg not in s:
         raise SystemExit('Q7原生接入失败：找不到EJ注册表中的lan_discovery_devices')
+    if table not in s:
+        raise SystemExit('Q7原生接入失败：找不到EJ注册表定义')
 
     helper = '''static int
 ej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)
@@ -109,7 +113,7 @@ ej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)
 }
 
 '''
-    s = s.replace(reg, helper + reg, 1)
+    s = s.replace(table, helper + table, 1)
     s = replace_once('web_ex.c', s, reg, reg + '\t{ "lan_discovery_targets", ej_lan_discovery_targets},\n', 'EJ注册表位置')
 web_ex.write_text(s, encoding='utf-8')
 
