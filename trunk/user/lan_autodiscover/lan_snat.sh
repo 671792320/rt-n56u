@@ -65,7 +65,7 @@ state_file_for() {
 }
 
 normalize_network() {
-    printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'
+    printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'
 }
 
 cleanup_one() {
@@ -75,7 +75,7 @@ cleanup_one() {
     old_target_net="$(sed -n 's/^target_net=//p' "$state_file" | head -n 1)"
     old_target_ip="$(sed -n 's/^target_ip=//p' "$state_file" | head -n 1)"
     old_lan_net="$(sed -n 's/^lan_net=//p' "$state_file" | head -n 1)"
-    if [ -n "$old_target_net" ] && [ -n "$old_target_ip" ] && [ -n "$old_lan_net" ] && [ -n "$IPTABLES" ]; then
+    if [ -n "$old_target_net" ] && [ "$old_target_net" != "0.0.0.0" ] && [ -n "$old_target_ip" ] && [ "$old_target_ip" != "0.0.0.0" ] && [ -n "$old_lan_net" ] && [ -n "$IPTABLES" ]; then
         rule_del_all nat POSTROUTING -s "$old_lan_net/24" -d "$old_target_net/24" -o br0 -j SNAT --to-source "$old_target_ip"
         rule_del_all filter FORWARD -i br0 -o br0 -s "$old_lan_net/24" -d "$old_target_net/24" -j ACCEPT
         rule_del_all filter FORWARD -i br0 -o br0 -s "$old_target_net/24" -d "$old_lan_net/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -88,7 +88,7 @@ cleanup_all() {
     for state_file in "$RUNTIME_DIR"/lan_snat_*.state; do
         [ -r "$state_file" ] || continue
         target="$(sed -n 's/^target_net=//p' "$state_file" | head -n 1)"
-        [ -n "$target" ] && cleanup_one "$target"
+        [ -n "$target" ] && [ "$target" != "0.0.0.0" ] && cleanup_one "$target"
     done
 }
 
@@ -104,17 +104,24 @@ apply_rules() {
 }
 
 check_args() {
-    case "$1:$2:$3" in
-        *.*.*.*:*.*.*.*:*.*.*.*) ;;
-        *) log "SNAT参数无效：target=$1 target_ip=$2 lan=$3"; return 1;;
+    target_net="$(normalize_network "$1")"
+    target_ip="$2"
+    lan_net="$(normalize_network "$3")"
+    case "$target_ip" in
+        *.*.*.*) ;;
+        *) log "SNAT参数无效：临时源地址=$2"; return 1;;
     esac
-    [ "$1" != "$3" ] || { log "SNAT参数无效：目标网段与本地网段不能相同：$1"; return 1; }
-    target_prefix="$(printf '%s\n' "$1" | awk -F. '{if(NF==4)print $1"."$2"."$3}')"
-    ip_prefix="$(printf '%s\n' "$2" | awk -F. '{if(NF==4)print $1"."$2"."$3}')"
+    [ -n "$target_net" ] && [ -n "$lan_net" ] || { log "SNAT参数无效：目标或本地网段格式错误：target=$1 lan=$3"; return 1; }
+    [ "$target_net" != "0.0.0.0" ] && [ "$lan_net" != "0.0.0.0" ] || { log "SNAT参数无效：禁止使用0.0.0.0/24"; return 1; }
+    [ "$target_net" != "$lan_net" ] || { log "SNAT参数无效：目标网段与本地网段不能相同：$target_net"; return 1; }
+    target_prefix="$(printf '%s\n' "$target_net" | awk -F. '{print $1"."$2"."$3}')"
+    ip_prefix="$(printf '%s\n' "$target_ip" | awk -F. '{if(NF==4)print $1"."$2"."$3}')"
     [ -n "$target_prefix" ] && [ "$target_prefix" = "$ip_prefix" ] || {
-        log "SNAT参数无效：临时源地址不属于目标网段：target=$1 target_ip=$2"
+        log "SNAT参数无效：临时源地址不属于目标网段：target=$target_net target_ip=$target_ip"
         return 1
     }
+    CHECK_TARGET_NET="$target_net"
+    CHECK_LAN_NET="$lan_net"
     return 0
 }
 
@@ -127,7 +134,7 @@ case "$ACTION" in
         acquire_lock || exit 0
         if [ -n "$2" ]; then
             TARGET_NET="$(normalize_network "$2")"
-            [ -n "$TARGET_NET" ] && cleanup_one "$TARGET_NET"
+            [ -n "$TARGET_NET" ] && [ "$TARGET_NET" != "0.0.0.0" ] && cleanup_one "$TARGET_NET"
         else
             cleanup_all
         fi
@@ -145,6 +152,8 @@ case "$ACTION" in
 esac
 
 check_args "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || exit 1
+TARGET_NET="$CHECK_TARGET_NET"
+LAN_NET="$CHECK_LAN_NET"
 [ -n "$IPTABLES" ] || { log "iptables不存在，无法启用SNAT"; exit 1; }
 
 acquire_lock || exit 0
