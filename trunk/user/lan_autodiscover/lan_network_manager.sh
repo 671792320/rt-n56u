@@ -1,7 +1,8 @@
 #!/bin/sh
 # Q7 LAN网络模式管理器。
-# 手机始终使用Q7自己的LAN网段；所有发现到的目标网段统一通过临时IP+SNAT访问。
-# DHCP只作为发现目标网段的信息来源，不再切换Q7 DHCP/桥接模式。
+# 手机通常使用Q7自己的LAN网段；所有发现到的目标网段统一通过临时IP+SNAT访问。
+# DHCP只做一次全局判断：目标二层存在DHCP时关闭Q7 DHCP，避免两个DHCP服务器冲突。
+# 不再按目标网段分别做“DHCP直连/非DHCP SNAT”两套模式。
 # 每个目标网段独立维护临时IP、SNAT和状态，不再因为切换一个网段而删除其他网段。
 
 IFACE=eth2.1
@@ -28,7 +29,7 @@ local_ip() { ip_from_nvram="$(nvram get lan_ipaddr 2>/dev/null)"; case "$ip_from
 # 这里必须输出换行。原实现使用awk printf但没有\\n，来自DHCP和设备库的两个网段会被拼成一个参数。
 network_from_ip() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'; }
 dhcp_finished() { [ -f "$DHCP_LOG" ] || return 1; grep -qE '^\[dhcpdetect\] DHCP server found|no DHCP server reply' "$DHCP_LOG" 2>/dev/null; }
-# DHCP这里只用于帮助发现“目标网段”，不再改变Q7自己的DHCP或工作模式。
+# DHCP只用于判断目标二层是否存在DHCP，以及提取一个可用的源网段；不再把某个目标网段切成“直接桥接模式”。
 target_from_dhcp() { grep '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null | sed -n 's/.* gateway=\([0-9.]*\).*/\1/p' | while IFS= read -r g; do network_from_ip "$g"; done | sort -u; }
 target_from_db() { local_net="$1"; awk -v local_net="$local_net" '/^DEVICE type=SUBNET / {ip=""; for(i=1;i<=NF;i++) if($i ~ /^IP=/) {ip=substr($i,4); break} if(ip != "" && ip != "0.0.0.0" && ip != local_net) print ip}' "$DEVICE_DB" 2>/dev/null | while IFS= read -r ipaddr; do network_from_ip "$ipaddr"; done | sort -u; }
 clear_target_status() { runtime_set lan_discovery_status_target_network ""; runtime_set lan_discovery_status_target_ip ""; runtime_set lan_discovery_status_target_iface ""; nvram set lan_discovery_status_targets "" 2>/dev/null || :; }
@@ -85,20 +86,33 @@ process_targets() {
     localnet="$1"
     candidates="$RUNTIME_DIR/.lan_target_candidates.tmp"
     active="$RUNTIME_DIR/.lan_target_active.tmp"
+    dhcp_nets="$RUNTIME_DIR/.lan_dhcp_nets.tmp"
     : > "$candidates"
+    : > "$dhcp_nets"
 
-    # 统一模式：DHCP结果和设备发现结果都只负责告诉我们“有哪些目标网段”。
-    # 无论目标网段本身有没有DHCP，都一律由Q7保留自己的DHCP，并通过临时IP+SNAT访问。
+    # 只做一次全局DHCP判断：它只决定手机应该由谁分配地址，不决定目标网段是否使用SNAT。
+    target_from_dhcp >> "$dhcp_nets"
     target_from_dhcp >> "$candidates"
     target_from_db "$localnet" >> "$candidates"
     grep -vE "^$localnet$|^0\.0\.0\.0$" "$candidates" 2>/dev/null | sort -u > "$candidates.sorted"
     mv -f "$candidates.sorted" "$candidates"
 
-    runtime_set lan_discovery_status_state "统一SNAT模式：Q7 DHCP保持开启"
-    if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "1" ]; then
-        # Q7始终给手机提供自己的LAN地址，不因为目标网络是否有DHCP而切换工作模式。
-        nvram set dhcp_enable_x=1
-        /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
+    dhcp_source_net="$(head -n 1 "$dhcp_nets" 2>/dev/null)"
+    if [ -n "$dhcp_source_net" ]; then
+        # Q7与目标设备共享二层时，如果目标LAN有DHCP，不能同时开两个DHCP服务器。
+        runtime_set lan_discovery_status_state "统一SNAT模式：发现DHCP，关闭Q7 DHCP"
+        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "0" ]; then
+            nvram set dhcp_enable_x=0
+            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
+        fi
+        source_net="$dhcp_source_net"
+    else
+        runtime_set lan_discovery_status_state "统一SNAT模式：无DHCP，使用Q7 DHCP"
+        if [ "$(nvram get dhcp_enable_x 2>/dev/null)" != "1" ]; then
+            nvram set dhcp_enable_x=1
+            /sbin/rc restart_dhcpd >/dev/null 2>&1 || :
+        fi
+        source_net="$localnet"
     fi
 
     : > "$active"
@@ -106,7 +120,9 @@ process_targets() {
         [ -n "$target" ] || continue
         [ "$target" != "0.0.0.0" ] || continue
         printf '%s\n' "$target" >> "$active"
-        apply_target "$target" "统一SNAT访问" "$localnet" || log "本轮未成功处理目标，下一轮继续：$target/24"
+        # 无论该目标网段自身是否有DHCP，统一采用：临时目标IP + SNAT。
+        mode="统一SNAT访问"
+        apply_target "$target" "$mode" "$source_net" || log "本轮未成功处理目标，下一轮继续：$target/24"
     done < "$candidates"
 
     remove_stale_targets "$active"
@@ -117,7 +133,7 @@ process_targets() {
         [ "$target_net" != "0.0.0.0" ] || continue
         check_snat "$target_net" || log "SNAT周期检查失败：$target_net/24"
     done < "$TARGETS_FILE"
-    rm -f "$candidates" "$active"
+    rm -f "$candidates" "$active" "$dhcp_nets"
 }
 
 while :; do
