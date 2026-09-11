@@ -75,12 +75,11 @@ def main():
         target_html = '<h4 style="margin-top:12px">目标网段与临时IP（SNAT地址）</h4><div class="alert alert-info">下面显示实际生效的目标网段、对应临时IP及SNAT状态。</div><div id="target_states"><div class="muted">等待目标网段状态...</div></div>\n'
         page = must_replace(page, '<h4>IP占用情况 ', target_html + '<h4>IP占用情况 ', '目标网段状态区域')
 
+    # 先写回源码，再分别验证Content页面和Data接口中的结构。
     PAGE.write_text(page, encoding='utf-8')
     DATA.write_text(data, encoding='utf-8')
 
-    # 这里只验证真正影响运行结果的结构，不再绑定某个历史JS变量名。
-    required = [
-        '<% lan_discovery_targets(); %>',
+    page_required = [
         "devices:section(data,'---DEVICES---','---TARGETS---')",
         "targets:section(data,'---TARGETS---','---CUSTOM---')",
         "function render_target_states(s)",
@@ -88,9 +87,18 @@ def main():
         'id="target_states"',
         '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>',
     ]
-    for item in required:
+    for item in page_required:
         if item not in page:
-            raise SystemExit('Q7 WebUI源码修复校验失败：缺少 ' + item)
+            raise SystemExit('Q7 WebUI源码修复校验失败：Content.asp缺少 ' + item)
+
+    data_required = [
+        '<% lan_discovery_devices(); %>',
+        '---TARGETS---',
+        '<% lan_discovery_targets(); %>',
+    ]
+    for item in data_required:
+        if item not in data:
+            raise SystemExit('Q7 WebUI源码修复校验失败：Data.asp缺少 ' + item)
 
     print('Q7 WebUI已直接写入实际源码。')
 
