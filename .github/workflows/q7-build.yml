@@ -117,13 +117,13 @@ jobs:
           grep -q -- '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '临时IP（SNAT地址）' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'LOCK_DIR=/var/run/lan_network_manager.lock' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q 'dhcp_enable_x' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q 'dhcp_source_net=' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '检测到DHCP：使用直接桥接' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '混合模式：无DHCP目标' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
+          grep -q 'LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'lan_takeover.lock' trunk/user/lan_autodiscover/lan_takeover.sh
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
