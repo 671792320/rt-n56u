@@ -15,41 +15,51 @@ def main():
     page = PAGE.read_text(encoding='utf-8')
     data = DATA.read_text(encoding='utf-8')
 
+    # 运行态目标列表统一从Padavan EJ读取，避免把临时SNAT状态写入NVRAM。
     data = data.replace('<% nvram_get_x("", "lan_discovery_status_targets"); %>', '<% lan_discovery_targets(); %>')
     DATA.write_text(data, encoding='utf-8')
 
+    # 设备数据区与目标网段数据区必须独立解析。
     old_parse = "devices:section(data,'---DEVICES---','---CUSTOM---'),custom:section(data,'---CUSTOM---','')"
     new_parse = "devices:section(data,'---DEVICES---','---TARGETS---'),targets:section(data,'---TARGETS---','---CUSTOM---'),custom:section(data,'---CUSTOM---','')"
     if "targets:section(data,'---TARGETS---','---CUSTOM---')" not in page:
         page = must_replace(page, old_parse, new_parse, '目标网段解析')
 
+    # 设备记录保留后端Ping/状态字段。
     old_record = "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0};}"
     new_record = "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0,ping:'不可用',backend_status:''};}"
-    if "ping:'不可用',backend_status:''" not in page:
-        page = must_replace(page, old_record, new_record, '设备记录字段')
+    if "ping:'不可用',backend_status:''" not in page and old_record in page:
+        page = page.replace(old_record, new_record, 1)
 
+    # 兼容前置脚本已经加入6列表格的情况；否则再从旧5列表格升级。
     old_merge = "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type==='ARP')currentArp[ip]=1;}}"
     new_merge = "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||'';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||'';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||'';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type==='ARP')currentArp[ip]=1;}}"
-    if 'var pg=(z.match(/PING=([^ ]+)/)' not in page:
-        page = must_replace(page, old_merge, new_merge, '设备Ping状态解析')
+    if 'var pg=(z.match(/PING=([^ ]+)/)' not in page and old_merge in page:
+        page = page.replace(old_merge, new_merge, 1)
 
     old_status = "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '正常';}"
     new_status = "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.backend_status==='在线'||row.backend_status==='暂时离线'||row.backend_status==='IP冲突')return row.backend_status;if(row.ping==='通')return '在线';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '在线';}"
-    if "row.backend_status==='在线'" not in page:
-        page = must_replace(page, old_status, new_status, '在线状态计算')
+    if "row.backend_status==='在线'" not in page and old_status in page:
+        page = page.replace(old_status, new_status, 1)
 
+    # 清理后端调试字段，避免INFO列把Ping/STATUS/MISS重复显示。
     if 'function clean_device_info(v)' not in page:
-        page = must_replace(page, 'function mac_norm(v){', "function clean_device_info(v){var s=String(v==null?'':v);s=s.replace(/^Ping：[[:space:]]*[^；]*；[[:space:]]*/,'');s=s.replace(/[[:space:]]*STATUS=[^ ]+/g,'');s=s.replace(/[[:space:]]*PING=[^ ]+/g,'');s=s.replace(/[[:space:]]*MISS=[0-9]+/g,'');s=s.replace(/[[:space:]]*Ping：[[:space:]]*[^；]+；/g,'');s=s.replace(/^设备可达$/,'');s=s.replace(/^[；;、，,[:space:]]+|[；;、，,[:space:]]+$/g,'');return s||'-';}\nfunction mac_norm(v){", '设备信息清洗函数')
+        clean_fn = "function clean_device_info(v){var s=String(v==null?'':v);s=s.replace(/^\\s*Ping：[^；]*；\\s*/,'');s=s.replace(/\\s*STATUS=[^ ]+/g,'');s=s.replace(/\\s*PING=[^ ]+/g,'');s=s.replace(/\\s*MISS=[0-9]+/g,'');s=s.replace(/\\s*Ping：[^；]+；/g,'');s=s.replace(/^设备可达$/,'');s=s.replace(/^[；;、，,\\s]+|[；;、，,\\s]+$/g,'');return s||'-';}\nfunction mac_norm(v){"
+        page = must_replace(page, 'function mac_norm(v){', clean_fn, '设备信息清洗函数')
 
     old_info = "var info=(z.match(/INFO=(.*)$/)||[])[1]||'-';"
     new_info = "var info=clean_device_info((z.match(/INFO=(.*)$/)||[])[1]||'-');"
-    if new_info not in page:
-        page = must_replace(page, old_info, new_info, '设备信息清洗调用')
+    if new_info not in page and old_info in page:
+        page = page.replace(old_info, new_info, 1)
 
     old_vals = "var vals=[st,protocol,r.ip,displayMac,r.info||'-'];"
-    new_vals = "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];"
+    existing_vals = "var vals=[st,protocol,r.ip,displayMac,r.ping||'不可用',clean_device_info(r.info||'-')];"
+    new_vals = existing_vals
     if new_vals not in page:
-        page = must_replace(page, old_vals, new_vals, '设备表数据列')
+        if old_vals in page:
+            page = page.replace(old_vals, new_vals, 1)
+        else:
+            raise SystemExit('Q7 WebUI源码修复失败：找不到设备表数据列')
 
     old_header = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>'
     new_header = '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>'
