@@ -54,7 +54,7 @@ jobs:
           set -eux
           python3 trunk/tools/q7_lan_state_fix.py
 
-      - name: Fix Q7 temporary IP and SNAT stability
+      - name: Verify Q7 temporary IP and SNAT source
         run: |
           set -eux
           python3 trunk/tools/q7_tempip_snat_fix_v2.py
@@ -88,19 +88,6 @@ jobs:
           grep -q 'render_target_states(o.targets)' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
 
-      - name: Commit direct WebUI source fix
-        run: |
-          set -eux
-          if git diff --quiet -- trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp; then
-            echo "Q7 WebUI实际源码无需新增提交。"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
-            git commit -m "直接修复Q7 LAN发现WebUI源码 [skip ci]"
-            git push origin HEAD:master
-          fi
-
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -126,7 +113,6 @@ jobs:
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/tools/q7_menu_patch.py
           test -f trunk/tools/q7_lan_state_fix.py
-          test -f trunk/tools/q7_tempip_snat_fix.py
           test -f trunk/tools/q7_tempip_snat_fix_v2.py
           test -f trunk/tools/q7_snat_transition_fix.py
           test -f trunk/tools/q7_webui_target_state_fix.py
@@ -134,6 +120,7 @@ jobs:
           test -f trunk/tools/q7_mixed_snat_stability_fix.py
           test -f trunk/tools/q7_runtime_fix.py
           test -f trunk/tools/q7_webui_source_direct_fix.py
+          test ! -e trunk/tools/q7_tempip_snat_fix.py
           test ! -e trunk/user/rc/lan_discovery_start.c
           python3 -m py_compile trunk/tools/q7_webui_target_state_fix.py
           python3 -m py_compile trunk/tools/q7_padavan_native_fix.py
