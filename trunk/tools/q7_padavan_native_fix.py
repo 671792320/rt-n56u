@@ -17,7 +17,7 @@ services = Path('trunk/user/rc/services.c')
 s = services.read_text(encoding='utf-8')
 if 'start_lan_discovery(void)' not in s:
     marker = 'void\nstart_telnetd(void)\n'
-    helper = '''static int\nis_lan_discovery_run(void)\n{\n\treturn pids("lan_discovery_supervisor");\n}\n\nvoid\nstart_lan_discovery(void)\n{\n\tif (nvram_invmatch("lan_discovery_enable", "1"))\n\t\treturn;\n\n\tif (!is_lan_discovery_run())\n\t\teval("/usr/bin/lan_discovery_supervisor.sh");\n}\n\nvoid\nstop_lan_discovery(void)\n{\n\tchar* svcs[] = { "lan_discovery_supervisor", NULL };\n\tkill_services(svcs, 3, 1);\n\tif (check_if_file_exist("/usr/bin/lan_snat.sh"))\n\t\teval("/usr/bin/lan_snat.sh", "down");\n\tif (check_if_file_exist("/usr/bin/lan_takeover.sh"))\n\t\teval("/usr/bin/lan_takeover.sh", "-r");\n}\n\n'''
+    helper = '''static int\nis_lan_discovery_run(void)\n{\n\treturn pids("lan_discovery_supervisor");\n}\n\nvoid\nstart_lan_discovery(void)\n{\n\tif (nvram_invmatch("lan_discovery_enable", "1"))\n\t\treturn;\n\n\tif (!is_lan_discovery_run())\n\t\teval("/usr/bin/lan_discovery_supervisor.sh");\n}\n\nvoid\nstop_lan_discovery(void)\n{\n\tchar* svcs[] = { "lan_discovery_supervisor", NULL };\n\tkill_services(svcs, 3, 1);\n\tkill_pidfile_s("/tmp/lan_network_manager.pid", SIGTERM);\n\tkill_pidfile_s("/tmp/lan_autodiscover_worker.pid", SIGTERM);\n\tif (check_if_file_exist("/usr/bin/lan_snat.sh"))\n\t\teval("/usr/bin/lan_snat.sh", "down");\n\tif (check_if_file_exist("/usr/bin/lan_takeover.sh"))\n\t\teval("/usr/bin/lan_takeover.sh", "-r");\n\tunlink("/tmp/lan_network_manager.pid");\n\tunlink("/tmp/lan_autodiscover_worker.pid");\n}\n\n'''
     s = replace_once('services.c', s, marker, helper + marker, 'LAN服务启动函数位置')
     s = replace_once('services.c', s, '\tstart_networkmap(1);\n', '\tstart_networkmap(1);\n\tstart_lan_discovery();\n', 'start_services_once调用点')
     s = replace_once('services.c', s, '\tstop_networkmap();\n', '\tstop_networkmap();\n\tstop_lan_discovery();\n', 'stop_services调用点')
@@ -76,12 +76,11 @@ new_proc = '''process_targets() {\n    localnet="$1"\n    candidates="$RUNTIME_D
 s = replace_once('lan_network_manager.sh', s, old_proc, new_proc, '目标处理流程')
 manager.write_text(s, encoding='utf-8')
 
-# 7. 原有WebUI状态补丁不再把运行态写NVRAM；校验最终页面使用EJ目标数据。
-web_patch = Path('trunk/tools/q7_webui_target_state_fix.py')
-if web_patch.exists():
-    s = web_patch.read_text(encoding='utf-8')
-    s = s.replace('后端将全部“目标网段/24|临时IP”写入lan_discovery_status_targets，', '后端将全部“目标网段/24|临时IP”保存在运行态文件，')
-    web_patch.write_text(s, encoding='utf-8')
+# 7. 纠正WebUI旧补丁中的POSIX正则写法：JavaScript使用\\s。
+page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+if page.exists():
+    s = page.read_text(encoding='utf-8')
+    s = s.replace('[[:space:]]', '\\s')
+    page.write_text(s, encoding='utf-8')
 
 print('Q7已按Padavan原生服务/EJ机制完成LAN发现接入修复。')
-''',
