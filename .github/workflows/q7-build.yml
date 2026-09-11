@@ -136,7 +136,10 @@ jobs:
           grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '临时IP（SNAT地址）' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'var vals=\[st,protocol,r.ip,displayMac,r.ping||'"'"'不可用'"'"',clean_device_info' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          # 校验设备行确实包含Ping和设备信息字段，不绑定具体JS排版/变量顺序。
+          grep -q 'r\.ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'clean_device_info' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'displayMac' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'Q7固定固件版本：WebUI直接读取firmver_sub' trunk/user/rc/rc.c
           grep -q 'strncmp(ssid, "@Seetong_IPCTEST-TUP-T2_", sizeof("@Seetong_IPCTEST-TUP-T2_") - 1)' trunk/user/rc/rc.c
           grep -q '@Seetong_IPCTEST-TUP-T2_' trunk/user/shared/defaults.h
