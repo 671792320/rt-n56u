@@ -72,7 +72,6 @@ rc_mk.write_text(s, encoding='utf-8')
 web_ex = Path('trunk/user/httpd/web_ex.c')
 s = web_ex.read_text(encoding='utf-8')
 if 'ej_lan_discovery_targets' not in s:
-    # 函数定义必须位于EJ注册表数组之外，注册项继续位于数组内部。
     reg = '{ "lan_discovery_devices", ej_lan_discovery_devices},\n'
     table = 'struct ej_handler ej_handlers[] =\n{\n'
     if reg not in s:
@@ -126,4 +125,10 @@ s = data.read_text(encoding='utf-8')
 s = s.replace('<% nvram_get_x("", "lan_discovery_status_targets"); %>', '<% lan_discovery_targets(); %>')
 data.write_text(s, encoding='utf-8')
 
-print('Q7已按Padavan原生服务/EJ机制完成LAN发现接入修复。')
+# 6. 这一阶段之后不再有WebUI数据补丁，执行最终校正，统一页面数据结构。
+final_fix = Path('trunk/tools/q7_webui_final_fix.py')
+if not final_fix.exists():
+    raise SystemExit('Q7最终WebUI修复失败：缺少q7_webui_final_fix.py')
+exec(compile(final_fix.read_text(encoding='utf-8'), str(final_fix), 'exec'), {'__name__': '__main__'})
+
+print('Q7已按Padavan原生服务/EJ机制完成LAN发现接入及最终WebUI校正。')
