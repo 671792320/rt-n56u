@@ -39,6 +39,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_build_patch.py
 
+      - name: Correct Q7 runtime migration code
+        run: |
+          set -eux
+          python3 trunk/tools/q7_runtime_fix.py
+
       - name: Add Q7 LAN discovery menu
         run: |
           set -eux
@@ -105,10 +110,12 @@ jobs:
           test -f trunk/tools/q7_webui_target_state_fix.py
           test -f trunk/tools/q7_padavan_native_fix.py
           test -f trunk/tools/q7_mixed_snat_stability_fix.py
+          test -f trunk/tools/q7_runtime_fix.py
           test ! -e trunk/user/rc/lan_discovery_start.c
           python3 -m py_compile trunk/tools/q7_webui_target_state_fix.py
           python3 -m py_compile trunk/tools/q7_padavan_native_fix.py
           python3 -m py_compile trunk/tools/q7_mixed_snat_stability_fix.py
+          python3 -m py_compile trunk/tools/q7_runtime_fix.py
           grep -q 'start_lan_discovery();' trunk/user/rc/services.c
           grep -q 'stop_lan_discovery();' trunk/user/rc/services.c
           grep -q 'void start_lan_discovery(void);' trunk/user/rc/rc.h
@@ -117,6 +124,9 @@ jobs:
           grep -q -- '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '临时IP（SNAT地址）' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'Q7固定固件版本：WebUI直接读取firmver_sub' trunk/user/rc/rc.c
+          grep -q 'strncmp(ssid, "@Seetong_IPCTEST-TUP-T2_", sizeof("@Seetong_IPCTEST-TUP-T2_") - 1)' trunk/user/rc/rc.c
+          grep -q '@Seetong_IPCTEST-TUP-T2_' trunk/user/shared/defaults.h
           grep -q 'dhcp_enable_x' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q 'dhcp_source_net=' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '检测到DHCP：使用直接桥接' trunk/user/lan_autodiscover/lan_network_manager.sh
@@ -125,8 +135,6 @@ jobs:
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -Fq 'LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -Fq 'lan_takeover.lock' trunk/user/lan_autodiscover/lan_takeover.sh
-          grep -q 'Q7固定固件版本：WebUI直接读取firmver_sub' trunk/user/rc/rc.c
-          grep -q '@Seetong_IPCTEST-TUP-T2_' trunk/user/shared/defaults.h
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
