@@ -64,6 +64,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_webui_target_state_fix.py
 
+      - name: Apply Padavan native Q7 LAN integration
+        run: |
+          set -eux
+          python3 trunk/tools/q7_padavan_native_fix.py
+
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -79,6 +84,12 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/lan_autodiscover/lan_device_state.sh
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
+          test -f trunk/user/lan_autodiscover/lan_snat.sh
+          test -f trunk/user/lan_autodiscover/lan_network_manager.sh
+          test -f trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          test -f trunk/user/rc/services.c
+          test -f trunk/user/rc/rc.h
+          test -f trunk/user/httpd/web_ex.c
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/tools/q7_menu_patch.py
@@ -87,10 +98,20 @@ jobs:
           test -f trunk/tools/q7_tempip_snat_fix_v2.py
           test -f trunk/tools/q7_snat_transition_fix.py
           test -f trunk/tools/q7_webui_target_state_fix.py
+          test -f trunk/tools/q7_padavan_native_fix.py
+          test ! -e trunk/user/rc/lan_discovery_start.c
           python3 -m py_compile trunk/tools/q7_webui_target_state_fix.py
+          python3 -m py_compile trunk/tools/q7_padavan_native_fix.py
+          grep -q 'start_lan_discovery();' trunk/user/rc/services.c
+          grep -q 'stop_lan_discovery();' trunk/user/rc/services.c
+          grep -q 'void start_lan_discovery(void);' trunk/user/rc/rc.h
+          grep -q 'lan_discovery_targets' trunk/user/httpd/web_ex.c
+          grep -q '<% lan_discovery_targets(); %>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           grep -q -- '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '临时IP（SNAT地址）' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'LOCK_DIR=/var/run/lan_network_manager.lock' trunk/user/lan_autodiscover/lan_network_manager.sh
+          grep -q 'dhcp_enable_x' trunk/user/lan_autodiscover/lan_network_manager.sh
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
