@@ -20,7 +20,8 @@ for marker in ('lan_takeover_*.state', 'target_from_dhcp', 'target_from_db', 'pr
         raise SystemExit(f'Q7多网段管理器缺少关键内容：{marker}')
 
 # SNAT必须按目标网段保存独立状态，并支持check/up。
-for marker in ('state_file_for()', 'cleanup_one()', 'cleanup_all()', 'check|up)', 'SNAT状态检查并同步'):
+# 这里检查实际代码结构，不再依赖某一条中文日志文本，避免后续日志格式调整导致构建误报。
+for marker in ('state_file_for()', 'cleanup_one()', 'cleanup_all()', 'check|up)', 'rule_add_first nat POSTROUTING', 'acquire_lock()'):
     if marker not in snat:
         raise SystemExit(f'Q7多网段SNAT缺少关键内容：{marker}')
 
