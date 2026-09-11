@@ -100,8 +100,7 @@ jobs:
           grep -q "init_itoggle('lan_discovery_dhcp_enable');" trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q "init_itoggle('lan_discovery_discover_enable');" trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'load_body();' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'dhcp_enable_x' trunk/user/lan_autodiscover/lan_network_manager.sh
-          grep -q 'dhcp_source_net=' trunk/user/lan_autodiscover/lan_network_manager.sh
+          # DHCP不再参与目标网段分流，因此这里不再强制检查已删除的DHCP分支变量。
           grep -Fq 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
