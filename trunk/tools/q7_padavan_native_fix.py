@@ -125,10 +125,13 @@ s = data.read_text(encoding='utf-8')
 s = s.replace('<% nvram_get_x("", "lan_discovery_status_targets"); %>', '<% lan_discovery_targets(); %>')
 data.write_text(s, encoding='utf-8')
 
-# 6. 这一阶段之后不再有WebUI数据补丁，执行最终校正，统一页面数据结构。
-final_fix = Path('trunk/tools/q7_webui_final_fix.py')
-if not final_fix.exists():
-    raise SystemExit('Q7最终WebUI修复失败：缺少q7_webui_final_fix.py')
-exec(compile(final_fix.read_text(encoding='utf-8'), str(final_fix), 'exec'), {'__name__': '__main__'})
+# 6. WebUI页面的最终结构由后续“直接源码修复”步骤统一处理。
+#    这里不再调用q7_webui_final_fix.py，避免旧五列表结构与新Ping列发生冲突。
+page = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+if not page.exists():
+    raise SystemExit('Q7原生接入失败：LAN发现WebUI页面不存在')
+page_text = page.read_text(encoding='utf-8')
+if 'function render_devices(' not in page_text or '<table' not in page_text:
+    raise SystemExit('Q7原生接入失败：LAN发现WebUI基础结构不存在')
 
-print('Q7已按Padavan原生服务/EJ机制完成LAN发现接入及最终WebUI校正。')
+print('Q7已按Padavan原生服务/EJ机制完成LAN发现接入，WebUI最终结构交由直接源码修复步骤统一处理。')
