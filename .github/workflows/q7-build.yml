@@ -121,11 +121,12 @@ jobs:
           grep -q 'dhcp_source_net=' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '检测到DHCP：使用直接桥接' trunk/user/lan_autodiscover/lan_network_manager.sh
           grep -q '混合模式：无DHCP目标' trunk/user/lan_autodiscover/lan_network_manager.sh
-          # 下列检查包含shell通配符、美元符号等字面量，必须使用-F，不能让grep正则语义干扰校验。
           grep -Fq 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -Fq 'LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -Fq 'lan_takeover.lock' trunk/user/lan_autodiscover/lan_takeover.sh
+          grep -q 'Q7固定固件版本：WebUI直接读取firmver_sub' trunk/user/rc/rc.c
+          grep -q '@Seetong_IPCTEST-TUP-T2_' trunk/user/shared/defaults.h
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
@@ -137,12 +138,9 @@ jobs:
           set -eux
           BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
           VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
-          # Q7固件版本保持原有Padavan格式，不再用GitHub构建时间覆盖firmver_sub。
-          VERSION_STRING="3.4.3.9-099_26-03-1"
+          # Q7固件版本统一由q7_build_patch.py注入rc.c启动流程，不再在构建脚本末尾二次写入。
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
-          sed -i '/Q7固件版本/d' trunk/user/rc/rc.c
-          sed -i "/^[[:space:]]*\\/\\/ system ready$/i\\\tnvram_set(\"firmver_sub\", \"${VERSION_STRING}\"); /* Q7固件版本 */" trunk/user/rc/rc.c
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
