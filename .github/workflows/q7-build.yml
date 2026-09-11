@@ -59,6 +59,11 @@ jobs:
           set -eux
           python3 trunk/tools/q7_snat_transition_fix.py
 
+      - name: Fix Q7 WebUI target subnet display
+        run: |
+          set -eux
+          python3 trunk/tools/q7_webui_target_state_fix.py
+
       - name: Verify Q7 sources
         run: |
           set -eux
@@ -75,11 +80,17 @@ jobs:
           test -f trunk/user/lan_autodiscover/lan_device_state.sh
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           test -f trunk/tools/q7_menu_patch.py
           test -f trunk/tools/q7_lan_state_fix.py
           test -f trunk/tools/q7_tempip_snat_fix.py
           test -f trunk/tools/q7_tempip_snat_fix_v2.py
           test -f trunk/tools/q7_snat_transition_fix.py
+          test -f trunk/tools/q7_webui_target_state_fix.py
+          python3 -m py_compile trunk/tools/q7_webui_target_state_fix.py
+          grep -q '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q '临时IP（SNAT地址）' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
