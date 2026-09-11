@@ -137,7 +137,8 @@ jobs:
           set -eux
           BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
           VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
-          VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
+          # Q7固件版本保持原有Padavan格式，不再用GitHub构建时间覆盖firmver_sub。
+          VERSION_STRING="3.4.3.9-099_26-03-1"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
           sed -i '/Q7固件版本/d' trunk/user/rc/rc.c
