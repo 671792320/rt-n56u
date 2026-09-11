@@ -137,41 +137,34 @@ new_cycle = '''        if [ "$raw" = "1" ]; then
         fi'''
 if old_cycle in s:
     s = s.replace(old_cycle, new_cycle, 1)
+
+# 将底层扫描程序的英文分类前缀统一转换为中文，避免日志中出现混杂标签。
+s = s.replace(
+    'log_line "$line"\n                        ;;&nbsp;',
+    'log_line "【设备扫描】$line"\n                        ;;&nbsp;'
+) if False else s
+s = s.replace(
+    '\\[arpscan\\]*)\n                        log_line "$line"',
+    '\\[arpscan\\]*)\n                        arp_line="$(printf \'%s\\n\' "$line" | sed \'s/^\\[arpscan\\][[:space:]]*//\')"\n                        log_line "【ARP扫描】$arp_line"'
+)
+s = s.replace(
+    '\\[arpscan\\]*) log_line "$line";;',
+    '\\[arpscan\\]*) arp_line="$(printf \'%s\\n\' "$line" | sed \'s/^\\[arpscan\\][[:space:]]*//\')"; log_line "【ARP扫描】$arp_line";;'
+)
+s = s.replace(
+    '*probe\\ sent*|*probe\\ FAILED*|*probes\\ enabled:*|*listen\\ *FAILED*) log_line "$line";;',
+    '*probe\\ sent*|*probe\\ FAILED*|*probes\\ enabled:*|*listen\\ *FAILED*) log_line "【设备探测】$line";;'
+)
 p.write_text(s)
 
 # WebUI：增加Ping列、读取后端状态，并保持现有页面逻辑。
 p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
 s = p.read_text()
-s = replace_once(
-    s,
-    "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0};}",
-    "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0,ping:'检测中',backend_status:''};}",
-    'WebUI设备记录',
-)
-s = replace_once(
-    s,
-    "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type==='ARP')currentArp[ip]=1;}}",
-    "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||'';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||'';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||'';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type==='ARP')currentArp[ip]=1;}}",
-    'WebUI设备解析',
-)
-s = replace_once(
-    s,
-    "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '正常';}",
-    "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.backend_status==='在线'||row.backend_status==='暂时离线'||row.backend_status==='IP冲突')return row.backend_status;if(row.ping==='通')return '在线';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '在线';}",
-    'WebUI在线状态',
-)
-s = replace_once(
-    s,
-    "var vals=[st,protocol,r.ip,displayMac,r.info||'-'];",
-    "var vals=[st,protocol,r.ip,displayMac,r.ping||'检测中',r.info||'-'];",
-    'WebUI设备列',
-)
-s = replace_once(
-    s,
-    '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>',
-    '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>',
-    'WebUI表头',
-)
+s = replace_once(s, "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0};}", "function make_device_record(type,ip,mac,info){return {ip:ip,mac:mac||'-',info:info||'-',protocols:[],conflict:false,proto_fail:false,miss:0,ping:'检测中',backend_status:''};}", 'WebUI设备记录')
+s = replace_once(s, "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);if(type==='ARP')currentArp[ip]=1;}}", "else{var r=merge_device_record(byIp,rows,type,ip,mac,info);var pf=(z.match(/PROTO=(.*?) PING=/)||[])[1]||'';var pg=(z.match(/PING=([^ ]+)/)||[])[1]||'';var bs=(z.match(/STATUS=([^ ]+)/)||[])[1]||'';if(r){if(pf){pf.split(/ \/ /).forEach(function(t){add_protocol(r,t);});}if(pg)r.ping=pg;if(bs)r.backend_status=bs;}if(type==='ARP')currentArp[ip]=1;}}", 'WebUI设备解析')
+s = replace_once(s, "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '正常';}", "function infer_status(row,type){if(row.conflict)return 'IP冲突';if(row.backend_status==='在线'||row.backend_status==='暂时离线'||row.backend_status==='IP冲突')return row.backend_status;if(row.ping==='通')return '在线';if(row.proto_fail)return '协议异常';if(row.miss>=3)return '暂时离线';return '在线';}", 'WebUI在线状态')
+s = replace_once(s, "var vals=[st,protocol,r.ip,displayMac,r.info||'-'];", "var vals=[st,protocol,r.ip,displayMac,r.ping||'检测中',r.info||'-'];", 'WebUI设备列')
+s = replace_once(s, '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>信息</th>', '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>', 'WebUI表头')
 s = s.replace('colspan="5" class="muted">暂无设备', 'colspan="6" class="muted">暂无设备', 1)
 p.write_text(s)
 
