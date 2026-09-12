@@ -1,0 +1,63 @@
+name: Q7 原生版本与SSID关联修复
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'trunk/user/httpd/.q7_lan_version_ssid_fix'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: 修复原生版本显示与Q7默认SSID
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 升级页面恢复Padavan原生firmver_sub读取。
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('value="ZVFWVERVZ"', 'value="<% nvram_get_x(\"\", \"firmver_sub\"); %>"', 1)
+          if '<% nvram_get_x("", "firmver_sub"); %>' not in s:
+              raise SystemExit('升级页面没有恢复firmver_sub原生读取')
+          p.write_text(s, encoding='utf-8')
+
+          # Q7默认SSID：严格使用用户确定的UTP与MAC后四位格式。
+          p = Path('trunk/user/shared/defaults.h')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('/* Q7默认无线名称：前缀 + WiFi MAC最后三位，避免SSID过长。 */', '/* Q7默认无线名称：前缀 + WiFi MAC最后四位。 */', 1)
+          s = s.replace('#define DEF_WLAN_2G_SSID\t"@Seetong_IPCTEST-TUP-T2_%s"', '#define DEF_WLAN_2G_SSID\t"@Seetong_IPCTEST-UTP-T2_%s"', 1)
+          if '@Seetong_IPCTEST-UTP-T2_%s' not in s:
+              raise SystemExit('Q7默认SSID修正失败')
+          p.write_text(s, encoding='utf-8')
+
+          # 构建产物名称改为与内部版本相同的北京时间YYMMDDHHMM，避免下划线造成混淆。
+          p = Path('.github/workflows/q7-build.yml')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')", "BUILD_DATE=$(TZ=Asia/Shanghai date +'%Y%m%d_%H%M%S')")
+          s = s.replace("VERSION_STAMP=$(date -u +'%y%m%d_%H%M')", "VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d%H%M')")
+          if "VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d%H%M')" not in s:
+              raise SystemExit('Q7构建版本戳修正失败')
+          p.write_text(s, encoding='utf-8')
+
+          Path('trunk/user/httpd/.q7_lan_version_ssid_fix').unlink(missing_ok=True)
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp trunk/user/shared/defaults.h .github/workflows/q7-build.yml trunk/user/httpd/.q7_lan_version_ssid_fix
+          git commit -m 'Q7：恢复原生版本显示并修正默认SSID'
+          git push origin HEAD:master
