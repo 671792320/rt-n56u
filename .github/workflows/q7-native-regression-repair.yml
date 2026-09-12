@@ -1,0 +1,76 @@
+name: Q7 Native Regression Repair
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'trunk/user/httpd/.q7_native_regression_repair_trigger'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout源码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: 修复Padavan原生版本与默认参数链路
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f'修复失败：{path} 未找到指定原生代码')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          # Padavan原生版本尾码原本只允许4位，扩展到10位以容纳YYMMDDHHMM。
+          replace_once(
+              'trunk/user/rc/common_ex.c',
+              '''#if defined(FWBLDSTR)\n\tif (strlen(FWBLDSTR) > 0 && strlen(FWBLDSTR) <= 4) {''',
+              '''#if defined(FWBLDSTR)\n\t/* 固件版本尾码使用YYMMDDHHMM，共10位。 */\n\tif (strlen(FWBLDSTR) > 0 && strlen(FWBLDSTR) <= 10) {'''
+          )
+
+          # 不再用独立的q7_defaults.h替代Padavan全局defaults.h，避免破坏原生头文件依赖链。
+          replace_once('trunk/user/shared/defaults.c', '#include "q7_defaults.h"', '#include "defaults.h"')
+          replace_once('trunk/user/shared/shutils.h', '#include "q7_defaults.h"', '#include "defaults.h"')
+
+          p = Path('trunk/user/shared/defaults.h')
+          s = p.read_text(encoding='utf-8')
+          marker = '#define DEF_ROOT_PASSWORD\t"admin"\n'
+          additions = '''/* Q7 LAN监听与设备发现默认参数。 */\n#define DEF_LAN_DISCOVERY_ENABLE\t\t"1"\n#define DEF_LAN_DISCOVERY_DHCP_ENABLE\t\t"1"\n#define DEF_LAN_DISCOVERY_DISCOVER_ENABLE\t"1"\n#define DEF_LAN_DISCOVERY_IFNAME\t\t"eth2.1"\n\n'''
+          if 'DEF_LAN_DISCOVERY_ENABLE' not in s:
+              if marker not in s:
+                  raise SystemExit('修复失败：defaults.h缺少原生默认参数插入点')
+              s = s.replace(marker, additions + marker, 1)
+              p.write_text(s, encoding='utf-8')
+
+          # q7_defaults.h已经没有任何必要的引用，恢复单一Padavan默认参数头文件。
+          Path('trunk/user/shared/q7_defaults.h').unlink(missing_ok=True)
+          PY
+
+          grep -q 'strlen(FWBLDSTR) <= 10' trunk/user/rc/common_ex.c
+          grep -q '#include "defaults.h"' trunk/user/shared/defaults.c
+          grep -q '#include "defaults.h"' trunk/user/shared/shutils.h
+          grep -q 'DEF_LAN_DISCOVERY_ENABLE' trunk/user/shared/defaults.h
+          test ! -e trunk/user/shared/q7_defaults.h
+
+          rm -f trunk/user/httpd/.q7_native_regression_repair_trigger
+          git rm -f .github/workflows/q7-native-regression-repair.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/user/rc/common_ex.c trunk/user/shared/defaults.c trunk/user/shared/shutils.h trunk/user/shared/defaults.h trunk/user/shared/q7_defaults.h
+          git commit -m 'Q7：恢复Padavan原生链路并修复版本显示'
+          git push origin HEAD:master
