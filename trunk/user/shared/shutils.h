@@ -20,7 +20,7 @@
 
 #include <string.h>
 
-#include "q7_defaults.h"
+#include "defaults.h"
 
 #define MAX_FILE_LINE_SIZE	2048
 #define ARRAY_SIZE(x)		((unsigned)(sizeof(x) / sizeof((x)[0])))

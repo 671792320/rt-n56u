@@ -322,7 +322,8 @@ get_eeprom_params(void)
 	}
 
 #if defined(FWBLDSTR)
-	if (strlen(FWBLDSTR) > 0 && strlen(FWBLDSTR) <= 4) {
+	/* 固件版本尾码使用YYMMDDHHMM，共10位。 */
+	if (strlen(FWBLDSTR) > 0 && strlen(FWBLDSTR) <= 10) {
 		strcat(fwver_sub, "-");
 		strcat(fwver_sub, FWBLDSTR);
 	}
