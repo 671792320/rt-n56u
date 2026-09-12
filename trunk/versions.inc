@@ -1,6 +1,6 @@
 FIRMWARE_ROOTFS_VER=3.9
-# 固件版本号使用紧凑构建时间戳，避免左上角升级页面显示不完整。
-# 格式：3.4.3.9-YYMMDDHHMM，例如：3.4.3.9-2609120800。
-FIRMWARE_BUILDS_VER=$(shell date -u +%y%m%d%H%M)
-# 不再追加Git提交短SHA，避免版本号过长。
+# 固件版本号使用北京时间构建时间戳，格式：3.4.3.9-YYMMDDHHMM。
+# 编译环境无论处于哪个时区，固件版本统一按中国北京时间（UTC+8）生成。
+FIRMWARE_BUILDS_VER=$(shell TZ=Asia/Shanghai date +%y%m%d%H%M)
+# 不使用Git提交号，避免版本号增加下划线和额外尾码。
 FIRMWARE_BUILDS_REV=
