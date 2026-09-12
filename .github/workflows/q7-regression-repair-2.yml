@@ -1,0 +1,84 @@
+name: Q7第二次原生回归修复
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'trunk/user/httpd/.q7_regression_repair_2'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: 修复版本、升级页面和无线参数
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout 5c5755144dbd5b02def61442903838ed729f59a9 -- trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 删除启动阶段强制写入旧版本号的代码。
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text(encoding='utf-8')
+          for block in [
+          '''\n\t/* Q7固定固件版本：WebUI直接读取firmver_sub。 */\n\tif (strcmp(nvram_safe_get("firmver_sub"), "3.4.3.9-099_26-03-1") != 0) {\n\t\tnvram_set("firmver_sub", "3.4.3.9-099_26-03-1");\n\t\tnvram_need_commit = 1;\n\t}\n''',
+          '''\n\t/* Q7固定固件版本：WebUI直接读取firmver_sub，启动阶段写入并随NVRAM一起提交。 */\n\tif (strcmp(nvram_safe_get("firmver_sub"), "3.4.3.9-099_26-03-1") != 0) {\n\t\tnvram_set("firmver_sub", "3.4.3.9-099_26-03-1");\n\t\tnvram_need_commit = 1;\n\t}\n''']:
+              s = s.replace(block, '', 1)
+
+          # 删除错误的SSID强制迁移逻辑；原代码legacy=1会覆盖用户设置。
+          start = s.find('\n\t/* Q7 SSID迁移：只处理本项目历史默认SSID，不覆盖用户自行设置的SSID。 */')
+          if start >= 0:
+              end = s.find('\n\tget_eeprom_params();', start)
+              if end < 0:
+                  raise SystemExit('找不到SSID迁移代码结束位置')
+              s = s[:start] + '\n' + s[end:]
+          p.write_text(s, encoding='utf-8')
+
+          # Q7默认无线名称：@seetong-IPCtest-utp2_ + MAC最后3位。
+          p = Path('trunk/user/shared/defaults.h')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('@Seetong_IPCTEST-TUP-T2_%s', '@seetong-IPCtest-utp2_%s')
+          s = s.replace('@Seetong_IPCTEST-UTP-T2_%s', '@seetong-IPCtest-utp2_%s')
+          if '@seetong-IPCtest-utp2_%s' not in s:
+              raise SystemExit('找不到Q7默认SSID定义')
+          p.write_text(s, encoding='utf-8')
+
+          # 默认参数生成时，Q7 2.4G SSID取MAC最后3个十六进制字符。
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text(encoding='utf-8')
+          old = '''\t\tif (strstr(np->name,"wl_ssid") || strstr(np->name,"rt_ssid") || !strcmp(np->name,"wl_guest_ssid") || !strcmp(np->name,"rt_guest_ssid")){\n\t\t\tsprintf(tmp, np->value, lan_mac);\n\t\t\tnvram_set(np->name, tmp);'''
+          new = '''\t\tif (strstr(np->name,"wl_ssid") || strstr(np->name,"rt_ssid") || !strcmp(np->name,"wl_guest_ssid") || !strcmp(np->name,"rt_guest_ssid")){\n#if defined(BOARD_ZTE_Q7)\n\t\t\tif (!strcmp(np->name, "rt_ssid") || !strcmp(np->name, "rt_ssid2"))\n\t\t\t\tsprintf(tmp, np->value, lan_mac + 1);\n\t\t\telse\n#endif\n\t\t\tsprintf(tmp, np->value, lan_mac);\n\t\t\tnvram_set(np->name, tmp);'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('找不到Padavan默认SSID生成代码')
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          ! grep -q '3.4.3.9-099_26-03-1' trunk/user/rc/rc.c
+          ! grep -q 'int legacy = 1' trunk/user/rc/rc.c
+          grep -q '@seetong-IPCtest-utp2_%s' trunk/user/shared/defaults.h
+          grep -q 'firmver_sub' trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp
+          ! grep -q 'ZVFWVERVZ' trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp
+          rm -f trunk/user/httpd/.q7_regression_repair_2
+          rm -f .github/workflows/q7-regression-repair-2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/user/rc/rc.c trunk/user/shared/defaults.h trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp .github/workflows/q7-regression-repair-2.yml trunk/user/httpd/.q7_regression_repair_2
+          git commit -m 'Q7：修复固件版本覆盖和无线名称无法保存'
+          for i in 1 2 3; do
+            if git push origin HEAD:master; then exit 0; fi
+            git fetch origin master
+            git rebase origin/master
+          done
+          exit 1
