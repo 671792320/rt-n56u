@@ -550,6 +550,7 @@ trap cleanup EXIT INT TERM HUP
 [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
 [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
 [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
+[ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
 
 iface="$(cfg lan_discovery_ifname eth2.1)"
 last_iface=""

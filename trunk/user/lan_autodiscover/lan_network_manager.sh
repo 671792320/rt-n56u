@@ -19,7 +19,10 @@ TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
-MISS_LIMIT=3
+MISS_LIMIT="$(nvram get lan_discovery_miss_limit 2>/dev/null)"
+case "$MISS_LIMIT" in ''|*[!0-9]*) MISS_LIMIT=3;; esac
+[ "$MISS_LIMIT" -ge 1 ] 2>/dev/null || MISS_LIMIT=1
+[ "$MISS_LIMIT" -le 20 ] 2>/dev/null || MISS_LIMIT=20
 
 mkdir -p "$RUNTIME_DIR"
 

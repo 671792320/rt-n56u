@@ -527,7 +527,18 @@ http_login_check(const uaddr *ip_now)
 	if (is_uaddr_localhost(ip_now))
 		return 1;
 
-	return 2;
+	if (login_ip.len == 0)
+		return 2;
+
+	if (is_uaddr_equal(&login_ip, ip_now))
+		return 3;
+
+	if ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {
+		reset_login_data();
+		return 2;
+	}
+
+	return 0;
 }
 
 static int
