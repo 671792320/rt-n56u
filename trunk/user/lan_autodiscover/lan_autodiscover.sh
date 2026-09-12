@@ -436,9 +436,11 @@ run_camdiscover() {
     custom="$(nv lan_discovery_custom)"
     get_standard_config_dummy=0
     read_standard_config "$custom"
-    probe_timeout=5
-    [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"
+    # 响应等待与发现周期独立配置，默认10秒，允许1～30秒。
+    probe_timeout="$(cfg lan_discovery_probe_timeout 10)"
+    case "$probe_timeout" in ''|*[!0-9]*) probe_timeout=10;; esac
     [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
+    [ "$probe_timeout" -le 30 ] 2>/dev/null || probe_timeout=30
     write_custom_config "$custom"
 
     log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
@@ -550,6 +552,7 @@ trap cleanup EXIT INT TERM HUP
 [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
 [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
 [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
+[ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=10
 [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
 
 iface="$(cfg lan_discovery_ifname eth2.1)"

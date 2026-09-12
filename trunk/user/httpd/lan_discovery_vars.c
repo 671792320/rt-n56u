@@ -19,6 +19,7 @@ static struct variable lan_discovery_extra[] = {
     {"lan_discovery_dhcp_timeout", "", NULL, FALSE},
     {"lan_discovery_discover_enable", "", NULL, FALSE},
     {"lan_discovery_cycle", "", NULL, FALSE},
+    {"lan_discovery_probe_timeout", "", NULL, FALSE},
     {"lan_discovery_miss_limit", "", NULL, FALSE},
     {"lan_discovery_raw", "", NULL, FALSE},
     {"lan_discovery_onvif", "", NULL, FALSE},

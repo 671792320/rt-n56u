@@ -19,10 +19,13 @@ TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
-MISS_LIMIT="$(nvram get lan_discovery_miss_limit 2>/dev/null)"
-case "$MISS_LIMIT" in ''|*[!0-9]*) MISS_LIMIT=3;; esac
-[ "$MISS_LIMIT" -ge 1 ] 2>/dev/null || MISS_LIMIT=1
-[ "$MISS_LIMIT" -le 20 ] 2>/dev/null || MISS_LIMIT=20
+miss_limit_current() {
+    miss_limit="$(nvram get lan_discovery_miss_limit 2>/dev/null)"
+    case "$miss_limit" in ''|*[!0-9]*) miss_limit=3;; esac
+    [ "$miss_limit" -ge 1 ] 2>/dev/null || miss_limit=1
+    [ "$miss_limit" -le 20 ] 2>/dev/null || miss_limit=20
+    printf '%s' "$miss_limit"
+}
 
 mkdir -p "$RUNTIME_DIR"
 
@@ -263,6 +266,7 @@ apply_target() {
 process_completed_cycle() {
     localnet="$1"
     marker="$2"
+    miss_limit="$(miss_limit_current)"
 
     collect_cycle_targets "$localnet"
     scan_seq="$(date +%s 2>/dev/null)-$(wc -l < "$CURRENT_ACTIVE_FILE" 2>/dev/null | tr -d ' ')"
@@ -292,20 +296,20 @@ process_completed_cycle() {
         miss_count=$((miss_count + 1))
 
         current_ip="$(state_get "$state_file" target_ip)"
-        if [ "$miss_count" -ge "$MISS_LIMIT" ]; then
+        if [ "$miss_count" -ge "$miss_limit" ]; then
             log "目标网段连续${miss_count}轮完整扫描未发现，确认清理：$target_net/24${current_ip:+，临时地址=$current_ip}"
             cleanup_one "$target_net"
         else
             old_seq="$(state_get "$state_file" last_scan_seq)"
             write_target_state "$target_net" "$current_ip" "$miss_count" "$old_seq"
-            log "目标网段本轮未发现，保留：$target_net/24，连续丢失=${miss_count}/${MISS_LIMIT}轮"
+            log "目标网段本轮未发现，保留：$target_net/24，连续丢失=${miss_count}/${miss_limit}轮"
         fi
     done
 
     save_cycle_cursor "$marker"
     update_runtime_targets
     rm -f "$CURRENT_ACTIVE_FILE"
-    log "本轮目标网段状态更新完成：连续${MISS_LIMIT}个完整扫描轮次未发现才清理"
+    log "本轮目标网段状态更新完成：连续${miss_limit}个完整扫描轮次未发现才清理"
 }
 
 check_existing_targets() {
