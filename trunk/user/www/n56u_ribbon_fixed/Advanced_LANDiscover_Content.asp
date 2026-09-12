@@ -44,11 +44,11 @@ function lines(v){return html_decode(v).split(/\n|\u2028/).map(clean_line).filte
 function section(data,a,b){var p=data.indexOf(a);if(p<0)return '';p+=a.length;var q=b?data.indexOf(b,p):-1;return data.substring(p,q<0?data.length:q);}
 function clean_device_info(v){
     var s=String(v==null?'':v);
-    s=s.replace(/^Ping：[[:space:]]*[^；]*；[[:space:]]*/,'');
-    s=s.replace(/[[:space:]]*STATUS=[^ ]+/g,'');
-    s=s.replace(/[[:space:]]*PING=[^ ]+/g,'');
-    s=s.replace(/[[:space:]]*MISS=[0-9]+/g,'');
-    s=s.replace(/[[:space:]]*Ping：[[:space:]]*[^；]+；/g,'');
+    s=s.replace(/^Ping：\\s*[^；]*；\\s*/,'');
+    s=s.replace(/\\s*STATUS=[^ ]+/g,'');
+    s=s.replace(/\\s*PING=[^ ]+/g,'');
+    s=s.replace(/\\s*MISS=[0-9]+/g,'');
+    s=s.replace(/\\s*Ping：\\s*[^；]+；/g,'');
     s=s.replace(/^设备可达$/,'');
     s=s.replace(/^[；;、，,[:space:]]+|[；;、，,[:space:]]+$/g,'');
     return s||'-';
@@ -81,7 +81,7 @@ function normalize_custom_lines(){var ta=document.getElementById('lan_discovery_
 function refresh_data(){var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState!==4||x.status!==200)return;var o=parse_data(x.responseText);render_status(o);render_interfaces(o.interfaces);render_devices(o.devices);render_target_states(o.targets);render_log(o.log);};x.open('GET','Advanced_LANDiscover_Data.asp?_='+new Date().getTime(),true);x.send(null);}
 function applyRule(){if(!login_safe())return false;normalize_custom_lines();showLoading();document.form.action_mode.value='Apply';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}
 function clearLog(){if(!login_safe())return false;showLoading();document.form.action_mode.value='Update';document.form.action_script.value='lan_discovery_clear_log';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}
-function clearDevices(){if(!login_safe())return false;showLoading();document.form.action_mode.value='Update';document.form.action_script.value='lan_discovery_clear_devices';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}
+function clearDevices(){if(!login_safe())return false;device_history={};device_page=1;matrix_selected_net='';matrix_selected_ip='';showLoading();document.form.action_mode.value='Update';document.form.action_script.value='lan_discovery_clear_devices';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}
 function initial(){show_banner(1);show_menu(5,3,1);show_footer();load_body();var ta=document.getElementById('lan_discovery_custom');if(ta&&!lines(ta.value).length){ta.value='# 监控协议|端口|是否启用\nonvif|3702|1\nssdp|1900|1\nhik-sadp|37020|1\ndahua-dhip|37810|1\n# ARP|占位符|是否启用\narp|0|1\n# 名称|目标地址|端口|探测内容|启用\n# 示例探测|239.255.255.250|9999|hello world|1';}sync_builtin_from_custom();render_custom_hint();refresh_data();if(refresh_timer)clearInterval(refresh_timer);refresh_timer=setInterval(refresh_data,1000);}
 </script>
 <style>

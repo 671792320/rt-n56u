@@ -171,10 +171,30 @@ sys_script(char *name)
 	else if (strcmp(name, "lan_discovery_clear_log")==0)
 	{
 		FILE *fp;
-		fp = fopen("/etc/storage/lan_discovery.log", "w");
+
+		/* LAN发现后端实际使用/tmp运行态文件，不能清理旧的/etc/storage日志。 */
+		fp = fopen("/tmp/lan_discovery.log", "w");
 		if (fp) fclose(fp);
-		nvram_set("lan_discovery_log", "");
-		nvram_set("lan_discovery_status_last", "-");
+		fp = fopen("/tmp/lan_discovery_runtime/lan_discovery_log", "w");
+		if (fp) fclose(fp);
+		fp = fopen("/tmp/lan_discovery_runtime/lan_discovery_status_last", "w");
+		if (fp) {
+			fputs("-", fp);
+			fclose(fp);
+		}
+	}
+	else if (strcmp(name, "lan_discovery_clear_devices")==0)
+	{
+		FILE *fp;
+
+		/* 清空设备数据库，同时把WebUI显示数量归零。 */
+		fp = fopen("/tmp/lan_discovery_devices.txt", "w");
+		if (fp) fclose(fp);
+		fp = fopen("/tmp/lan_discovery_runtime/lan_discovery_status_count", "w");
+		if (fp) {
+			fputs("0", fp);
+			fclose(fp);
+		}
 	}
 	else if (strcmp(name, "syslog.sh")==0)
 	{
