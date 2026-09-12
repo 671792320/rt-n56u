@@ -1,0 +1,103 @@
+name: Q7 Native WebUI Repair 2
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'trunk/user/httpd/.q7_webui_repair_trigger2'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Restore native Padavan HTTP session and add configurable miss rounds
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f'{label}: 插入点不存在')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'trunk/user/httpd/httpd.c',
+              '''\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\treturn 2;\n}''',
+              '''\tif (is_uaddr_localhost(ip_now))\n\t\treturn 1;\n\n\tif (login_ip.len == 0)\n\t\treturn 2;\n\n\tif (is_uaddr_equal(&login_ip, ip_now))\n\t\treturn 3;\n\n\tif ((unsigned long)(uptime() - login_timestamp) > LOGIN_TIMEOUT) {\n\t\treset_login_data();\n\t\treturn 2;\n\t}\n\n\treturn 0;\n}''',
+              'httpd.c原生http_login_check恢复'
+          )
+
+          replace_once(
+              'trunk/user/httpd/lan_discovery_vars.c',
+              '    {"lan_discovery_cycle", "", NULL, FALSE},\n',
+              '    {"lan_discovery_cycle", "", NULL, FALSE},\n    {"lan_discovery_miss_limit", "", NULL, FALSE},\n',
+              'lan_discovery_vars.c丢失轮数变量'
+          )
+
+          replace_once(
+              'trunk/user/lan_autodiscover/lan_network_manager.sh',
+              'MISS_LIMIT=3\n',
+              '''MISS_LIMIT="$(nvram get lan_discovery_miss_limit 2>/dev/null)"\ncase "$MISS_LIMIT" in ''|*[!0-9]*) MISS_LIMIT=3;; esac\n[ "$MISS_LIMIT" -ge 1 ] 2>/dev/null || MISS_LIMIT=1\n[ "$MISS_LIMIT" -le 20 ] 2>/dev/null || MISS_LIMIT=20\n''',
+              'lan_network_manager.sh丢失轮数读取'
+          )
+
+          replace_once(
+              'trunk/user/lan_autodiscover/lan_autodiscover.sh',
+              '[ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10\n',
+              '[ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10\n[ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3\n',
+              'lan_autodiscover.sh丢失轮数默认值'
+          )
+
+          replace_once(
+              'trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp',
+              '<tr><th>设备发现周期</th><td><input class="mini" name="lan_discovery_cycle" onkeypress="return is_number(this,event);" value="<% nvram_get_x("", "lan_discovery_cycle"); %>"> 秒　<span class="muted">两轮主动探测开始之间的目标周期</span></td></tr>',
+              '<tr><th>设备发现周期</th><td><input class="mini" name="lan_discovery_cycle" onkeypress="return is_number(this,event);" value="<% nvram_get_x("", "lan_discovery_cycle"); %>"> 秒　<span class="muted">两轮主动探测开始之间的目标周期</span></td></tr>\n<tr><th>目标网段丢失轮数</th><td><input class="mini" name="lan_discovery_miss_limit" onkeypress="return is_number(this,event);" value="<% nvram_get_x("", "lan_discovery_miss_limit"); %>"> 轮　<span class="muted">连续完整扫描未发现目标网段达到此轮数后才清理SNAT和临时IP，默认3轮</span></td></tr>',
+              'Advanced_LANDiscover_Content.asp丢失轮数界面'
+          )
+
+          w = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_Wireless_Content.asp').read_text(encoding='utf-8')
+          for item in (
+              'name="wl_ssid2"',
+              'document.form.wl_ssid.value = decodeURIComponent(document.form.wl_ssid2.value);',
+              'document.form.action_mode.value = " Apply ";',
+              'document.form.submit();',
+          ):
+              if item not in w:
+                  raise SystemExit('Advanced_Wireless_Content.asp缺少Padavan原生SSID保存代码: ' + item)
+
+          Path('trunk/user/httpd/.q7_webui_repair_trigger2').unlink(missing_ok=True)
+          PY
+
+          sh -n trunk/user/lan_autodiscover/lan_network_manager.sh
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'if (login_ip.len == 0)' trunk/user/httpd/httpd.c
+          grep -q 'is_uaddr_equal(&login_ip, ip_now)' trunk/user/httpd/httpd.c
+          grep -q 'lan_discovery_miss_limit' trunk/user/httpd/lan_discovery_vars.c
+          grep -q 'lan_discovery_miss_limit' trunk/user/lan_autodiscover/lan_network_manager.sh
+          grep -q 'lan_discovery_miss_limit' trunk/user/lan_autodiscover/lan_autodiscover.sh
+          grep -q 'name="lan_discovery_miss_limit"' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+671792320@users.noreply.github.com'
+          git add trunk/user/httpd/httpd.c trunk/user/httpd/lan_discovery_vars.c trunk/user/lan_autodiscover/lan_network_manager.sh trunk/user/lan_autodiscover/lan_autodiscover.sh trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp trunk/user/httpd/.q7_webui_repair_trigger2
+          if ! git diff --cached --quiet; then
+            git commit -m 'Q7：恢复Padavan原生WebUI保存链路并支持自定义SNAT丢失轮数'
+            git push origin HEAD:master
+          fi
