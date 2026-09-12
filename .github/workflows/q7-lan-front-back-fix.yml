@@ -1,0 +1,81 @@
+name: Q7 LAN发现前后端修复
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'trunk/user/httpd/.q7_lan_front_back_fix'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: 修复LAN发现前后端接口
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1. WebUI清空日志/清空设备必须对应/tmp运行态文件。
+          p = Path('trunk/user/httpd/web_ex.c')
+          s = p.read_text(encoding='utf-8')
+          old = '''else if (strcmp(name, "lan_discovery_clear_log")==0)\n\t{\n\t\tFILE *fp;\n\t\tfp = fopen("/etc/storage/lan_discovery.log", "w");\n\t\tif (fp) fclose(fp);\n\t\tnvram_set("lan_discovery_log", "");\n\t\tnvram_set("lan_discovery_status_last", "-");\n\t}'''
+          new = '''else if (strcmp(name, "lan_discovery_clear_log")==0)\n\t{\n\t\tFILE *fp;\n\n\t\t/* LAN发现后端实际使用/tmp运行态文件，不能清理旧的/etc/storage日志。 */\n\t\tfp = fopen("/tmp/lan_discovery.log", "w");\n\t\tif (fp) fclose(fp);\n\t\tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_log", "w");\n\t\tif (fp) fclose(fp);\n\t\tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_status_last", "w");\n\t\tif (fp) {\n\t\t\tfputs("-", fp);\n\t\t\tfclose(fp);\n\t\t}\n\t}\n\telse if (strcmp(name, "lan_discovery_clear_devices")==0)\n\t{\n\t\tFILE *fp;\n\n\t\t/* 清空设备数据库，同时把WebUI显示数量归零。 */\n\t\tfp = fopen("/tmp/lan_discovery_devices.txt", "w");\n\t\tif (fp) fclose(fp);\n\t\tfp = fopen("/tmp/lan_discovery_runtime/lan_discovery_status_count", "w");\n\t\tif (fp) {\n\t\t\tfputs("0", fp);\n\t\t\tfclose(fp);\n\t\t}\n\t}'''
+          if old not in s:
+              raise SystemExit('找不到LAN发现清空日志旧代码')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # 2. 修复前端使用POSIX正则写法的问题，JavaScript应使用\\s。
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text(encoding='utf-8')
+          if '[[:space:]]' not in s:
+              raise SystemExit('未找到LAN发现页旧的POSIX空白字符正则')
+          s = s.replace('[[:space:]]', r'\\s')
+
+          # 清空设备后同步清理浏览器端历史，避免旧设备在下一次轮询中被前端历史缓存重新显示。
+          old = '''function clearDevices(){if(!login_safe())return false;showLoading();document.form.action_mode.value='Update';document.form.action_script.value='lan_discovery_clear_devices';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}'''
+          new = '''function clearDevices(){if(!login_safe())return false;device_history={};device_page=1;matrix_selected_net='';matrix_selected_ip='';showLoading();document.form.action_mode.value='Update';document.form.action_script.value='lan_discovery_clear_devices';document.form.current_page.value='Advanced_LANDiscover_Content.asp';document.form.next_page.value='';document.form.submit();return false;}'''
+          if old not in s:
+              raise SystemExit('找不到LAN发现页clearDevices旧函数')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # 3. 基础语法与接口一致性检查。
+          p = Path('trunk/user/httpd/web_ex.c')
+          s = p.read_text(encoding='utf-8')
+          for needle in [
+              'lan_discovery_clear_log',
+              'lan_discovery_clear_devices',
+              'fopen("/tmp/lan_discovery.log", "w")',
+              'fopen("/tmp/lan_discovery_devices.txt", "w")',
+          ]:
+              if needle not in s:
+                  raise SystemExit('web_ex.c缺少修复项: ' + needle)
+
+          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp')
+          s = p.read_text(encoding='utf-8')
+          if '[[:space:]]' in s:
+              raise SystemExit('LAN发现页仍存在POSIX空白字符正则')
+          if 'lan_discovery_clear_devices' not in s:
+              raise SystemExit('LAN发现页未调用clear_devices接口')
+
+          Path('trunk/user/httpd/.q7_lan_front_back_fix').unlink(missing_ok=True)
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/user/httpd/web_ex.c trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp trunk/user/httpd/.q7_lan_front_back_fix
+          git commit -m 'Q7：修复LAN发现页前后端清理与状态显示'
+          git push origin HEAD:master
