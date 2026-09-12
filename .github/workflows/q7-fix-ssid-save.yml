@@ -1,0 +1,69 @@
+name: Q7修复2.4G无线SSID保存
+
+on:
+  push:
+    paths:
+      - 'trunk/user/httpd/.q7_fix_ssid_save'
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 修复SSID启动覆盖逻辑
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text()
+
+          # 删除Q7错误的固件版本强制覆盖逻辑。
+          version_start = '\t/* Q7固定固件版本：WebUI直接读取firmver_sub。 */'
+          version_end = '\n\t/* Q7 SSID迁移：'
+          if version_start in s and version_end in s:
+              a = s.index(version_start)
+              b = s.index(version_end, a)
+              s = s[:a] + s[b:]
+
+          # 删除Q7错误的SSID迁移逻辑。用户在WebUI保存的SSID必须保持原值，
+          # 默认SSID只应在NVRAM恢复默认值时由原生默认参数生成。
+          ssid_start = '\t/* Q7 SSID迁移：'
+          ssid_end = '\n\tget_eeprom_params();'
+          if ssid_start in s and ssid_end in s:
+              a = s.index(ssid_start)
+              b = s.index(ssid_end, a)
+              s = s[:a] + s[b:]
+
+          p.write_text(s)
+          PY
+
+          echo '检查：不应再存在Q7固定版本和SSID迁移代码'
+          ! grep -q '3.4.3.9-099_26-03-1' trunk/user/rc/rc.c
+          ! grep -q 'Q7 SSID迁移' trunk/user/rc/rc.c
+          ! grep -q 'int legacy = 1' trunk/user/rc/rc.c
+
+      - name: 提交修复
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add trunk/user/rc/rc.c
+          if git diff --cached --quiet; then
+            echo '没有需要提交的修改'
+            exit 0
+          fi
+          git commit -m 'Q7：修复2.4G无线SSID保存后被启动逻辑覆盖'
+          git push
+
+      - name: 删除一次性工作流和触发标记
+        if: success()
+        shell: bash
+        run: |
+          git rm -f .github/workflows/q7-fix-ssid-save.yml trunk/user/httpd/.q7_fix_ssid_save 2>/dev/null || true
+          git commit -m 'Q7：清理一次性SSID修复工作流' || true
+          git push || true
