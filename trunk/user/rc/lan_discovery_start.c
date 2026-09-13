@@ -47,9 +47,6 @@ static void __attribute__((constructor)) lan_discovery_constructor(void)
 	if (getpid() != 1)
 		return;
 
-	/* 直接按本次固件构建版本同步firmver_sub，避免旧NVRAM残留旧版本号。 */
-	sync_q7_firmware_version();
-
 	pid = fork();
 	if (pid < 0)
 		return;
@@ -58,6 +55,10 @@ static void __attribute__((constructor)) lan_discovery_constructor(void)
 		pid_t child;
 		setsid();
 		sleep(8);
+
+		/* NVRAM完成初始化后再同步版本号，避免constructor阶段读取/写入NVRAM失败。 */
+		sync_q7_firmware_version();
+
 		child = fork();
 		if (child == 0) {
 			execl("/usr/bin/lan_discovery_supervisor.sh", "lan_discovery_supervisor.sh", (char *)NULL);
