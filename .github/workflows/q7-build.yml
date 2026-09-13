@@ -3,109 +3,79 @@ name: Q7 Build
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
-
-concurrency:
-  group: q7-build
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+    branches: [q7-f221c49-native-migration]
 
 jobs:
   build:
-    name: ZTE_Q7 only
+    name: ZTE_Q7
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout master
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: master
           fetch-depth: 1
-
-      - name: Add LAN discovery level-1 menu
-        shell: bash
-        run: |
-          set -e
-          grep -q 'menuL1_title = new Array' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'Advanced_LANDiscover_Content.asp' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          sed -i '/^menuL1_icon = new Array/i menuL1_title.push("LAN自动发现");\nmenuL1_link.push("Advanced_LANDiscover_Content.asp");' trunk/user/www/n56u_ribbon_fixed/state.js
-          sed -i '/^menuL1_icon = new Array/a menuL1_icon.push("icon-search");' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_icon.push("icon-search")' trunk/user/www/n56u_ribbon_fixed/state.js
 
       - name: Prepare environment
         run: |
-          sudo apt update
-          sudo apt install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+          set -eux
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
 
-      - name: Shellcheck
-        run: sh ./trunk/tools/shellcheck.sh
-
-      - name: Prepare MIPSel toolchain
+      - name: Prepare toolchain
         run: |
+          set -eux
           cd toolchain-mipsel
           sh dl_toolchain.sh
 
       - name: Verify Q7 sources
         run: |
-          set -e
+          set -eux
           test -f trunk/build_firmware_ci
           test -f trunk/configs/templates/ZTE_Q7.config
           test -f trunk/configs/boards/ZTE_Q7/board.h
           test -f trunk/configs/boards/ZTE_Q7/board.mk
           test -f trunk/configs/boards/ZTE_Q7/kernel-3.4.x.config
-          test -f trunk/user/camdiscover/camdiscover.c
+          test -f trunk/user/camdiscover/camdiscover_q7_v3.c
+          test -f trunk/user/camdiscover/arpscan.c
           test -f trunk/user/camdiscover/Makefile
-          test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_device_state.sh
+          test -f trunk/user/lan_autodiscover/lan_takeover.sh
+          test -f trunk/user/lan_autodiscover/lan_snat.sh
+          test -f trunk/user/lan_autodiscover/lan_network_manager.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          test -f trunk/user/netmgr/netmgr.c
-          test -f trunk/user/netmgr/Makefile
-          grep -q 'menuL1_title.push("LAN自动发现")' trunk/user/www/n56u_ribbon_fixed/state.js
-          grep -q 'menuL1_link.push("Advanced_LANDiscover_Content.asp")' trunk/user/www/n56u_ribbon_fixed/state.js
-
-      - name: Normalize Linux 3.4 conntrack Kconfig
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('trunk/linux-3.4.x/net/netfilter/Kconfig')
-          s = p.read_text()
-          old = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tselect NF_CONNTRACK_EVENTS'''
-          new = '''config NF_CONNTRACK_CHAIN_EVENTS\n\tbool "Register multiple callbacks to ct events"\n\tdefault n\n\tselect NF_CONNTRACK_EVENTS'''
-          if old not in s:
-              raise SystemExit('NF_CONNTRACK_CHAIN_EVENTS block not found')
-          p.write_text(s.replace(old, new, 1))
-          PY
-          grep -A4 -B1 'config NF_CONNTRACK_CHAIN_EVENTS' trunk/linux-3.4.x/net/netfilter/Kconfig
+          test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
+          ! find trunk/tools -maxdepth 1 -type f -name 'q7_*patch*.py' | grep -q .
+          ! find trunk/tools -maxdepth 1 -type f -name 'q7_*fix*.py' | grep -q .
+          sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          sh -n trunk/user/lan_autodiscover/lan_device_state.sh
+          sh -n trunk/user/lan_autodiscover/lan_takeover.sh
+          sh -n trunk/user/lan_autodiscover/lan_snat.sh
+          sh -n trunk/user/lan_autodiscover/lan_network_manager.sh
 
       - name: Build ZTE_Q7
-        shell: bash
         run: |
-          set -e
-          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
-          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
-          sed -i "s/^FIRMWARE_BUILDS_VER=.*/FIRMWARE_BUILDS_VER=${BUILD_DATE}/" trunk/versions.inc
-          sed -i "s|^FIRMWARE_BUILDS_REV=.*|FIRMWARE_BUILDS_REV=${BUILD_DATE}|" trunk/versions.inc
-          echo "Firmware build version: ${BUILD_DATE}"
-          grep '^FIRMWARE_' trunk/versions.inc
+          set -eux
+          VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d_%H%M')
+          echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
           cd trunk
           rm -rf images romfs
           mkdir -p images romfs
           fakeroot ./build_firmware_ci ZTE_Q7
-          test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
           SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
-          cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
+          test -n "$SRC"
+          cp -f "$SRC" "images/ZTE_Q7_${VERSION_STAMP}.trx"
           rm -f images/ZTE_Q7.trx
           ls -lh images/*.trx
 
-      - name: Upload Q7 firmware
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ZTE_Q7_${{ env.BUILD_DATE }}
+          name: ZTE_Q7_${{ env.VERSION_STAMP }}
           path: trunk/images/*.trx
           if-no-files-found: error

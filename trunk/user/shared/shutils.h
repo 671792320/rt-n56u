@@ -27,7 +27,7 @@
 
 /*
  * Reads file and returns contents
- * @param	path	path to file
+ * @param	path	file path
  * @return	contents of file or NULL if an error occurred
  */
 extern char * file2str(const char *path, size_t chunk_size);

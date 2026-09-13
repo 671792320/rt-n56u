@@ -126,7 +126,7 @@ struct nvram_pair router_defaults[] = {
 	{ "wan_pptp_mtu", "1400" },		/* Negotiate MTU to the smaller of this value or the peer MRU */
 	{ "wan_pptp_mru", "1400" },		/* Negotiate MRU to this value */
 	{ "wan_l2tp_mtu", "1460" },		/* Negotiate MTU to the smaller of this value or the peer MRU */
-	{ "wan_l2tp_mru", "1460" },		/* Negotiate MRU to this value */
+	{ "wan_l2tp_mru", "1460" },		/* Negotiate MTU to this value */
 #if defined (APP_RPL2TP)
 	{ "wan_l2tpd", "0" },			/* L2TP control daemon (xL2TPD/RP-L2TP) */
 #endif
@@ -188,7 +188,7 @@ struct nvram_pair router_defaults[] = {
 	{ "wl_wpa_psk", DEF_WLAN_5G_PSK },			/* WPA pre-shared key */
 	{ "wl_wpa_gtk_rekey", "3600" },		/* GTK rotation interval */
 	{ "wl_radius_ipaddr", ""},		/* RADIUS server IP address */
-	{ "wl_radius_port", "1812" },		/* RADIUS server UDP port */
+	{ "wl_radius_port", "1812" },		/* RADIUS server port */
 	{ "wl_radius_key", "" },		/* RADIUS shared secret */
 	{ "wl_radio_x", "1" },			/* Enable (1) or disable (0) radio */
 	{ "wl_IgmpSnEnable", "1" },
