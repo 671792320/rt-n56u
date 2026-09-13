@@ -1,44 +1,32 @@
 #!/bin/sh
-# Q7单口LAN无DHCP模式的定向SNAT。
-# 手机仍使用Q7 LAN网段地址，访问目标LAN时把源地址转换成目标LAN临时地址。
-#
-# 设计说明：
-# 1. 目标LAN与Q7 LAN共用br0，因此目标流量也从br0出去；
-# 2. TARGET_IP是lan_takeover.sh在目标网段中自动挑选的临时源地址，不能留空；
-# 3. eth2.2上的普通MASQUERADE属于Padavan原有网络逻辑，不与本规则冲突；
-# 4. 多个LAN管理器实例可能同时检查SNAT，因此本程序使用mkdir锁避免并发插入/删除规则。
+# Q7单口LAN多目标网段SNAT。
+# 手机始终使用Q7自己的192.168.2.x地址；每个目标/24网段单独维护一条SNAT和FORWARD规则。
+# 有DHCP与无DHCP目标网段可以同时存在，互不删除、互不覆盖。
+# 规则写入采用“全部成功后落状态”的方式，避免部分规则写入造成偶发不可访问。
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
-STATE_FILE="$RUNTIME_DIR/lan_snat.state"
 LOCK_DIR="$RUNTIME_DIR/.lan_snat.lock"
 LOGTAG=lan-autodiscover
 
 find_iptables() {
-    if command -v iptables >/dev/null 2>&1; then
-        command -v iptables
-        return 0
-    fi
+    if command -v iptables >/dev/null 2>&1; then command -v iptables; return 0; fi
     for p in /bin/iptables /sbin/iptables /usr/sbin/iptables; do
         [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
     done
     return 1
 }
-
 IPTABLES="$(find_iptables 2>/dev/null)"
 
 log() {
-    logger -t "$LOGTAG" "[snat] $*"
-    printf '%s\n' "[snat] $*"
+    printf '%s\n' "【SNAT】$*"
+    logger -t "$LOGTAG" "【SNAT】$*"
 }
 
 acquire_lock() {
     n=0
     while ! mkdir "$LOCK_DIR" 2>/dev/null; do
         n=$((n + 1))
-        [ "$n" -ge 10 ] && {
-            log "SNAT操作等待锁超时，跳过本轮，避免并发修改iptables"
-            return 1
-        }
+        [ "$n" -ge 10 ] && { log "等待防火墙锁超时，本轮跳过"; return 1; }
         sleep 1
     done
     trap 'rmdir "$LOCK_DIR" 2>/dev/null || :' EXIT INT TERM
@@ -46,36 +34,60 @@ acquire_lock() {
 }
 
 rule_exists() {
-    table="$1"; chain="$2"; shift 2
+    table="$1"
+    chain="$2"
+    shift 2
     "$IPTABLES" -t "$table" -C "$chain" "$@" 2>/dev/null
 }
 
-# 规则必须放在链首，避免被Padavan其他规则提前匹配。
-# 已存在时不移动，避免已建立连接因规则重排而受到影响；不存在时才插入。
+# 插入规则后必须再次确认，失败必须向上返回非零。
+# 不能只执行iptables -I而忽略返回值，否则上层会误认为SNAT已经建立。
 rule_add_first() {
-    table="$1"; chain="$2"; shift 2
-    rule_exists "$table" "$chain" "$@" || "$IPTABLES" -t "$table" -I "$chain" 1 "$@"
+    table="$1"
+    chain="$2"
+    shift 2
+    if rule_exists "$table" "$chain" "$@"; then
+        return 0
+    fi
+    "$IPTABLES" -t "$table" -I "$chain" 1 "$@" 2>/dev/null || return 1
+    rule_exists "$table" "$chain" "$@"
 }
 
 rule_del_all() {
-    table="$1"; chain="$2"; shift 2
+    table="$1"
+    chain="$2"
+    shift 2
     while rule_exists "$table" "$chain" "$@"; do
         "$IPTABLES" -t "$table" -D "$chain" "$@" 2>/dev/null || break
     done
 }
 
-cleanup() {
-    [ -r "$STATE_FILE" ] || return 0
-    old_target_net="$(sed -n 's/^target_net=//p' "$STATE_FILE" | head -n 1)"
-    old_target_ip="$(sed -n 's/^target_ip=//p' "$STATE_FILE" | head -n 1)"
-    old_lan_net="$(sed -n 's/^lan_net=//p' "$STATE_FILE" | head -n 1)"
-    if [ -n "$old_target_net" ] && [ -n "$old_target_ip" ] && [ -n "$old_lan_net" ] && [ -n "$IPTABLES" ]; then
+state_key() { printf '%s\n' "$1" | tr '.' '_'; }
+state_file_for() { printf '%s/lan_snat_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"; }
+normalize_network() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'; }
+
+cleanup_one() {
+    target="$1"
+    state_file="$(state_file_for "$target")"
+    [ -r "$state_file" ] || return 0
+    old_target_net="$(sed -n 's/^target_net=//p' "$state_file" | head -n 1)"
+    old_target_ip="$(sed -n 's/^target_ip=//p' "$state_file" | head -n 1)"
+    old_lan_net="$(sed -n 's/^lan_net=//p' "$state_file" | head -n 1)"
+    if [ -n "$old_target_net" ] && [ "$old_target_net" != "0.0.0.0" ] && [ -n "$old_target_ip" ] && [ "$old_target_ip" != "0.0.0.0" ] && [ -n "$old_lan_net" ] && [ -n "$IPTABLES" ]; then
         rule_del_all nat POSTROUTING -s "$old_lan_net/24" -d "$old_target_net/24" -o br0 -j SNAT --to-source "$old_target_ip"
         rule_del_all filter FORWARD -i br0 -o br0 -s "$old_lan_net/24" -d "$old_target_net/24" -j ACCEPT
         rule_del_all filter FORWARD -i br0 -o br0 -s "$old_target_net/24" -d "$old_lan_net/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        log "撤销SNAT：$old_lan_net/24 -> $old_target_net/24，源地址=$old_target_ip"
+        log "已撤销规则：本地=$old_lan_net/24 → 目标=$old_target_net/24，源地址=$old_target_ip"
     fi
-    rm -f "$STATE_FILE"
+    rm -f "$state_file"
+}
+
+cleanup_all() {
+    for state_file in "$RUNTIME_DIR"/lan_snat_*.state; do
+        [ -r "$state_file" ] || continue
+        target="$(sed -n 's/^target_net=//p' "$state_file" | head -n 1)"
+        [ -n "$target" ] && [ "$target" != "0.0.0.0" ] && cleanup_one "$target"
+    done
 }
 
 apply_rules() {
@@ -83,48 +95,63 @@ apply_rules() {
     TARGET_IP="$2"
     LAN_NET="$3"
 
-    # 允许Q7在单口LAN上承担三层转发职责。
     [ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :
 
-    # 同一物理口的跨网段访问，需要br0到br0的转发放行。
-    rule_add_first filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT
-    rule_add_first filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    # 三条规则必须全部成功，并且每条都再次用iptables -C确认。
+    # 任意一条失败都立即回滚本次目标对应的全部规则，禁止留下半套配置。
+    rule_add_first filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT || {
+        log "写入LAN→目标FORWARD规则失败"
+        return 1
+    }
+    rule_add_first filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || {
+        log "写入目标→LAN回程FORWARD规则失败，开始回滚"
+        rule_del_all filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT
+        rule_del_all filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        return 1
+    }
+    rule_add_first nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP" || {
+        log "写入POSTROUTING SNAT规则失败，开始回滚"
+        rule_del_all nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"
+        rule_del_all filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT
+        rule_del_all filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        return 1
+    }
 
-    # 核心规则：目标设备只看到目标LAN中的临时IP，而不是手机的Q7 LAN地址。
-    # 这里不能改成MASQUERADE到eth2.2，也不能删除--to-source "$TARGET_IP"。
-    rule_add_first nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP"
+    # 最终一致性确认，任何异常都不允许写入成功状态。
+    rule_exists filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT || return 1
+    rule_exists filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
+    rule_exists nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP" || return 1
+    return 0
 }
 
 check_args() {
-    case "$1:$2:$3" in
-        *.*.*.*:*.*.*.*:*.*.*.*) ;;
-        *) log "SNAT参数无效：target=$1 target_ip=$2 lan=$3"; return 1;;
-    esac
-    [ "$1" != "$3" ] || { log "SNAT参数无效：目标网段与本地网段不能相同：$1"; return 1; }
-    case "$2" in
-        "$1"*) return 0 ;;
-    esac
-    target_net="$1"
+    target_net="$(normalize_network "$1")"
     target_ip="$2"
-    target_prefix="$(printf '%s\n' "$target_net" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
-    ip_prefix="$(printf '%s\n' "$target_ip" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
-    [ -n "$target_prefix" ] && [ "$target_prefix" = "$ip_prefix" ] || {
-        log "SNAT参数无效：临时源地址不属于目标网段：target=$1 target_ip=$2"
-        return 1
-    }
+    lan_net="$(normalize_network "$3")"
+    case "$target_ip" in *.*.*.*) ;; *) log "参数错误：临时源地址=$2"; return 1;; esac
+    [ -n "$target_net" ] && [ -n "$lan_net" ] || { log "参数错误：目标或本地网段格式错误"; return 1; }
+    [ "$target_net" != "0.0.0.0" ] && [ "$lan_net" != "0.0.0.0" ] || { log "参数错误：禁止使用无效网段0.0.0.0/24"; return 1; }
+    [ "$target_net" != "$lan_net" ] || { log "参数错误：目标网段与本地网段不能相同：$target_net"; return 1; }
+    target_prefix="$(printf '%s\n' "$target_net" | awk -F. '{print $1"."$2"."$3}')"
+    ip_prefix="$(printf '%s\n' "$target_ip" | awk -F. '{if(NF==4)print $1"."$2"."$3}')"
+    [ -n "$target_prefix" ] && [ "$target_prefix" = "$ip_prefix" ] || { log "参数错误：临时源地址不属于目标网段：目标=$target_net，源地址=$target_ip"; return 1; }
+    CHECK_TARGET_NET="$target_net"
+    CHECK_LAN_NET="$lan_net"
     return 0
 }
 
 mkdir -p "$RUNTIME_DIR"
-
-case "$1" in
+ACTION="$1"
+case "$ACTION" in
     down|remove|-r|--remove)
-        if [ -z "$IPTABLES" ]; then
-            rm -f "$STATE_FILE"
-            exit 0
-        fi
+        [ -n "$IPTABLES" ] || exit 0
         acquire_lock || exit 0
-        cleanup
+        if [ -n "$2" ]; then
+            TARGET_NET="$(normalize_network "$2")"
+            [ -n "$TARGET_NET" ] && [ "$TARGET_NET" != "0.0.0.0" ] && cleanup_one "$TARGET_NET"
+        else
+            cleanup_all
+        fi
         exit 0
         ;;
     check|up)
@@ -133,46 +160,40 @@ case "$1" in
         LAN_NET="$4"
         ;;
     *)
-        log "用法：$0 up|check 目标网段 目标临时IP 本地LAN网段；$0 down"
+        log "用法错误：需要 up/check 目标网段 临时源地址 本地网段，或 down [目标网段]"
         exit 2
         ;;
 esac
 
 check_args "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || exit 1
-[ -n "$IPTABLES" ] || { log "iptables不存在，无法启用SNAT"; exit 1; }
-
-acquire_lock || exit 0
-
-if [ "$1" = "up" ]; then
-    # 只有目标网段、临时源地址或本地网段真正变化时才清理旧规则。
-    # 相同参数重复up直接保持现有conntrack和iptables规则不动。
-    same_state=0
-    if [ -r "$STATE_FILE" ]; then
-        old_target_net="$(sed -n 's/^target_net=//p' "$STATE_FILE" | head -n 1)"
-        old_target_ip="$(sed -n 's/^target_ip=//p' "$STATE_FILE" | head -n 1)"
-        old_lan_net="$(sed -n 's/^lan_net=//p' "$STATE_FILE" | head -n 1)"
-        [ "$old_target_net" = "$TARGET_NET" ] && [ "$old_target_ip" = "$TARGET_IP" ] && [ "$old_lan_net" = "$LAN_NET" ] && same_state=1
-    fi
-
-    if [ "$same_state" != "1" ]; then
-        cleanup
-    fi
+TARGET_NET="$CHECK_TARGET_NET"
+LAN_NET="$CHECK_LAN_NET"
+[ -n "$IPTABLES" ] || { log "系统中没有防火墙程序，无法启用SNAT"; exit 1; }
+acquire_lock || exit 1
+STATE_FILE="$(state_file_for "$TARGET_NET")"
+same_state=0
+if [ -r "$STATE_FILE" ]; then
+    old_target_net="$(sed -n 's/^target_net=//p' "$STATE_FILE" | head -n 1)"
+    old_target_ip="$(sed -n 's/^target_ip=//p' "$STATE_FILE" | head -n 1)"
+    old_lan_net="$(sed -n 's/^lan_net=//p' "$STATE_FILE" | head -n 1)"
+    [ "$old_target_net" = "$TARGET_NET" ] && [ "$old_target_ip" = "$TARGET_IP" ] && [ "$old_lan_net" = "$LAN_NET" ] && same_state=1
 fi
-
+[ "$same_state" = "1" ] || cleanup_one "$TARGET_NET"
 apply_rules "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || {
-    log "SNAT规则写入失败：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+    log "规则写入失败：本地=$LAN_NET/24 → 目标=$TARGET_NET/24，源地址=$TARGET_IP"
+    # apply_rules已负责回滚；这里明确删除状态，避免下轮把失败状态当成正常状态。
+    rm -f "$STATE_FILE"
     exit 1
 }
-
-if [ "$1" = "up" ]; then
-    {
-        printf 'lan_net=%s\n' "$LAN_NET"
-        printf 'target_net=%s\n' "$TARGET_NET"
-        printf 'target_ip=%s\n' "$TARGET_IP"
-        printf 'iface=br0\n'
-    } > "$STATE_FILE"
-    log "SNAT已启用：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+{
+    printf 'lan_net=%s\n' "$LAN_NET"
+    printf 'target_net=%s\n' "$TARGET_NET"
+    printf 'target_ip=%s\n' "$TARGET_IP"
+    printf 'iface=br0\n'
+} > "$STATE_FILE"
+if [ "$ACTION" = "up" ]; then
+    log "规则已启用：本地=$LAN_NET/24 → 目标=$TARGET_NET/24，源地址=$TARGET_IP"
 else
-    log "SNAT规则检查并补齐：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+    log "状态检查正常：本地=$LAN_NET/24 → 目标=$TARGET_NET/24，源地址=$TARGET_IP"
 fi
 exit 0
