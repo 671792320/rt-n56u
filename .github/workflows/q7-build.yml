@@ -3,7 +3,9 @@ name: Q7 Build
 on:
   workflow_dispatch:
   push:
-    branches: [q7-f221c49-native-migration]
+    branches:
+      - q7-f221c49-native-migration
+      - 'q7-*'
 
 jobs:
   build:
