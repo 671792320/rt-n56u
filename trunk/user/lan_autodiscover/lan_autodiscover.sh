@@ -192,7 +192,6 @@ clear_subnet_records() {
     sync_device_cache
 }
 
-
 module_cn() {
     [ "$1" = "1" ] && printf '启用' || printf '停用'
 }
@@ -436,7 +435,10 @@ run_camdiscover() {
     custom="$(nv lan_discovery_custom)"
     get_standard_config_dummy=0
     read_standard_config "$custom"
-    probe_timeout=5
+    probe_timeout="$(cfg lan_discovery_probe_timeout 5)"
+    case "$probe_timeout" in ''|*[!0-9]*) probe_timeout=5;; esac
+    [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
+    [ "$probe_timeout" -le 30 ] 2>/dev/null || probe_timeout=30
     [ "$discover_cycle" -lt "$probe_timeout" ] 2>/dev/null && probe_timeout="$discover_cycle"
     [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
     write_custom_config "$custom"
@@ -493,7 +495,8 @@ run_discovery() {
         return 0
     fi
 
-    clear_subnet_records
+    # 已知目标网段属于持久运行状态，LAN重新插入时不能清除，否则ARP扫描会暂时丢失历史目标。
+    # 只补充当前Q7自身网段；已有192.168.x.x/172.16.x.x等目标网段继续保留。
     register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"
     run_dhcp_detect "$iface"
     sync_device_cache
@@ -550,6 +553,7 @@ trap cleanup EXIT INT TERM HUP
 [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
 [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
 [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
+[ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
 [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
 
 iface="$(cfg lan_discovery_ifname eth2.1)"
