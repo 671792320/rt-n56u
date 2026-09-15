@@ -1,3 +1,67 @@
+name: Q7 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ZTE_Q7
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Prepare environment
+        run: |
+          set -eux
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libtool-bin gperf python3-docutils autopoint gettext p7zip-full
+
+      - name: Prepare toolchain
+        run: |
+          set -eux
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+
+      - name: Materialize Q7 changes into source
+        run: |
+          set -eux
+          if [ ! -f trunk/.q7_source_materialized ]; then
+            python3 trunk/tools/q7_build_patch.py
+            python3 trunk/tools/q7_runtime_fix.py
+            python3 trunk/tools/q7_menu_patch.py
+            python3 trunk/tools/q7_lan_state_fix.py
+            python3 trunk/tools/q7_tempip_snat_fix_v2.py
+            python3 trunk/tools/q7_snat_transition_fix.py
+            python3 trunk/tools/q7_webui_target_state_fix.py
+            python3 trunk/tools/q7_padavan_native_fix.py
+            python3 trunk/tools/q7_mixed_snat_stability_fix.py
+            python3 trunk/tools/q7_webui_source_direct_fix.py
+            python3 trunk/tools/q7_webui_native_fix.py
+            printf '%s\n' 'Q7源码已完成一次性物化；后续构建不再运行上述补丁脚本。' > trunk/.q7_source_materialized
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add trunk/user trunk/configs trunk/.q7_source_materialized
+            if ! git diff --cached --quiet; then
+              git commit -m 'Q7：将运行时修改正式落地到源码 [skip ci]'
+              git push origin HEAD:master
+            fi
+          else
+            echo 'Q7源码已经物化，跳过所有构建期补丁。'
+          fi
+
       - name: Verify direct Q7 sources
         run: |
           set -eux
@@ -53,17 +117,24 @@
 
       - name: Build ZTE_Q7
         run: |
-          ./build_firmware_mod.sh ZTE_Q7
-
-      - name: Verify firmware image
-        run: |
           set -eux
-          test -s trunk/images/ZTE_Q7.trx
-          file trunk/images/ZTE_Q7.trx
+          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
+          VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+          echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
+          cd trunk
+          rm -rf images romfs
+          mkdir -p images romfs
+          fakeroot ./build_firmware_ci ZTE_Q7
+          SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
+          test -n "$SRC"
+          cp -f "$SRC" "images/ZTE_Q7_${VERSION_STAMP}.trx"
+          rm -f images/ZTE_Q7.trx
+          ls -lh images/*.trx
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ZTE_Q7-firmware
-          path: trunk/images/ZTE_Q7.trx
+          name: ZTE_Q7_${{ env.VERSION_STAMP }}
+          path: trunk/images/*.trx
           if-no-files-found: error
