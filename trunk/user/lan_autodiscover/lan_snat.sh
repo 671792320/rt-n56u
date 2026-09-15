@@ -1,8 +1,8 @@
 #!/bin/sh
 # Q7单口LAN多目标网段SNAT。
-# 手机始终使用Q7自己的192.168.2.x地址；每个目标/24网段单独维护一条SNAT和FORWARD规则。
-# 有DHCP与无DHCP目标网段可以同时存在，互不删除、互不覆盖。
-# 规则写入采用“全部成功后落状态”的方式，避免部分规则写入造成偶发不可访问。
+# 手机始终使用Q7自己的LAN网段；每个目标/24网段单独维护一组SNAT和FORWARD规则。
+# SNAT只负责规则生命周期：建立时幂等写入，运行中幂等检查，清理只由明确的目标网段清理事件触发。
+# LAN拔出不再由本程序自动清理；上层网络管理器只在达到目标网段丢失阈值或用户明确要求时调用down。
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 LOCK_DIR="$RUNTIME_DIR/.lan_snat.lock"
@@ -40,8 +40,6 @@ rule_exists() {
     "$IPTABLES" -t "$table" -C "$chain" "$@" 2>/dev/null
 }
 
-# 插入规则后必须再次确认，失败必须向上返回非零。
-# 不能只执行iptables -I而忽略返回值，否则上层会误认为SNAT已经建立。
 rule_add_first() {
     table="$1"
     chain="$2"
@@ -97,8 +95,6 @@ apply_rules() {
 
     [ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || :
 
-    # 三条规则必须全部成功，并且每条都再次用iptables -C确认。
-    # 任意一条失败都立即回滚本次目标对应的全部规则，禁止留下半套配置。
     rule_add_first filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT || {
         log "写入LAN→目标FORWARD规则失败"
         return 1
@@ -117,7 +113,6 @@ apply_rules() {
         return 1
     }
 
-    # 最终一致性确认，任何异常都不允许写入成功状态。
     rule_exists filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT || return 1
     rule_exists filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
     rule_exists nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP" || return 1
@@ -135,6 +130,11 @@ check_args() {
     target_prefix="$(printf '%s\n' "$target_net" | awk -F. '{print $1"."$2"."$3}')"
     ip_prefix="$(printf '%s\n' "$target_ip" | awk -F. '{if(NF==4)print $1"."$2"."$3}')"
     [ -n "$target_prefix" ] && [ "$target_prefix" = "$ip_prefix" ] || { log "参数错误：临时源地址不属于目标网段：目标=$target_net，源地址=$target_ip"; return 1; }
+    # SNAT建立前必须确认临时地址已经真实存在于Q7的br0；否则只写iptables会产生不可用半状态。
+    ip -4 addr show dev br0 2>/dev/null | grep -q " $target_ip/24" || {
+        log "参数错误：临时地址尚未接管到br0：$target_ip/24"
+        return 1
+    }
     CHECK_TARGET_NET="$target_net"
     CHECK_LAN_NET="$lan_net"
     return 0
@@ -160,7 +160,7 @@ case "$ACTION" in
         LAN_NET="$4"
         ;;
     *)
-        log "用法错误：需要 up/check 目标网段 临时源地址 本地网段，或 down [目标网段]"
+        log "用法错误：需要up/check目标网段 临时源地址 本地网段，或down [目标网段]"
         exit 2
         ;;
 esac
@@ -181,7 +181,6 @@ fi
 [ "$same_state" = "1" ] || cleanup_one "$TARGET_NET"
 apply_rules "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || {
     log "规则写入失败：本地=$LAN_NET/24 → 目标=$TARGET_NET/24，源地址=$TARGET_IP"
-    # apply_rules已负责回滚；这里明确删除状态，避免下轮把失败状态当成正常状态。
     rm -f "$STATE_FILE"
     exit 1
 }
