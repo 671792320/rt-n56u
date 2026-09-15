@@ -30,6 +30,37 @@ cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 
+# Q7 LAN发现配置迁移：只在配置版本不是当前版本时执行一次。
+# 这样既能修复旧固件把开关保存成0/空值的问题，又不会在以后覆盖用户自己的设置。
+LAN_DISCOVERY_CONFIG_VERSION=2
+migrate_lan_discovery_config() {
+    current="$(nv lan_discovery_config_version)"
+    [ "$current" = "$LAN_DISCOVERY_CONFIG_VERSION" ] && return 0
+
+    nvram set lan_discovery_enable=1
+    nvram set lan_discovery_ifname=eth2.1
+    nvram set lan_discovery_dhcp_enable=1
+    nvram set lan_discovery_dhcp_timeout=3
+    nvram set lan_discovery_discover_enable=1
+    nvram set lan_discovery_cycle=10
+    nvram set lan_discovery_miss_limit=3
+    nvram set lan_discovery_raw=1
+    nvram set lan_discovery_onvif=1
+    nvram set lan_discovery_onvif_port=3702
+    nvram set lan_discovery_ssdp=1
+    nvram set lan_discovery_ssdp_port=1900
+    nvram set lan_discovery_hik=1
+    nvram set lan_discovery_hik_port=37020
+    nvram set lan_discovery_dahua=1
+    nvram set lan_discovery_dahua_port=37810
+    nvram set lan_discovery_custom="# Q7标准探测配置\nonvif|3702|1\nssdp|1900|1\nhik|37020|1\ndahua|37810|1\narp|-|1"
+    nvram set lan_discovery_config_version="$LAN_DISCOVERY_CONFIG_VERSION"
+    nvram commit
+    echo "$(date '+%H:%M:%S') LAN发现配置已完成一次性初始化，版本=$LAN_DISCOVERY_CONFIG_VERSION" | logger -t lan-supervisor
+}
+
+migrate_lan_discovery_config
+
 mtk_esw_lan4_state() {
     [ -x /sbin/mtk_esw ] || return 2
     state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
