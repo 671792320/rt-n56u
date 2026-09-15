@@ -234,11 +234,6 @@ collect_cycle_targets() {
             while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
     fi
 
-    if [ -r "$RUNTIME_DIR/tcpdump_discovery_events.txt" ]; then
-        cut -d'|' -f1 "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
-            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
-    fi
-
     grep -v "^$local_net$" "$tmp" 2>/dev/null |
         grep -v '^0\.0\.0\.0$' 2>/dev/null |
         sort -u > "$CURRENT_ACTIVE_FILE"
@@ -261,6 +256,8 @@ save_cycle_cursor() { printf '%s\n' "$1" > "$CYCLE_CURSOR_FILE"; }
 process_completed_cycle() {
     localnet="$1"
     marker="$2"
+    cycle_started="$(date +%s 2>/dev/null)"
+    case "$cycle_started" in ''|*[!0-9]*) cycle_started=0;; esac
 
     collect_cycle_targets "$localnet"
     scan_seq="$(date +%s 2>/dev/null)-$(wc -l < "$CURRENT_ACTIVE_FILE" 2>/dev/null | tr -d ' ')"
@@ -274,11 +271,23 @@ process_completed_cycle() {
     done < "$CURRENT_ACTIVE_FILE"
 
     # 只有完整扫描轮次才允许增加目标网段miss；管理器的实时轮询不会误删SNAT。
+    # 即使完整ARP/协议扫描未发现，只要本轮开始后tcpdump有实际活动，目标网段仍然保持。
     for state_file in "$RUNTIME_DIR"/lan_target_state_*.state; do
         [ -r "$state_file" ] || continue
         target_net="$(state_get "$state_file" target_net)"
         [ -n "$target_net" ] || continue
         if grep -qx "$target_net" "$CURRENT_ACTIVE_FILE" 2>/dev/null; then
+            continue
+        fi
+
+        last_seen="$(state_get "$state_file" last_seen)"
+        case "$last_seen" in
+            ''|*[!0-9]*) last_seen=0;;
+        esac
+        if [ "$last_seen" -ge "$cycle_started" ] 2>/dev/null; then
+            current_ip="$(state_get "$state_file" target_ip)"
+            write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
+            log "目标网段本轮主动扫描未发现，但实时监听仍有活动，保持：$target_net/24"
             continue
         fi
 
@@ -288,7 +297,7 @@ process_completed_cycle() {
         current_ip="$(state_get "$state_file" target_ip)"
 
         if [ "$miss_count" -ge "$MISS_LIMIT" ]; then
-            log "目标网段连续${miss_count}轮完整扫描未发现，确认清理：$target_net/24${current_ip:+，临时地址=$current_ip}"
+            log "目标网段连续${miss_count}轮完整扫描未发现且无实时活动，确认清理：$target_net/24${current_ip:+，临时地址=$current_ip}"
             cleanup_one "$target_net"
         else
             old_seq="$(state_get "$state_file" last_scan_seq)"
@@ -300,7 +309,7 @@ process_completed_cycle() {
     save_cycle_cursor "$marker"
     update_runtime_targets
     rm -f "$CURRENT_ACTIVE_FILE"
-    log "本轮目标网段状态更新完成：连续${MISS_LIMIT}个完整扫描轮次未发现才清理"
+    log "本轮目标网段状态更新完成：连续${MISS_LIMIT}个完整扫描轮次未发现且无实时活动才清理"
 }
 
 check_existing_targets() {
