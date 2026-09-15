@@ -92,7 +92,7 @@ jobs:
           grep -q 'lan_discovery_targets' trunk/user/httpd/web_ex.c
           grep -q '<% lan_discovery_targets(); %>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Data.asp
           grep -q -- '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -Eq 'render_target_states|renderTargetStates' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -Eq 'render_target_states|renderTargetStates|renderTargets' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'd\.ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'clean_device_info' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
