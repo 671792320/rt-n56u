@@ -1,6 +1,7 @@
 #!/bin/sh
-# Q7 LAN二层实时监听：tcpdump持续监听ARP/IP活动，只记录“新IP/新MAC/新发现”事件。
+# Q7 LAN二层实时监听：tcpdump持续监听ARP回复和IPv4活动，只记录“新IP/新MAC/新发现”事件。
 # 实时监听只负责发现，不直接维护SNAT；网络管理器读取统一事件文件后立即接管目标网段。
+# 不监听ARP请求，避免把Q7自己的主动ARP扫描请求误判为设备；同时过滤Q7当前所有本机IPv4地址。
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 IFACE="${1:-eth2.1}"
@@ -18,6 +19,17 @@ log() {
     logger -t "$LOGTAG" "$msg"
 }
 
+is_local_ip() {
+    wanted="$1"
+    ip -4 addr show dev br0 2>/dev/null |
+        sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' |
+        grep -qx "$wanted" && return 0
+    ip -4 addr show dev "$IFACE" 2>/dev/null |
+        sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' |
+        grep -qx "$wanted" && return 0
+    return 1
+}
+
 is_valid_unicast_ip() {
     ip="$1"
     case "$ip" in
@@ -27,6 +39,7 @@ is_valid_unicast_ip() {
     esac
     last="${ip##*.}"
     case "$last" in ''|*[!0-9]*) return 1;; 0|255) return 1;; esac
+    is_local_ip "$ip" && return 1
     return 0
 }
 
@@ -64,7 +77,6 @@ save_seen() {
     tmp="$SEEN_FILE.tmp"
     awk -F'|' -v ip="$ip" '$1!=ip {print}' "$SEEN_FILE" 2>/dev/null > "$tmp"
     printf '%s|%s|%s\n' "$ip" "$mac" "$now" >> "$tmp"
-    # 实时监听表只保留最近活动，避免长期增长。
     tail -n 512 "$tmp" > "${tmp}.trim" 2>/dev/null && mv -f "${tmp}.trim" "$tmp"
     mv -f "$tmp" "$SEEN_FILE"
 }
@@ -86,8 +98,14 @@ emit_event() {
 
 parse_arp() {
     line="$1"
-    ip="$(printf '%s\n' "$line" | sed -n 's/.* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) \(is-at\|tell\).*/\1/p' | head -n 1)"
-    [ -n "$ip" ] || ip="$(printf '%s\n' "$line" | sed -n 's/.* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) > .*/\1/p' | head -n 1)"
+    case "$line" in
+        *" is-at "*)
+            ip="$(printf '%s\n' "$line" | sed -n 's/.* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\) is-at .*/\1/p' | head -n 1)"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
     mac="$(printf '%s\n' "$line" | sed -n 's/.*is-at \([0-9A-Fa-f:][0-9A-Fa-f:]*\).*/\1/p' | head -n 1)"
     [ -n "$mac" ] || mac="-"
     mac="$(normalize_mac "$mac")"
@@ -98,7 +116,8 @@ parse_arp() {
 
 parse_ip() {
     line="$1"
-    src="$(printf '%s\n' "$line" | sed -n 's/.* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\.[0-9][0-9]* > .*/\1/p' | head -n 1)"
+    src="$(printf '%s\n' "$line" | sed -n 's/.* IP \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\.[0-9][0-9]* > .*/\1/p' | head -n 1)"
+    [ -n "$src" ] || src="$(printf '%s\n' "$line" | sed -n 's/.* IPv4 \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\.[0-9][0-9]* > .*/\1/p' | head -n 1)"
     [ -n "$src" ] || return 0
     mac="$(printf '%s\n' "$line" | sed -n 's/^.*[[:space:]]\([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f:]*\)[[:space:]]*>.*$/\1/p' | head -n 1)"
     [ -n "$mac" ] || mac="-"
@@ -116,12 +135,12 @@ TCPDUMP="$(command -v tcpdump 2>/dev/null)"
 [ -n "$TCPDUMP" ] || TCPDUMP="/usr/sbin/tcpdump"
 [ -x "$TCPDUMP" ] || { log "系统没有tcpdump，实时监听未启动"; exit 1; }
 
-# -l实时刷新输出；-n禁止DNS；-e保留二层MAC；只过滤ARP和IPv4，后端再做地址去重与广播/组播过滤。
-"$TCPDUMP" -l -n -e -i "$IFACE" 'arp or ip' 2>/dev/null |
+# tcpdump持续监听；只捕获ARP回复和IPv4，避免把Q7自己的ARP请求作为设备发现。
+"$TCPDUMP" -l -n -e -i "$IFACE" 'arp[6:2] = 2 or ip' 2>/dev/null |
 while IFS= read -r line; do
     case "$line" in
         *ARP*) parse_arp "$line";;
-        *IPv4*) parse_ip "$line";;
+        *" IP "*|*" IPv4 "*) parse_ip "$line";;
     esac
 done
 
