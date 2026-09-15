@@ -1,10 +1,11 @@
 #!/bin/sh
 # LAN事件监督程序。
-# Q7唯一RJ45使用本程序监听物理插拔，并统一管理发现worker与网络模式manager。
-# 已验证的DHCP开关逻辑由worker保持，本程序不直接修改DHCP服务。
+# Q7唯一RJ45使用本程序监听物理插拔，并统一管理发现worker、实时二层监听与网络模式管理器。
+# LAN拔出只暂停发现，不撤销已有目标网段、临时IP和SNAT。
 
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 NETMGR_PIDFILE=/tmp/lan_network_manager.pid
+TCPDUMP_PIDFILE=/tmp/lan_tcpdump_listener.pid
 SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
 WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
@@ -27,12 +28,11 @@ runtime_set() {
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
-
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 
-# Q7 LAN发现配置迁移：只在配置版本不是当前版本时执行一次。
-# 3版增加“LAN拔出是否清理临时网段”和“协议响应等待时间”两个参数。
-LAN_DISCOVERY_CONFIG_VERSION=3
+# Q7 LAN发现配置迁移：4版固定采用“LAN拔出保留临时网段/SNAT”。
+# 旧版的清理开关不再参与运行时行为，避免拔插事件误删正在使用的访问规则。
+LAN_DISCOVERY_CONFIG_VERSION=4
 migrate_lan_discovery_config() {
     current="$(nv lan_discovery_config_version)"
     if [ "$current" != "$LAN_DISCOVERY_CONFIG_VERSION" ]; then
@@ -44,7 +44,7 @@ migrate_lan_discovery_config() {
         [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
         [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
         [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
-        [ -n "$(nv lan_discovery_clear_on_unplug)" ] || nvram set lan_discovery_clear_on_unplug=1
+        nvram set lan_discovery_clear_on_unplug=0
         [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
         [ -n "$(nv lan_discovery_onvif)" ] || nvram set lan_discovery_onvif=1
         [ -n "$(nv lan_discovery_onvif_port)" ] || nvram set lan_discovery_onvif_port=3702
@@ -57,7 +57,7 @@ migrate_lan_discovery_config() {
         [ -n "$(nv lan_discovery_custom)" ] || nvram set lan_discovery_custom="# Q7标准探测配置\nonvif|3702|1\nssdp|1900|1\nhik|37020|1\ndahua|37810|1\narp|-|1"
         nvram set lan_discovery_config_version="$LAN_DISCOVERY_CONFIG_VERSION"
         nvram commit
-        echo "$(date '+%H:%M:%S') LAN发现配置迁移完成，版本=$LAN_DISCOVERY_CONFIG_VERSION" | logger -t lan-supervisor
+        echo "$(date '+%H:%M:%S') LAN发现配置迁移完成，版本=$LAN_DISCOVERY_CONFIG_VERSION，LAN拔出保留临时网段/SNAT" | logger -t lan-supervisor
     fi
 }
 
@@ -112,6 +112,17 @@ network_manager_running() {
     return 1
 }
 
+tcpdump_running() {
+    [ -r "$TCPDUMP_PIDFILE" ] || return 1
+    pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null)"
+    case "$pid" in
+        ''|*[!0-9]*) rm -f "$TCPDUMP_PIDFILE"; return 1;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+    rm -f "$TCPDUMP_PIDFILE"
+    return 1
+}
+
 start_network_manager() {
     iface="$1"
     if network_manager_running; then
@@ -139,21 +150,40 @@ stop_network_manager() {
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$NETMGR_PIDFILE"
-
-    # 默认保持原逻辑：LAN拔出时清除临时IP和SNAT。
-    # 用户关闭“LAN拔出时清除临时网段”后，仅停止监听，不撤销已有目标网段接管。
-    clear_on_unplug="$(cfg lan_discovery_clear_on_unplug 1)"
-    if [ "$clear_on_unplug" = "1" ]; then
-        [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :
-        [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :
-        runtime_set lan_discovery_status_target_network=""
-        runtime_set lan_discovery_status_target_ip=""
-        runtime_set lan_discovery_status_target_iface=""
-        echo "$(date '+%H:%M:%S') LAN拔出：已清理临时网段、临时IP和SNAT" | logger -t lan-supervisor
-    else
-        echo "$(date '+%H:%M:%S') LAN拔出：按配置保留临时网段、临时IP和SNAT" | logger -t lan-supervisor
-    fi
+    # LAN拔出只暂停网络管理器，绝不调用lan_snat.sh down或lan_takeover.sh -r。
+    # 已建立的目标网段、临时IP和SNAT由目标网段状态机独立保存。
     runtime_set lan_discovery_status_network_manager="已停止"
+    echo "$(date '+%H:%M:%S') LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT" | logger -t lan-supervisor
+}
+
+start_tcpdump() {
+    iface="$1"
+    if tcpdump_running; then
+        runtime_set lan_discovery_status_tcpdump="运行中"
+        return 0
+    fi
+    if [ ! -x /usr/bin/lan_tcpdump_listener.sh ]; then
+        runtime_set lan_discovery_status_tcpdump="程序不存在"
+        echo "$(date '+%H:%M:%S') LAN实时tcpdump监听程序不存在" | logger -t lan-supervisor
+        return 1
+    fi
+    echo "$(date '+%H:%M:%S') LAN实时二层监听启动：$iface" | logger -t lan-supervisor
+    /usr/bin/lan_tcpdump_listener.sh "$iface" > /tmp/lan_tcpdump_listener.log 2>&1 &
+    echo "$!" > "$TCPDUMP_PIDFILE"
+    runtime_set lan_discovery_status_tcpdump="运行中"
+    return 0
+}
+
+stop_tcpdump() {
+    if tcpdump_running; then
+        pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null)"
+        echo "$(date '+%H:%M:%S') LAN实时二层监听停止" | logger -t lan-supervisor
+        kill "$pid" 2>/dev/null
+        sleep 1
+        if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
+    fi
+    rm -f "$TCPDUMP_PIDFILE"
+    runtime_set lan_discovery_status_tcpdump="已停止"
 }
 
 sync_runtime_status() {
@@ -180,6 +210,8 @@ sync_runtime_status() {
     runtime_set lan_discovery_status_count="$count"
     if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
         runtime_set lan_discovery_status_state="设备发现未启用"
+    elif tcpdump_running; then
+        runtime_set lan_discovery_status_state="实时监听+周期主动发现"
     elif ps 2>/dev/null | grep -q '[c]amdiscover'; then
         runtime_set lan_discovery_status_state="持续设备发现"
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
@@ -258,6 +290,7 @@ last_link="-1"
 set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
 runtime_set lan_discovery_status_network_manager="已停止"
+runtime_set lan_discovery_status_tcpdump="已停止"
 runtime_set lan_discovery_status_health="未监视"
 
 while :; do
@@ -277,8 +310,9 @@ while :; do
             echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
         else
             runtime_set lan_discovery_status_enable="已禁用"
-            echo "$(date '+%H:%M:%S') LAN监听已禁用，仅停止插拔事件监听，不关闭LAN接口" | logger -t lan-supervisor
+            echo "$(date '+%H:%M:%S') LAN监听已禁用，仅停止发现程序，不关闭LAN接口" | logger -t lan-supervisor
             stop_worker
+            stop_tcpdump
             stop_network_manager
         fi
     fi
@@ -296,21 +330,24 @@ while :; do
             runtime_set lan_discovery_status_link="UP"
             runtime_set lan_discovery_status_state="DHCP检测"
             echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
-            # 先启动网络模式管理器；它等待DHCP检测结果，再建立目标临时IP/SNAT。
+            # 网络管理器、实时二层监听和周期主动发现同时工作。
             start_network_manager "$iface"
+            start_tcpdump "$iface"
             start_worker "$iface"
         else
             runtime_set lan_discovery_status_link="DOWN"
-            runtime_set lan_discovery_status_state="等待接口"
+            runtime_set lan_discovery_status_state="LAN拔出：保留现有临时网段/SNAT"
             runtime_set lan_discovery_status_dhcp="未检测"
-            echo "$(date '+%H:%M:%S') LAN口已拔出：$iface" | logger -t lan-supervisor
+            echo "$(date '+%H:%M:%S') LAN口已拔出：暂停发现但保留现有规则" | logger -t lan-supervisor
             stop_worker
+            stop_tcpdump
             stop_network_manager
         fi
     fi
 
     if [ "$link" = "1" ]; then
         start_network_manager "$iface"
+        start_tcpdump "$iface"
         start_worker "$iface"
     fi
     sync_runtime_status "$iface"
