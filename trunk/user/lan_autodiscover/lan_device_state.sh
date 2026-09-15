@@ -8,6 +8,7 @@ STATE_FILE="$RUNTIME_DIR/device_state.db"
 ARP_SEEN_FILE="$RUNTIME_DIR/arp_seen.txt"
 EVENT_FILE="$RUNTIME_DIR/device_protocol_events.txt"
 DEVICE_DB=/tmp/lan_discovery_devices.txt
+SUBNET_CACHE_FILE="$RUNTIME_DIR/subnet_records.cache"
 
 mkdir -p "$RUNTIME_DIR"
 touch "$STATE_FILE" "$ARP_SEEN_FILE" "$EVENT_FILE" "$DEVICE_DB"
@@ -115,6 +116,10 @@ finish)
     tmp="${STATE_FILE}.tmp"
     candidate_ips="${RUNTIME_DIR}/candidate_ips.tmp"
     : > "$candidate_ips"
+
+    # 目标网段记录不能随着设备状态重建而丢失。
+    # run_arpscan下一轮正是依靠这些SUBNET记录继续扫描已发现的目标网段。
+    grep '^DEVICE type=SUBNET ' "$DEVICE_DB" 2>/dev/null > "$SUBNET_CACHE_FILE" || :
 
     # 候选设备来自本轮ARP、本轮协议事件、历史状态以及设备数据库。
     cat "$ARP_SEEN_FILE" 2>/dev/null | cut -d'|' -f1 >> "$candidate_ips"
@@ -270,6 +275,18 @@ EOF
             fi
         fi
     done < "$STATE_FILE"
+
+    # 关键修复：设备状态重建完成后恢复本轮之前已经发现的目标网段记录。
+    # 否则下一轮arpscan只能看到本机网段，192.168.1.x/192.168.3.x等目标网段会从扫描列表消失。
+    if [ -s "$SUBNET_CACHE_FILE" ]; then
+        cat "$SUBNET_CACHE_FILE" >> "$out"
+    fi
+    rm -f "$SUBNET_CACHE_FILE"
+
+    # 同一个目标网段只保留一条记录，避免重复追加。
+    if [ -s "$out" ]; then
+        awk '!seen[$0]++' "$out" > "${out}.uniq" 2>/dev/null && mv -f "${out}.uniq" "$out"
+    fi
 
     mv -f "$out" "$DEVICE_DB"
     ;;
