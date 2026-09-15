@@ -1,14 +1,11 @@
 #!/bin/sh
 # Q7 LAN网络管理器。
-# 手机始终使用Q7自己的LAN网段；所有发现到的目标网段统一通过临时IP+SNAT访问。
+# 手机始终使用Q7自己的LAN网段；发现到的目标网段统一通过临时IP+SNAT访问。
 #
-# 目标网段采用“扫描轮次”状态管理：
-# 1. 只有监听到完整的一轮“本轮主动探测完成”后，才更新目标网段状态。
-# 2. 当前轮发现的网段：miss_count=0，并保持原临时IP/SNAT。
-# 3. 当前轮没有发现的旧网段：miss_count+1。
-# 4. 连续3个完整扫描轮次没有发现，才删除临时IP和SNAT。
-# 5. 扫描周期可自由设置10/20/30/60秒等，不需要重新计算固定超时时间。
-# 6. 扫描尚未完成、网线变化或进程异常，不增加miss_count，避免误删。
+# 生命周期严格分为两层：
+# 1. 实时发现：tcpdump、ARP、ONVIF/SSDP/海康/大华等一旦出现新IP，立即登记目标网段并接管SNAT。
+# 2. 周期维护：完整扫描结束后才更新目标网段miss_count；达到阈值才清理SNAT和临时IP。
+# LAN拔出只停止发现worker，不清理已有目标网段、临时IP和SNAT。
 
 IFACE=eth2.1
 BR_IF=br0
@@ -19,21 +16,16 @@ TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
+ARP_CURSOR_FILE="$RUNTIME_DIR/realtime_arp.cursor"
+PROTO_CURSOR_FILE="$RUNTIME_DIR/realtime_proto.cursor"
+TCPDUMP_CURSOR_FILE="$RUNTIME_DIR/realtime_tcpdump.cursor"
+
 MISS_LIMIT="$(nvram get lan_discovery_miss_limit 2>/dev/null)"
 case "$MISS_LIMIT" in ''|*[!0-9]*) MISS_LIMIT=3;; esac
 [ "$MISS_LIMIT" -ge 1 ] 2>/dev/null || MISS_LIMIT=1
 [ "$MISS_LIMIT" -le 20 ] 2>/dev/null || MISS_LIMIT=20
 
 mkdir -p "$RUNTIME_DIR"
-
-time_now() { date '+%H:%M:%S'; }
-
-log() {
-    msg="$(time_now) 【网络管理】$*"
-    printf '%s\n' "$msg" >> "$LOG_FILE"
-    logger -t lan-autodiscover "$msg"
-    runtime_set lan_discovery_status_last="$(time_now)"
-}
 
 runtime_set() {
     key="$1"
@@ -42,13 +34,24 @@ runtime_set() {
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"
 }
 
+time_now() { date '+%H:%M:%S'; }
+
+log() {
+    msg="$(time_now) 【网络管理】$*"
+    printf '%s\n' "$msg" >> "$LOG_FILE"
+    logger -t lan-autodiscover "$msg"
+    runtime_set lan_discovery_status_last "$(time_now)"
+}
+
 link_up() {
     if [ -x /sbin/mtk_esw ]; then
         state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
         [ "$state" = "1" ] && return 0
         [ "$state" = "0" ] && return 1
     fi
-    return 0
+    [ -r "/sys/class/net/$IFACE/carrier" ] && [ "$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null)" = "1" ] && return 0
+    [ ! -r "/sys/class/net/$IFACE/carrier" ] && [ "$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null)" = "up" ] && return 0
+    return 1
 }
 
 local_ip() {
@@ -61,30 +64,15 @@ local_ip() {
 }
 
 network_from_ip() {
-    printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'
+    printf '%s\n' "$1" |
+        awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'
 }
 
-state_key() {
-    printf '%s' "$1" | tr '.' '_'
-}
-
-target_state_file() {
-    printf '%s/lan_target_state_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"
-}
-
-takeover_state_file() {
-    printf '%s/lan_takeover_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"
-}
-
-snat_state_file() {
-    printf '%s/lan_snat_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"
-}
-
-state_get() {
-    file="$1"
-    key="$2"
-    sed -n "s/^${key}=//p" "$file" 2>/dev/null | head -n 1
-}
+state_key() { printf '%s' "$1" | tr '.' '_'; }
+target_state_file() { printf '%s/lan_target_state_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"; }
+takeover_state_file() { printf '%s/lan_takeover_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"; }
+snat_state_file() { printf '%s/lan_snat_%s.state\n' "$RUNTIME_DIR" "$(state_key "$1")"; }
+state_get() { file="$1"; key="$2"; sed -n "s/^${key}=//p" "$file" 2>/dev/null | head -n 1; }
 
 write_target_state() {
     target_net="$1"
@@ -137,41 +125,100 @@ update_runtime_targets() {
 
 cleanup_one() {
     target_net="$1"
-    takeover_file="$(takeover_state_file "$target_net")"
-    snat_file="$(snat_state_file "$target_net")"
-
-    old_target_ip="$(state_get "$takeover_file" ip)"
-    old_lan_net="$(state_get "$snat_file" lan_net)"
-    old_snat_target="$(state_get "$snat_file" target_net)"
-
-    [ -n "$old_snat_target" ] || old_snat_target="$target_net"
-
     if [ -x /usr/bin/lan_snat.sh ]; then
         /usr/bin/lan_snat.sh down "$target_net" >> "$LOG_FILE" 2>&1 || :
     fi
     if [ -x /usr/bin/lan_takeover.sh ]; then
         /usr/bin/lan_takeover.sh -r "$target_net" >> "$LOG_FILE" 2>&1 || :
     fi
-
     rm -f "$(target_state_file "$target_net")"
-    :
 }
 
-cleanup_network() {
-    for f in "$RUNTIME_DIR"/lan_takeover_*.state; do
-        [ -r "$f" ] || continue
-        net="$(state_get "$f" network)"
-        [ -n "$net" ] || continue
-        cleanup_one "$net"
-    done
-    rm -f "$STATE_FILE" "$TARGETS_FILE" "$CURRENT_ACTIVE_FILE" "$CYCLE_CURSOR_FILE"
-    rm -f "$RUNTIME_DIR"/lan_target_state_*.state
+apply_target() {
+    target_net="$1"
+    source_net="$2"
+    scan_seq="$3"
+
+    [ -n "$target_net" ] || return 1
+    [ "$target_net" != "$source_net" ] || return 0
+    [ "$target_net" != "0.0.0.0" ] || return 1
+
+    takeover_file="$(takeover_state_file "$target_net")"
+    current_ip="$(state_get "$takeover_file" ip)"
+
+    # 临时地址不存在、状态文件丢失或者地址已经从br0消失时，立即重新接管。
+    if [ -z "$current_ip" ] || ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
+        if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
+            log "目标网段接管失败：$target_net/24"
+            return 1
+        fi
+        current_ip="$(state_get "$takeover_file" ip)"
+        [ -n "$current_ip" ] || {
+            log "无法取得目标网段临时地址：$target_net/24"
+            return 1
+        }
+    fi
+
+    # SNAT使用幂等check；规则存在就保持，缺失才自动补回。
+    if ! /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
+        if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
+            log "SNAT启用失败：$source_net/24 → $target_net/24"
+            return 1
+        fi
+    fi
+
+    write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
+    runtime_set lan_discovery_status_state "实时发现：目标网段已接管"
+    log "目标网段保持：$source_net/24 → $target_net/24，临时地址=$current_ip"
     update_runtime_targets
-    runtime_set lan_discovery_status_state "等待接口"
+    return 0
 }
 
-# 从本轮ARP和协议事件中提取“本轮真实发现到”的目标网段。
-# 这些文件在下一轮开始时才会重新清空，所以网络管理器只在完整扫描结束后读取。
+process_stream_file() {
+    file="$1"
+    cursor_file="$2"
+    localnet="$3"
+    kind="$4"
+
+    [ -r "$file" ] || return 0
+    count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
+    case "$count" in ''|*[!0-9]*) count=0;; esac
+    cursor="$(cat "$cursor_file" 2>/dev/null)"
+    case "$cursor" in ''|*[!0-9]*) cursor=0;; esac
+    [ "$count" -ge "$cursor" ] || cursor=0
+    [ "$count" -gt "$cursor" ] || return 0
+
+    start=$((cursor + 1))
+    sed -n "${start},${count}p" "$file" 2>/dev/null |
+    while IFS='|' read -r ip field2 field3 field4; do
+        [ -n "$ip" ] || continue
+        net="$(network_from_ip "$ip")"
+        [ -n "$net" ] || continue
+        [ "$net" != "$localnet" ] || continue
+        case "$kind" in
+            ARP)
+                /usr/bin/lan_device_state.sh arp "$ip" "$field2" >/dev/null 2>&1 || :
+                ;;
+            PROTO)
+                /usr/bin/lan_device_state.sh proto "$ip" "$field2" >/dev/null 2>&1 || :
+                ;;
+            TCPDUMP)
+                /usr/bin/lan_device_state.sh arp "$ip" "$field2" >/dev/null 2>&1 || :
+                ;;
+        esac
+        apply_target "$net" "$localnet" "realtime-$kind-$(date +%s 2>/dev/null)" || :
+    done
+    printf '%s\n' "$count" > "$cursor_file"
+}
+
+process_realtime_events() {
+    localnet="$1"
+    # ARP、私有协议和tcpdump均实时进入同一个目标接管流程；管理器自身不改变miss_count。
+    process_stream_file "$RUNTIME_DIR/arp_seen.txt" "$ARP_CURSOR_FILE" "$localnet" ARP
+    process_stream_file "$RUNTIME_DIR/device_protocol_events.txt" "$PROTO_CURSOR_FILE" "$localnet" PROTO
+    process_stream_file "$RUNTIME_DIR/tcpdump_discovery_events.txt" "$TCPDUMP_CURSOR_FILE" "$localnet" TCPDUMP
+}
+
 collect_cycle_targets() {
     local_net="$1"
     tmp="$RUNTIME_DIR/.lan_cycle_targets.tmp"
@@ -179,16 +226,17 @@ collect_cycle_targets() {
 
     if [ -r "$RUNTIME_DIR/arp_seen.txt" ]; then
         cut -d'|' -f1 "$RUNTIME_DIR/arp_seen.txt" 2>/dev/null |
-            while IFS= read -r ip; do
-                network_from_ip "$ip"
-            done >> "$tmp"
+            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
     fi
 
     if [ -r "$RUNTIME_DIR/device_protocol_events.txt" ]; then
         cut -d'|' -f1 "$RUNTIME_DIR/device_protocol_events.txt" 2>/dev/null |
-            while IFS= read -r ip; do
-                network_from_ip "$ip"
-            done >> "$tmp"
+            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
+    fi
+
+    if [ -r "$RUNTIME_DIR/tcpdump_discovery_events.txt" ]; then
+        cut -d'|' -f1 "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
+            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
     fi
 
     grep -v "^$local_net$" "$tmp" 2>/dev/null |
@@ -208,81 +256,28 @@ cycle_seen_before() {
     [ "$old" = "$marker" ]
 }
 
-save_cycle_cursor() {
-    printf '%s\n' "$1" > "$CYCLE_CURSOR_FILE"
-}
+save_cycle_cursor() { printf '%s\n' "$1" > "$CYCLE_CURSOR_FILE"; }
 
-apply_target() {
-    target_net="$1"
-    source_net="$2"
-    state_file="$(target_state_file "$target_net")"
-    takeover_file="$(takeover_state_file "$target_net")"
-    snat_file="$(snat_state_file "$target_net")"
-
-    [ -n "$target_net" ] || return 1
-    [ "$target_net" != "$source_net" ] || return 0
-    [ "$target_net" != "0.0.0.0" ] || return 1
-
-    current_ip="$(state_get "$takeover_file" ip)"
-
-    # 首次发现、临时地址丢失或状态文件不完整时才重新接管。
-    if [ -z "$current_ip" ]; then
-        if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
-            log "目标网段接管失败：$target_net/24"
-            return 1
-        fi
-        current_ip="$(state_get "$takeover_file" ip)"
-        [ -n "$current_ip" ] || {
-            log "无法取得目标网段临时地址：$target_net/24"
-            return 1
-        }
-    fi
-
-    # SNAT本身使用幂等check；只有规则缺失时才实际补回。
-    if [ -x /usr/bin/lan_snat.sh ]; then
-        if ! /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
-            if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
-                log "SNAT启用失败：$source_net/24 → $target_net/24"
-                return 1
-            fi
-        fi
-    else
-        log "SNAT程序不存在：$target_net/24"
-        return 1
-    fi
-
-    scan_seq="$3"
-    write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
-    runtime_set lan_discovery_status_state "统一SNAT模式：Q7 DHCP保持现有配置"
-    log "目标网段状态保持：$source_net/24 → $target_net/24，临时地址=$current_ip，本轮发现"
-    return 0
-}
-
-# 只在“新的完整扫描轮次”到来时更新miss_count。
-# 管理器自身2秒轮询不会改变miss_count，因此扫描周期改成10/20/30/60秒均不影响逻辑。
 process_completed_cycle() {
     localnet="$1"
     marker="$2"
 
     collect_cycle_targets "$localnet"
     scan_seq="$(date +%s 2>/dev/null)-$(wc -l < "$CURRENT_ACTIVE_FILE" 2>/dev/null | tr -d ' ')"
-
     runtime_set lan_discovery_status_state "处理完整扫描轮次：目标网段状态增量更新"
-    log "检测到新的完整扫描轮次，开始增量更新目标网段状态"
 
-    # 1. 本轮发现的目标：miss_count清零，保持原IP和SNAT。
+    # 本轮真实发现的网段立即清零miss并保持现有临时IP/SNAT。
     while IFS= read -r target_net; do
         [ -n "$target_net" ] || continue
         [ "$target_net" != "$localnet" ] || continue
         apply_target "$target_net" "$localnet" "$scan_seq" || log "本轮目标处理失败，下轮继续尝试：$target_net/24"
     done < "$CURRENT_ACTIVE_FILE"
 
-    # 2. 旧目标本轮没有出现：miss_count只加1；连续3轮才删除。
+    # 只有完整扫描轮次才允许增加目标网段miss；管理器的实时轮询不会误删SNAT。
     for state_file in "$RUNTIME_DIR"/lan_target_state_*.state; do
         [ -r "$state_file" ] || continue
         target_net="$(state_get "$state_file" target_net)"
         [ -n "$target_net" ] || continue
-
         if grep -qx "$target_net" "$CURRENT_ACTIVE_FILE" 2>/dev/null; then
             continue
         fi
@@ -290,8 +285,8 @@ process_completed_cycle() {
         miss_count="$(state_get "$state_file" miss_count)"
         case "$miss_count" in ''|*[!0-9]*) miss_count=0;; esac
         miss_count=$((miss_count + 1))
-
         current_ip="$(state_get "$state_file" target_ip)"
+
         if [ "$miss_count" -ge "$MISS_LIMIT" ]; then
             log "目标网段连续${miss_count}轮完整扫描未发现，确认清理：$target_net/24${current_ip:+，临时地址=$current_ip}"
             cleanup_one "$target_net"
@@ -316,33 +311,35 @@ check_existing_targets() {
         [ -n "$target_net" ] || continue
         [ "$target_net" != "$localnet" ] || continue
         current_ip="$(state_get "$takeover_file" ip)"
-        snat_file="$(snat_state_file "$target_net")"
-        source_net="$(state_get "$snat_file" lan_net)"
+        source_net="$localnet"
         [ -n "$current_ip" ] || continue
-        [ -n "$source_net" ] || source_net="$localnet"
-        [ -x /usr/bin/lan_snat.sh ] || continue
-        /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >/dev/null 2>&1 || :
+
+        # LAN重新插入、设备重启或规则被其它系统修改后，只补缺失部分，不删除已有目标。
+        if ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
+            /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1 || continue
+            current_ip="$(state_get "$takeover_file" ip)"
+        fi
+        [ -n "$current_ip" ] || continue
+        /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1 || :
     done
+    update_runtime_targets
 }
 
 process_targets() {
     localnet="$1"
-
+    process_realtime_events "$localnet"
     latest_marker="$(latest_completed_cycle)"
     if [ -n "$latest_marker" ] && ! cycle_seen_before "$latest_marker"; then
         process_completed_cycle "$localnet" "$latest_marker"
     fi
-
     check_existing_targets "$localnet"
-    update_runtime_targets
 }
 
 while :; do
     if ! link_up; then
-        if ls "$RUNTIME_DIR"/lan_takeover_*.state >/dev/null 2>&1; then
-            log "LAN网线已拔出，立即撤销全部临时地址和SNAT"
-            cleanup_network
-        fi
+        # LAN拔出只表示“发现暂停”；不撤销任何临时IP、目标状态和SNAT规则。
+        runtime_set lan_discovery_status_link "DOWN"
+        runtime_set lan_discovery_status_state "LAN拔出：保留现有临时网段/SNAT"
         sleep 1
         continue
     fi
@@ -352,5 +349,5 @@ while :; do
     [ -n "$localnet" ] || { sleep 2; continue; }
 
     process_targets "$localnet"
-    sleep 2
+    sleep 1
 done
