@@ -75,6 +75,7 @@ jobs:
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_tcpdump_listener.sh
           test -f trunk/user/lan_autodiscover/lan_device_state.sh
           test -f trunk/user/lan_autodiscover/lan_takeover.sh
           test -f trunk/user/lan_autodiscover/lan_snat.sh
@@ -93,21 +94,26 @@ jobs:
           grep -q -- '---TARGETS---' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'render_target_states' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q '<th>状态</th><th>协议</th><th>IP</th><th>MAC</th><th>Ping</th><th>信息</th>' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          grep -q 'r\.ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
+          grep -q 'd\.ping' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'clean_device_info' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'displayMac' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q "init_itoggle('lan_discovery_enable');" trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q "init_itoggle('lan_discovery_dhcp_enable');" trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q "init_itoggle('lan_discovery_discover_enable');" trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           grep -q 'load_body();' trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
-          # DHCP不再参与目标网段分流，因此这里不再强制检查已删除的DHCP分支变量。
           grep -Fq 'lan_takeover_*.state' trunk/user/lan_autodiscover/lan_takeover.sh
           grep -q 'ip_owned_by_other_state' trunk/user/lan_autodiscover/lan_takeover.sh
+          grep -q 'tcpdump_discovery_events.txt' trunk/user/lan_autodiscover/lan_network_manager.sh
+          grep -q 'LAN拔出：保留现有临时网段/SNAT' trunk/user/lan_autodiscover/lan_network_manager.sh
+          grep -q 'lan_tcpdump_listener.sh' trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          grep -q 'LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT' trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
           sh -n trunk/user/lan_autodiscover/lan_autodiscover.sh
+          sh -n trunk/user/lan_autodiscover/lan_tcpdump_listener.sh
           sh -n trunk/user/lan_autodiscover/lan_device_state.sh
           sh -n trunk/user/lan_autodiscover/lan_takeover.sh
           sh -n trunk/user/lan_autodiscover/lan_snat.sh
           sh -n trunk/user/lan_autodiscover/lan_network_manager.sh
+          sh -n trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
 
       - name: Build ZTE_Q7
         run: |
