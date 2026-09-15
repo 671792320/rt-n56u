@@ -31,32 +31,34 @@ cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 
 # Q7 LAN发现配置迁移：只在配置版本不是当前版本时执行一次。
-# 这样既能修复旧固件把开关保存成0/空值的问题，又不会在以后覆盖用户自己的设置。
-LAN_DISCOVERY_CONFIG_VERSION=2
+# 3版增加“LAN拔出是否清理临时网段”和“协议响应等待时间”两个参数。
+LAN_DISCOVERY_CONFIG_VERSION=3
 migrate_lan_discovery_config() {
     current="$(nv lan_discovery_config_version)"
-    [ "$current" = "$LAN_DISCOVERY_CONFIG_VERSION" ] && return 0
-
-    nvram set lan_discovery_enable=1
-    nvram set lan_discovery_ifname=eth2.1
-    nvram set lan_discovery_dhcp_enable=1
-    nvram set lan_discovery_dhcp_timeout=3
-    nvram set lan_discovery_discover_enable=1
-    nvram set lan_discovery_cycle=10
-    nvram set lan_discovery_miss_limit=3
-    nvram set lan_discovery_raw=1
-    nvram set lan_discovery_onvif=1
-    nvram set lan_discovery_onvif_port=3702
-    nvram set lan_discovery_ssdp=1
-    nvram set lan_discovery_ssdp_port=1900
-    nvram set lan_discovery_hik=1
-    nvram set lan_discovery_hik_port=37020
-    nvram set lan_discovery_dahua=1
-    nvram set lan_discovery_dahua_port=37810
-    nvram set lan_discovery_custom="# Q7标准探测配置\nonvif|3702|1\nssdp|1900|1\nhik|37020|1\ndahua|37810|1\narp|-|1"
-    nvram set lan_discovery_config_version="$LAN_DISCOVERY_CONFIG_VERSION"
-    nvram commit
-    echo "$(date '+%H:%M:%S') LAN发现配置已完成一次性初始化，版本=$LAN_DISCOVERY_CONFIG_VERSION" | logger -t lan-supervisor
+    if [ "$current" != "$LAN_DISCOVERY_CONFIG_VERSION" ]; then
+        [ -n "$(nv lan_discovery_enable)" ] || nvram set lan_discovery_enable=1
+        [ -n "$(nv lan_discovery_ifname)" ] || nvram set lan_discovery_ifname=eth2.1
+        [ -n "$(nv lan_discovery_dhcp_enable)" ] || nvram set lan_discovery_dhcp_enable=1
+        [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
+        [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
+        [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
+        [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
+        [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
+        [ -n "$(nv lan_discovery_clear_on_unplug)" ] || nvram set lan_discovery_clear_on_unplug=1
+        [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
+        [ -n "$(nv lan_discovery_onvif)" ] || nvram set lan_discovery_onvif=1
+        [ -n "$(nv lan_discovery_onvif_port)" ] || nvram set lan_discovery_onvif_port=3702
+        [ -n "$(nv lan_discovery_ssdp)" ] || nvram set lan_discovery_ssdp=1
+        [ -n "$(nv lan_discovery_ssdp_port)" ] || nvram set lan_discovery_ssdp_port=1900
+        [ -n "$(nv lan_discovery_hik)" ] || nvram set lan_discovery_hik=1
+        [ -n "$(nv lan_discovery_hik_port)" ] || nvram set lan_discovery_hik_port=37020
+        [ -n "$(nv lan_discovery_dahua)" ] || nvram set lan_discovery_dahua=1
+        [ -n "$(nv lan_discovery_dahua_port)" ] || nvram set lan_discovery_dahua_port=37810
+        [ -n "$(nv lan_discovery_custom)" ] || nvram set lan_discovery_custom="# Q7标准探测配置\nonvif|3702|1\nssdp|1900|1\nhik|37020|1\ndahua|37810|1\narp|-|1"
+        nvram set lan_discovery_config_version="$LAN_DISCOVERY_CONFIG_VERSION"
+        nvram commit
+        echo "$(date '+%H:%M:%S') LAN发现配置迁移完成，版本=$LAN_DISCOVERY_CONFIG_VERSION" | logger -t lan-supervisor
+    fi
 }
 
 migrate_lan_discovery_config
@@ -137,12 +139,21 @@ stop_network_manager() {
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$NETMGR_PIDFILE"
-    [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :
-    [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :
+
+    # 默认保持原逻辑：LAN拔出时清除临时IP和SNAT。
+    # 用户关闭“LAN拔出时清除临时网段”后，仅停止监听，不撤销已有目标网段接管。
+    clear_on_unplug="$(cfg lan_discovery_clear_on_unplug 1)"
+    if [ "$clear_on_unplug" = "1" ]; then
+        [ -x /usr/bin/lan_snat.sh ] && /usr/bin/lan_snat.sh down >/dev/null 2>&1 || :
+        [ -x /usr/bin/lan_takeover.sh ] && /usr/bin/lan_takeover.sh -r >/dev/null 2>&1 || :
+        runtime_set lan_discovery_status_target_network=""
+        runtime_set lan_discovery_status_target_ip=""
+        runtime_set lan_discovery_status_target_iface=""
+        echo "$(date '+%H:%M:%S') LAN拔出：已清理临时网段、临时IP和SNAT" | logger -t lan-supervisor
+    else
+        echo "$(date '+%H:%M:%S') LAN拔出：按配置保留临时网段、临时IP和SNAT" | logger -t lan-supervisor
+    fi
     runtime_set lan_discovery_status_network_manager="已停止"
-    runtime_set lan_discovery_status_target_network=""
-    runtime_set lan_discovery_status_target_ip=""
-    runtime_set lan_discovery_status_target_iface=""
 }
 
 sync_runtime_status() {
