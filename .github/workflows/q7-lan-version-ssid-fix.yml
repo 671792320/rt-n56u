@@ -1,4 +1,4 @@
-name: Q7 原生版本与SSID关联修复
+name: Q7 原生服务与SSID关联修复
 
 on:
   push:
@@ -20,44 +20,250 @@ jobs:
           ref: master
           fetch-depth: 0
 
-      - name: 修复原生版本显示与Q7默认SSID
+      - name: 修复Q7原生服务与WiFi配置
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          # 升级页面恢复Padavan原生firmver_sub读取。
-          p = Path('trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp')
+          # ------------------------------------------------------------
+          # 1. rc/services.c：LAN发现服务改用可靠PID文件检测。
+          #    原来的 pids("lan_discovery_supervisor") 存在检查/启动竞态，
+          #    多次同时进入 start_services_once() 时可能启动多个supervisor。
+          # ------------------------------------------------------------
+          p = Path('trunk/user/rc/services.c')
           s = p.read_text(encoding='utf-8')
-          s = s.replace('value="ZVFWVERVZ"', 'value="<% nvram_get_x(\"\", \"firmver_sub\"); %>"', 1)
-          if '<% nvram_get_x("", "firmver_sub"); %>' not in s:
-              raise SystemExit('升级页面没有恢复firmver_sub原生读取')
+
+          old = '''static int
+          is_lan_discovery_run(void)
+          {
+          \treturn pids("lan_discovery_supervisor");
+          }
+          '''
+          new = '''static int
+          is_lan_discovery_run(void)
+          {
+          \tFILE *fp;
+          \tlong pid;
+
+          \tfp = fopen("/tmp/lan_discovery_supervisor.pid", "r");
+          \tif (!fp)
+          \t\treturn pids("lan_discovery_supervisor");
+
+          \tif (fscanf(fp, "%ld", &pid) != 1 || pid <= 0) {
+          \t\tfclose(fp);
+          \t\tunlink("/tmp/lan_discovery_supervisor.pid");
+          \t\treturn 0;
+          \t}
+          \tfclose(fp);
+
+          \tif (kill((pid_t)pid, 0) == 0 || errno == EPERM)
+          \t\treturn 1;
+
+          \tunlink("/tmp/lan_discovery_supervisor.pid");
+          \treturn 0;
+          }
+          '''
+          if old not in s:
+              raise SystemExit('services.c中未找到原LAN服务运行检查')
+          s = s.replace(old, new, 1)
+
+          old = '''\tunlink("/tmp/lan_network_manager.pid");
+          \tunlink("/tmp/lan_autodiscover_worker.pid");
+          }
+          '''
+          new = '''\tunlink("/tmp/lan_network_manager.pid");
+          \tunlink("/tmp/lan_autodiscover_worker.pid");
+          \tunlink("/tmp/lan_discovery_supervisor.pid");
+          }
+          '''
+          if old not in s:
+              raise SystemExit('services.c中未找到LAN服务停止清理位置')
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding='utf-8')
 
-          # Q7默认SSID：严格使用用户确定的UTP与MAC后四位格式。
+          # ------------------------------------------------------------
+          # 2. supervisor：增加带PID校验的原子单实例锁。
+          #    即使services.c发生并发启动，第二个supervisor也会立即退出。
+          # ------------------------------------------------------------
+          p = Path('trunk/user/lan_autodiscover/lan_discovery_supervisor.sh')
+          s = p.read_text(encoding='utf-8')
+          old = '''SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
+          WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
+          DEVICE_DB=/tmp/lan_discovery_devices.txt
+          LOG_FILE=/tmp/lan_discovery.log
+          RUNTIME_DIR=/tmp/lan_discovery_runtime
+          mkdir -p "$RUNTIME_DIR"
+
+          if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
+              echo "$(date '+%H:%M:%S') LAN监督程序已经运行" | logger -t lan-supervisor
+              exit 0
+          fi
+          trap 'rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
+          '''
+          new = '''SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
+          SUPERVISOR_PIDFILE=/tmp/lan_discovery_supervisor.pid
+          WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
+          DEVICE_DB=/tmp/lan_discovery_devices.txt
+          LOG_FILE=/tmp/lan_discovery.log
+          RUNTIME_DIR=/tmp/lan_discovery_runtime
+          mkdir -p "$RUNTIME_DIR"
+
+          acquire_supervisor_lock() {
+              if mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
+                  printf '%s\\n' "$$" > "$SUPERVISOR_PIDFILE"
+                  return 0
+              fi
+
+              old_pid=""
+              [ -r "$SUPERVISOR_PIDFILE" ] && old_pid="$(cat "$SUPERVISOR_PIDFILE" 2>/dev/null)"
+              case "$old_pid" in
+                  ''|*[!0-9]*) old_pid="";;
+              esac
+
+              if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+                  echo "$(date '+%H:%M:%S') LAN监督程序已经运行，PID=$old_pid" | logger -t lan-supervisor
+                  return 1
+              fi
+
+              rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || :
+              if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
+                  echo "$(date '+%H:%M:%S') LAN监督程序锁竞争，放弃重复启动" | logger -t lan-supervisor
+                  return 1
+              fi
+              printf '%s\\n' "$$" > "$SUPERVISOR_PIDFILE"
+              return 0
+          }
+
+          cleanup_supervisor_lock() {
+              rm -f "$SUPERVISOR_PIDFILE"
+              rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || :
+          }
+
+          acquire_supervisor_lock || exit 0
+          trap cleanup_supervisor_lock EXIT INT TERM HUP
+          '''
+          if old not in s:
+              raise SystemExit('supervisor中未找到原单实例锁')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # ------------------------------------------------------------
+          # 3. rc.c：Q7不再把正常的Padavan NVRAM误判为外部Asus-WRT配置。
+          #    用户保存的SSID等设置必须在重启后保持，不应被重新恢复默认。
+          # ------------------------------------------------------------
+          p = Path('trunk/user/rc/rc.c')
+          s = p.read_text(encoding='utf-8')
+          old = '''\t/* check asus-wrt NVRAM content (sorry, but many params is incompatible) */
+          if (!restore_defaults) {
+          \tif (nvram_get("buildno") && nvram_get("buildinfo") && nvram_get("extendno"))
+          \t\trestore_defaults = 1;
+          }
+          '''
+          new = '''\t/* Q7使用Padavan自身NVRAM格式，不能因为存在buildno/buildinfo/extendno就误判为外部Asus-WRT配置。 */
+          #if !defined(BOARD_ZTE_Q7)
+          \tif (!restore_defaults) {
+          \t\tif (nvram_get("buildno") && nvram_get("buildinfo") && nvram_get("extendno"))
+          \t\t\trestore_defaults = 1;
+          \t}
+          #endif
+          '''
+          if old not in s:
+              raise SystemExit('rc.c中未找到外部NVRAM兼容判断')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # ------------------------------------------------------------
+          # 4. Q7默认SSID：使用用户确定的格式，MAC取最后3个十六进制字符。
+          # ------------------------------------------------------------
           p = Path('trunk/user/shared/defaults.h')
           s = p.read_text(encoding='utf-8')
-          s = s.replace('/* Q7默认无线名称：前缀 + WiFi MAC最后三位，避免SSID过长。 */', '/* Q7默认无线名称：前缀 + WiFi MAC最后四位。 */', 1)
-          s = s.replace('#define DEF_WLAN_2G_SSID\t"@Seetong_IPCTEST-TUP-T2_%s"', '#define DEF_WLAN_2G_SSID\t"@Seetong_IPCTEST-UTP-T2_%s"', 1)
-          if '@Seetong_IPCTEST-UTP-T2_%s' not in s:
-              raise SystemExit('Q7默认SSID修正失败')
+          old = '''/* Q7默认无线名称：前缀 + WiFi MAC最后四位。 */
+          #define DEF_WLAN_2G_SSID\t"@Seetong_IPCTEST-UTP-T2_%s"
+          #define DEF_WLAN_2G_PSK\t\t"88888888"
+          '''
+          new = '''/* Q7默认无线名称：@seetong-IPCtest-utp2_ + WiFi MAC最后3位。 */
+          #define DEF_WLAN_2G_SSID\t"@seetong-IPCtest-utp2_%s"
+          #define DEF_WLAN_2G_PSK\t\t"88888888"
+          '''
+          if old not in s:
+              raise SystemExit('defaults.h中未找到当前Q7默认SSID')
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding='utf-8')
 
-          # 构建产物名称改为与内部版本相同的北京时间YYMMDDHHMM，避免下划线造成混淆。
-          p = Path('.github/workflows/q7-build.yml')
+          # rc.c默认参数格式化：Q7 SSID专用最后3位，其他机型保持原来的4位。
+          p = Path('trunk/user/rc/rc.c')
           s = p.read_text(encoding='utf-8')
-          s = s.replace("BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')", "BUILD_DATE=$(TZ=Asia/Shanghai date +'%Y%m%d_%H%M%S')")
-          s = s.replace("VERSION_STAMP=$(date -u +'%y%m%d_%H%M')", "VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d%H%M')")
-          if "VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d%H%M')" not in s:
-              raise SystemExit('Q7构建版本戳修正失败')
+          old = '''\tchar lan_mac[] = "FFFF";
+
+          \tint i_offset = get_wired_mac_e2p_offset(0) + 4;
+          '''
+          new = '''\tchar lan_mac[] = "FFFF";
+          const char *ssid_mac = lan_mac;
+          char q7_ssid_mac[4] = {0};
+
+          \tint i_offset = get_wired_mac_e2p_offset(0) + 4;
+          '''
+          if old not in s:
+              raise SystemExit('rc.c中未找到默认MAC变量')
+          s = s.replace(old, new, 1)
+
+          old = '''\tif (flash_mtd_read(MTD_PART_NAME_FACTORY, i_offset, buffer, 2) == 0) {
+          \t\tsprintf(lan_mac, "%02X%02X", buffer[0] & 0xff, buffer[1] & 0xff);
+          \t}
+
+          /* Restore defaults if told to or OS has changed */
+          '''
+          new = '''\tif (flash_mtd_read(MTD_PART_NAME_FACTORY, i_offset, buffer, 2) == 0) {
+          \t\tsprintf(lan_mac, "%02X%02X", buffer[0] & 0xff, buffer[1] & 0xff);
+          \t}
+
+          #if defined(BOARD_ZTE_Q7)
+          \tif (strlen(lan_mac) >= 3) {
+          \t\tmemcpy(q7_ssid_mac, lan_mac + strlen(lan_mac) - 3, 3);
+          \t\tq7_ssid_mac[3] = '\\0';
+          \t\tssid_mac = q7_ssid_mac;
+          \t}
+          #endif
+
+          /* Restore defaults if told to or OS has changed */
+          '''
+          if old not in s:
+              raise SystemExit('rc.c中未找到默认MAC读取结束位置')
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\t\tsprintf(tmp, np->value, lan_mac);
+          '''
+          new = '''\t\t\t\tsprintf(tmp, np->value, ssid_mac);
+          '''
+          if old not in s:
+              raise SystemExit('rc.c中未找到SSID默认值格式化代码')
+          s = s.replace(old, new, 1)
           p.write_text(s, encoding='utf-8')
 
-          Path('trunk/user/httpd/.q7_lan_version_ssid_fix').unlink(missing_ok=True)
+          print('Q7单实例服务与WiFi配置持久化源码修复完成')
           PY
+
+          # 直接源码静态检查
+          grep -q 'lan_discovery_supervisor.pid' trunk/user/rc/services.c
+          grep -q 'acquire_supervisor_lock' trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          grep -q '!defined(BOARD_ZTE_Q7)' trunk/user/rc/rc.c
+          grep -q '@seetong-IPCtest-utp2_%s' trunk/user/shared/defaults.h
+          grep -q 'q7_ssid_mac' trunk/user/rc/rc.c
+          sh -n trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add trunk/user/www/n56u_ribbon_fixed/Advanced_FirmwareUpgrade_Content.asp trunk/user/shared/defaults.h .github/workflows/q7-build.yml trunk/user/httpd/.q7_lan_version_ssid_fix
-          git commit -m 'Q7：恢复原生版本显示并修正默认SSID'
+          git add trunk/user/rc/services.c trunk/user/lan_autodiscover/lan_discovery_supervisor.sh trunk/user/rc/rc.c trunk/user/shared/defaults.h
+          git commit -m 'Q7：修复LAN发现重复进程并保持WiFi配置'
+          git push origin HEAD:master
+
+      - name: 清理一次性修复工作流
+        if: success()
+        shell: bash
+        run: |
+          set -e
+          git rm -f .github/workflows/q7-lan-version-ssid-fix.yml trunk/user/httpd/.q7_lan_version_ssid_fix
+          git commit -m 'Q7：清理一次性服务与SSID修复工作流'
           git push origin HEAD:master
