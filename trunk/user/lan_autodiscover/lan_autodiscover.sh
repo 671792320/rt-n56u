@@ -17,6 +17,7 @@ ARP_LOG=/tmp/arpscan_lan.log
 CAM_LOG=/tmp/camdiscover_lan.log
 CUSTOM_CONF=/tmp/camdiscover_custom.conf
 CUSTOM_TMP="$RUNTIME_DIR/custom_parse.tmp"
+ACTIVE_SCAN_PID=""
 
 mkdir -p /tmp "$RUNTIME_DIR"
 touch "$DEVICE_DB" "$LOG_FILE"
@@ -24,6 +25,12 @@ touch "$DEVICE_DB" "$LOG_FILE"
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
 now() { date '+%H:%M:%S'; }
+
+# LAN总开关与设备发现开关必须同时开启，避免子循环绕过主开关继续运行。
+discovery_enabled() {
+    [ "$(cfg lan_discovery_enable 1)" = "1" ] &&
+    [ "$(cfg lan_discovery_discover_enable 1)" = "1" ]
+}
 
 runtime_set() {
     item="$1"
@@ -349,9 +356,10 @@ EOF
     : > "$ARP_LOG"
     /usr/bin/arpscan $args > "$ARP_LOG" 2>&1 &
     pid=$!
+    ACTIVE_SCAN_PID="$pid"
     processed=""
     while kill -0 "$pid" 2>/dev/null; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+        if ! discovery_enabled; then
             kill "$pid" 2>/dev/null
             break
         fi
@@ -378,6 +386,7 @@ EOF
         sleep 1
     done
     wait "$pid" 2>/dev/null
+    [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
     if [ -s "$ARP_LOG" ]; then
         while IFS= read -r line; do
             case "$line" in
@@ -456,9 +465,11 @@ run_camdiscover() {
 
     /usr/bin/camdiscover $args > "$CAM_LOG" 2>&1 &
     pid=$!
+    ACTIVE_SCAN_PID="$pid"
     while kill -0 "$pid" 2>/dev/null; do
-        if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+        if ! discovery_enabled; then
             kill "$pid" 2>/dev/null
+            [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
             return 0
         fi
         if [ -s "$CAM_LOG" ]; then
@@ -481,6 +492,7 @@ run_camdiscover() {
         sleep 1
     done
     wait "$pid" 2>/dev/null
+    [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
     rm -f "$CAM_LOG"
 }
 
@@ -490,7 +502,7 @@ run_discovery() {
     start_health "$iface"
     run_dhcp_detect "$iface"
 
-    if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
+    if ! discovery_enabled; then
         runtime_set "lan_discovery_status_state=设备发现未启用"
         return 0
     fi
@@ -502,9 +514,9 @@ run_discovery() {
     sync_device_cache
 
     while is_link_up "$iface"; do
-        [ "$(cfg lan_discovery_discover_enable 1)" = "1" ] || {
+        discovery_enabled || {
             runtime_set "lan_discovery_status_state=设备发现未启用"
-            log_line "设备发现已关闭"
+            log_line "LAN监听或设备发现已关闭"
             break
         }
         discover_cycle="$(cfg lan_discovery_cycle 10)"
@@ -530,7 +542,7 @@ run_discovery() {
         [ "$wait_seconds" -lt 0 ] 2>/dev/null && wait_seconds=0
         log_line "本轮主动探测完成，继续监听，下一轮周期 ${discover_cycle}s"
         while [ "$wait_seconds" -gt 0 ]; do
-            [ "$(cfg lan_discovery_discover_enable 1)" = "1" ] || break
+            discovery_enabled || break
             is_link_up "$iface" || break
             sleep 1
             wait_seconds=$((wait_seconds - 1))
@@ -540,6 +552,12 @@ run_discovery() {
 }
 
 cleanup() {
+    if [ -n "$ACTIVE_SCAN_PID" ]; then
+        kill "$ACTIVE_SCAN_PID" 2>/dev/null
+        sleep 1
+        kill -0 "$ACTIVE_SCAN_PID" 2>/dev/null && kill -9 "$ACTIVE_SCAN_PID" 2>/dev/null
+        ACTIVE_SCAN_PID=""
+    fi
     stop_health
     rm -f "$CUSTOM_TMP" "$CUSTOM_CONF" "$DHCP_LOG" "$ARP_LOG" "$CAM_LOG"
     rmdir "$LOCKDIR" 2>/dev/null
@@ -583,9 +601,8 @@ while :; do
     if [ "$state" != "$last_state" ]; then
         last_state="$state"
         if [ "$state" = "1" ]; then
-            run_discovery "$iface" &
-            worker_pid=$!
-            printf '%s\n' "$worker_pid" > /tmp/lan_autodiscover_worker.pid
+            # 发现循环直接运行在worker进程中，禁止再派生脱离监督的后台run_discovery。
+            run_discovery "$iface"
         else
             [ -n "$worker_pid" ] && kill "$worker_pid" 2>/dev/null
             worker_pid=""
