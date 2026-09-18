@@ -513,6 +513,13 @@ run_discovery() {
     run_dhcp_detect "$iface"
     sync_device_cache
 
+    # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
+    sweep_cycle="$(cfg lan_discovery_sweep_cycle 120)"
+    case "$sweep_cycle" in ''|*[!0-9]*) sweep_cycle=120;; esac
+    [ "$sweep_cycle" -ge 30 ] 2>/dev/null || sweep_cycle=30
+    [ "$sweep_cycle" -le 3600 ] 2>/dev/null || sweep_cycle=3600
+    last_sweep=0
+
     while is_link_up "$iface"; do
         discovery_enabled || {
             runtime_set "lan_discovery_status_state=设备发现未启用"
@@ -524,16 +531,28 @@ run_discovery() {
         [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
         [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
 
-        custom="$(nv lan_discovery_custom)"
-        read_standard_config "$custom"
-        cycle_start="$(date +%s)"
-        if [ "$raw" = "1" ]; then
-            /usr/bin/lan_device_state.sh begin
-            run_arpscan "$iface"
+        now_sec="$(date +%s 2>/dev/null)"
+        case "$now_sec" in ''|*[!0-9]*) now_sec=0;; esac
+        sweep_due=0
+        [ "$last_sweep" = "0" ] && sweep_due=1
+        if [ "$last_sweep" != "0" ] && [ $((now_sec - last_sweep)) -ge "$sweep_cycle" ] 2>/dev/null; then
+            sweep_due=1
         fi
-        run_camdiscover "$iface" "$discover_cycle"
-        if [ "$raw" = "1" ]; then
-            /usr/bin/lan_device_state.sh finish
+
+        if [ "$sweep_due" = "1" ]; then
+            custom="$(nv lan_discovery_custom)"
+            read_standard_config "$custom"
+            cycle_start="$now_sec"
+            log_line "低频主动补漏开始：ARP + 协议探测，周期=$sweep_cycle""s"
+            if [ "$raw" = "1" ]; then
+                /usr/bin/lan_device_state.sh begin
+                run_arpscan "$iface"
+            fi
+            run_camdiscover "$iface" "$discover_cycle"
+            if [ "$raw" = "1" ]; then
+                /usr/bin/lan_device_state.sh finish
+            fi
+            last_sweep="$cycle_start"
         fi
         if ! is_link_up "$iface"; then break; fi
 
@@ -573,6 +592,7 @@ trap cleanup EXIT INT TERM HUP
 [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
 [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
 [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
+[ -n "$(nv lan_discovery_sweep_cycle)" ] || nvram set lan_discovery_sweep_cycle=120
 
 iface="$(cfg lan_discovery_ifname eth2.1)"
 last_iface=""
