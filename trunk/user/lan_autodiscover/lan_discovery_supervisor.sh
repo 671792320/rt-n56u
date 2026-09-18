@@ -41,7 +41,7 @@ kill_matching_processes() {
     done
 }
 
-# Q7 LAN发现配置迁移：4版固定采用“LAN拔出保留临时网段/SNAT”。
+# Q7 LAN发现配置迁移：5版固定采用“LAN拔出保留临时网段/SNAT”，并加入主动补漏周期。
 # 旧版的清理开关不再参与运行时行为，避免拔插事件误删正在使用的访问规则。
 LAN_DISCOVERY_CONFIG_VERSION=5
 migrate_lan_discovery_config() {
