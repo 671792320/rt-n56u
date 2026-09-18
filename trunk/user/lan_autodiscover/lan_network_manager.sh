@@ -50,7 +50,7 @@ time_now() { date '+%H:%M:%S'; }
 log() {
     msg="$(time_now) 【网络管理】$*"
     printf '%s\n' "$msg" >> "$LOG_FILE"
-    logger -t lan-autodiscover "$msg"
+    logger -t lan-autodiscover "【LAN网络】$*"
     runtime_set lan_discovery_status_last "$(time_now)"
 }
 
@@ -170,17 +170,28 @@ apply_target() {
         }
     fi
 
-    # SNAT使用幂等check；规则存在就保持，缺失才自动补回。
-    if ! /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
+    state_file="$(target_state_file "$target_net")"
+    target_was_known=0
+    [ -r "$state_file" ] && target_was_known=1
+
+    # 新目标或临时地址刚恢复时才立即写入SNAT；已知目标不再每个实时数据包都执行iptables检查。
+    if [ "$target_was_known" = "0" ]; then
         if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
             log "SNAT启用失败：$source_net/24 → $target_net/24"
             return 1
         fi
+        log "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
+    else
+        last_seen="$(state_get "$state_file" last_seen)"
+        case "$last_seen" in ''|*[!0-9]*) last_seen=0;; esac
+        now_ts="$(date +%s 2>/dev/null)"
+        case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+        if [ "$now_ts" -le "$last_seen" ] 2>/dev/null || [ $((now_ts - last_seen)) -ge 5 ] 2>/dev/null; then
+            write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
+        fi
     fi
 
-    write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
     runtime_set lan_discovery_status_state "实时发现：目标网段已接管"
-    log "目标网段保持：$source_net/24 → $target_net/24，临时地址=$current_ip"
     update_runtime_targets
     return 0
 }
@@ -214,10 +225,17 @@ process_stream_file() {
                 /usr/bin/lan_device_state.sh proto "$ip" "$field2" >/dev/null 2>&1 || :
                 ;;
             TCPDUMP)
-                /usr/bin/lan_device_state.sh arp "$ip" "$field2" >/dev/null 2>&1 || :
+                # 实时监听只负责发现目标网段；避免每个IPv4数据包都再启动一个Shell状态进程。
                 ;;
         esac
-        apply_target "$net" "$localnet" "realtime-$kind-$(date +%s 2>/dev/null)" || :
+        takeover_file="$(takeover_state_file "$net")"
+        current_ip="$(state_get "$takeover_file" ip)"
+        if [ -z "$current_ip" ] || ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
+            apply_target "$net" "$localnet" "realtime-$kind" || :
+        else
+            state_file="$(target_state_file "$net")"
+            [ -r "$state_file" ] || apply_target "$net" "$localnet" "realtime-$kind" || :
+        fi
     done
     printf '%s\n' "$count" > "$cursor_file"
 }
@@ -345,15 +363,7 @@ check_existing_targets() {
     update_runtime_targets
 }
 
-process_targets() {
-    localnet="$1"
-    process_realtime_events "$localnet"
-    latest_marker="$(latest_completed_cycle)"
-    if [ -n "$latest_marker" ] && ! cycle_seen_before "$latest_marker"; then
-        process_completed_cycle "$localnet" "$latest_marker"
-    fi
-    check_existing_targets "$localnet"
-}
+last_maintenance=0
 
 while :; do
     if ! link_up; then
@@ -368,6 +378,18 @@ while :; do
     localnet="$(network_from_ip "$localip")"
     [ -n "$localnet" ] || { sleep 2; continue; }
 
-    process_targets "$localnet"
+    process_realtime_events "$localnet"
+
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 30 ] 2>/dev/null; then
+        latest_marker="$(latest_completed_cycle)"
+        if [ -n "$latest_marker" ] && ! cycle_seen_before "$latest_marker"; then
+            process_completed_cycle "$localnet" "$latest_marker"
+        fi
+        check_existing_targets "$localnet"
+        last_maintenance="$now_ts"
+    fi
+
     sleep 1
 done
