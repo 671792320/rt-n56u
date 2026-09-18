@@ -258,10 +258,11 @@ TCPDUMP="$(command -v tcpdump 2>/dev/null)"
 [ -n "$TCPDUMP" ] || TCPDUMP="/usr/sbin/tcpdump"
 [ -x "$TCPDUMP" ] || { log "系统没有tcpdump，实时监听未启动"; exit 1; }
 
+# Q7的BusyBox配置关闭了mkfifo，仅保留mknod，因此必须用mknod创建FIFO。
 # tcpdump独立运行并记录PID，避免监督程序停止外层shell后留下孤儿tcpdump。
 rm -f "$STREAM_FIFO"
-if ! mkfifo "$STREAM_FIFO" 2>/dev/null; then
-    log "无法创建实时监听FIFO，监听未启动"
+if ! mknod "$STREAM_FIFO" p 2>/dev/null; then
+    log "无法创建实时监听FIFO（BusyBox未提供mknod或/tmp不可创建），监听未启动"
     exit 1
 fi
 
