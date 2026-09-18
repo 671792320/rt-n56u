@@ -61,6 +61,7 @@ jobs:
           test -f trunk/user/camdiscover/Makefile
           test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
+          test -f trunk/user/camdiscover/lanlisten.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
           test -f trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
           test -f trunk/user/lan_autodiscover/lan_tcpdump_listener.sh
@@ -129,6 +130,7 @@ jobs:
           test -x romfs/usr/bin/lan_tcpdump_listener.sh
           test -x romfs/usr/bin/lan_network_manager.sh
           test -x romfs/usr/bin/lan_snat.sh
+          test -x romfs/usr/bin/lanlisten
           SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
           cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
           rm -f images/ZTE_Q7.trx
