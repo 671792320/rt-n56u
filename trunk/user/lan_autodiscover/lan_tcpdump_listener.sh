@@ -221,15 +221,31 @@ parse_arp() {
 
 parse_ip() {
     line="$1"
-    src="$(printf '%s\n' "$line" | sed -n 's/.* IP \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\.[0-9][0-9]* > .*/\1/p' | head -n 1)"
-    [ -n "$src" ] || src="$(printf '%s\n' "$line" | sed -n 's/.* IPv4 \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\.[0-9][0-9]* > .*/\1/p' | head -n 1)"
-    [ -n "$src" ] || return 0
-    mac="$(printf '%s\n' "$line" | sed -n 's/^.*[[:space:]]\([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f:]*\)[[:space:]]*>.*$/\1/p' | head -n 1)"
-    [ -n "$mac" ] || mac="-"
-    mac="$(normalize_mac "$mac")"
-    [ "$mac" = "-" ] && mac="$(ip neigh show "$src" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}' | tr '[:lower:]' '[:upper:]')"
-    [ -n "$mac" ] || mac="-"
-    emit_event "$src" "$mac" "TCP/IP"
+
+    # 同时提取IPv4源/目的端点，保证实时监听不仅看到“主动发包”的设备，也能看到被访问设备。
+    src="$(printf '%s\n' "$line" | sed -n 's/.* IP \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(\.[0-9][0-9]*\)\? > .*/\1/p')"
+    dst="$(printf '%s\n' "$line" | sed -n 's/.* IP [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\? > \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(\.[0-9][0-9]*\)\?:.*/\2/p')"
+    [ -n "$dst" ] || dst="$(printf '%s\n' "$line" | sed -n 's/.* IP [0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\? > \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(\.[0-9][0-9]*\)\?.*/\2/p')"
+
+    src_mac="$(printf '%s\n' "$line" | sed -n 's/^.*[[:space:]]\([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f:]*\)[[:space:]]*>.*$/\1/p')"
+    dst_mac="$(printf '%s\n' "$line" | sed -n 's/^.*[[:space:]]\([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f:]*\)[[:space:]]*>[[:space:]]*\([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f:]*\).*/\2/p')"
+
+    [ -n "$src_mac" ] || src_mac="-"
+    [ -n "$dst_mac" ] || dst_mac="-"
+    src_mac="$(normalize_mac "$src_mac")"
+    dst_mac="$(normalize_mac "$dst_mac")"
+
+    if [ -n "$src" ]; then
+        [ "$src_mac" = "-" ] && src_mac="$(ip neigh show "$src" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}' | tr '[:lower:]' '[:upper:]')"
+        [ -n "$src_mac" ] || src_mac="-"
+        emit_event "$src" "$src_mac" "TCP/IP"
+    fi
+
+    if [ -n "$dst" ]; then
+        [ "$dst_mac" = "-" ] && dst_mac="$(ip neigh show "$dst" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}' | tr '[:lower:]' '[:upper:]')"
+        [ -n "$dst_mac" ] || dst_mac="-"
+        emit_event "$dst" "$dst_mac" "TCP/IP-DST"
+    fi
 }
 
 [ -e "/sys/class/net/$IFACE" ] || { log "监听接口不存在：$IFACE"; exit 1; }
