@@ -9,6 +9,12 @@
 
 IFACE=eth2.1
 BR_IF=br0
+LOCKDIR=/var/run/lan_network_manager.lock
+
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    logger -t lan-autodiscover "LAN网络模式管理器已经运行"
+    exit 0
+fi
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
@@ -16,6 +22,11 @@ TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
+cleanup() {
+    rmdir "$LOCKDIR" 2>/dev/null
+}
+trap cleanup EXIT INT TERM HUP
+
 ARP_CURSOR_FILE="$RUNTIME_DIR/realtime_arp.cursor"
 PROTO_CURSOR_FILE="$RUNTIME_DIR/realtime_proto.cursor"
 TCPDUMP_CURSOR_FILE="$RUNTIME_DIR/realtime_tcpdump.cursor"
