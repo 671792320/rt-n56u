@@ -13,12 +13,14 @@ EXEC=camdiscover
 DHCP_EXEC=dhcpdetect
 ARP_EXEC=arpscan
 HEALTH_EXEC=lanhealth
+LISTEN_EXEC=lanlisten
 OBJS=camdiscover_q7_v3.o
 DHCP_OBJS=dhcpdetect.o
 ARP_OBJS=arpscan.o
 HEALTH_OBJS=lanhealth.o
+LISTEN_OBJS=lanlisten.o
 
-all: $(EXEC) $(DHCP_EXEC) $(ARP_EXEC) $(HEALTH_EXEC)
+all: $(EXEC) $(DHCP_EXEC) $(ARP_EXEC) $(HEALTH_EXEC) $(LISTEN_EXEC)
 
 $(EXEC): $(OBJS)
 	$(CC) -o $@ $(OBJS)
@@ -36,6 +38,10 @@ $(HEALTH_EXEC): $(HEALTH_OBJS)
 	$(CC) -o $@ $(HEALTH_OBJS)
 	$(STRIP) $@
 
+$(LISTEN_EXEC): $(LISTEN_OBJS)
+	$(CC) -o $@ $(LISTEN_OBJS)
+	$(STRIP) $@
+
 %.o: %.c
 	$(CC) -c $< $(CFLAGS)
 
@@ -44,6 +50,7 @@ romfs:
 	$(ROMFSINST) /usr/bin/$(DHCP_EXEC)
 	$(ROMFSINST) /usr/bin/$(ARP_EXEC)
 	$(ROMFSINST) /usr/bin/$(HEALTH_EXEC)
+	$(ROMFSINST) /usr/bin/$(LISTEN_EXEC)
 
 clean:
-	rm -f $(EXEC) $(OBJS) $(DHCP_EXEC) $(DHCP_OBJS) $(ARP_EXEC) $(ARP_OBJS) $(HEALTH_EXEC) $(HEALTH_OBJS) camdiscover_q7_final.o camdiscover_q7_v2.o
+	rm -f $(EXEC) $(OBJS) $(DHCP_EXEC) $(DHCP_OBJS) $(ARP_EXEC) $(ARP_OBJS) $(HEALTH_EXEC) $(HEALTH_OBJS) $(LISTEN_EXEC) $(LISTEN_OBJS) camdiscover_q7_final.o camdiscover_q7_v2.o
