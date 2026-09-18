@@ -43,7 +43,7 @@ kill_matching_processes() {
 
 # Q7 LAN发现配置迁移：4版固定采用“LAN拔出保留临时网段/SNAT”。
 # 旧版的清理开关不再参与运行时行为，避免拔插事件误删正在使用的访问规则。
-LAN_DISCOVERY_CONFIG_VERSION=4
+LAN_DISCOVERY_CONFIG_VERSION=5
 migrate_lan_discovery_config() {
     current="$(nv lan_discovery_config_version)"
     if [ "$current" != "$LAN_DISCOVERY_CONFIG_VERSION" ]; then
@@ -55,6 +55,7 @@ migrate_lan_discovery_config() {
         [ -n "$(nv lan_discovery_cycle)" ] || nvram set lan_discovery_cycle=10
         [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
         [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
+        [ -n "$(nv lan_discovery_sweep_cycle)" ] || nvram set lan_discovery_sweep_cycle=120
         nvram set lan_discovery_clear_on_unplug=0
         [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
         [ -n "$(nv lan_discovery_onvif)" ] || nvram set lan_discovery_onvif=1
