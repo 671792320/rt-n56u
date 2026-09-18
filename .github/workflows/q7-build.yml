@@ -62,6 +62,11 @@ jobs:
           test -f trunk/user/camdiscover/camdiscover_compat.h
           test -f trunk/user/camdiscover/dhcpdetect.c
           test -f trunk/user/lan_autodiscover/lan_autodiscover.sh
+          test -f trunk/user/lan_autodiscover/lan_discovery_supervisor.sh
+          test -f trunk/user/lan_autodiscover/lan_tcpdump_listener.sh
+          test -f trunk/user/lan_autodiscover/lan_network_manager.sh
+          test -f trunk/user/lan_autodiscover/lan_takeover.sh
+          test -f trunk/user/lan_autodiscover/lan_snat.sh
           test -f trunk/user/www/n56u_ribbon_fixed/Advanced_LANDiscover_Content.asp
           test -f trunk/user/netmgr/netmgr.c
           test -f trunk/user/netmgr/Makefile
@@ -119,6 +124,11 @@ jobs:
           mkdir -p images romfs
           fakeroot ./build_firmware_ci ZTE_Q7
           test -n "$(find images -maxdepth 1 -name '*.trx' -print -quit)"
+          # 关键运行时脚本必须真正进入Q7固件ROMFS，避免WebUI显示“网络管理器不存在”。
+          test -x romfs/usr/bin/lan_discovery_supervisor.sh
+          test -x romfs/usr/bin/lan_tcpdump_listener.sh
+          test -x romfs/usr/bin/lan_network_manager.sh
+          test -x romfs/usr/bin/lan_snat.sh
           SRC=$(find images -maxdepth 1 -name '*.trx' -print -quit)
           cp -f "$SRC" "images/ZTE_Q7_${BUILD_DATE}.trx"
           rm -f images/ZTE_Q7.trx
