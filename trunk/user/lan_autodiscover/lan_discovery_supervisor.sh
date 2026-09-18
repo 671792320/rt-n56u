@@ -131,7 +131,9 @@ start_network_manager() {
     fi
     if [ ! -x /usr/bin/lan_network_manager.sh ]; then
         runtime_set lan_discovery_status_network_manager="程序不存在"
-        echo "$(date '+%H:%M:%S') LAN网络模式管理器不存在" | logger -t lan-supervisor
+        if [ "$(cat "$RUNTIME_DIR/lan_discovery_status_network_manager" 2>/dev/null)" != "程序不存在" ]; then
+            echo "$(date '+%H:%M:%S') LAN网络模式管理器不存在" | logger -t lan-supervisor
+        fi
         return 1
     fi
     echo "$(date '+%H:%M:%S') LAN网络模式管理器启动：$iface" | logger -t lan-supervisor
@@ -181,6 +183,19 @@ stop_tcpdump() {
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
+    fi
+    # 双保险：同时清理监听脚本登记的真实tcpdump子进程，避免旧版孤儿进程继续占CPU。
+    if [ -r "$RUNTIME_DIR/lan_tcpdump_child.pid" ]; then
+        child_pid="$(cat "$RUNTIME_DIR/lan_tcpdump_child.pid" 2>/dev/null)"
+        case "$child_pid" in
+            ''|*[!0-9]*) ;;
+            *)
+                kill "$child_pid" 2>/dev/null
+                sleep 1
+                kill -0 "$child_pid" 2>/dev/null && kill -9 "$child_pid" 2>/dev/null
+                ;;
+        esac
+        rm -f "$RUNTIME_DIR/lan_tcpdump_child.pid"
     fi
     rm -f "$TCPDUMP_PIDFILE"
     runtime_set lan_discovery_status_tcpdump="已停止"
