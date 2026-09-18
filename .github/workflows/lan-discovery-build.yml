@@ -27,7 +27,6 @@ jobs:
       - name: Apply LAN discovery source changes
         run: |
           set -e
-          python3 tools/apply_lan_discovery.py
           python3 tools/fix_lan_compile.py
           chmod +x trunk/user/lan_autodiscover/lan_autodiscover.sh
 
