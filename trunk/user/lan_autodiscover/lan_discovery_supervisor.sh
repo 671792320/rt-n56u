@@ -6,6 +6,7 @@
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 NETMGR_PIDFILE=/tmp/lan_network_manager.pid
 TCPDUMP_PIDFILE=/tmp/lan_tcpdump_listener.pid
+TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
 SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
 WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
@@ -181,7 +182,18 @@ stop_network_manager() {
 
 start_tcpdump() {
     iface="$1"
+
+    # 监听程序启动失败时不要每秒重复拉起，避免失败日志刷屏并产生频繁进程创建。
+    now="$(date +%s 2>/dev/null)"
+    case "$now" in ''|*[!0-9]*) now=0;; esac
+    retry_at="$(cat "$TCPDUMP_RETRY_FILE" 2>/dev/null)"
+    case "$retry_at" in ''|*[!0-9]*) retry_at=0;; esac
+    if [ "$retry_at" -gt 0 ] 2>/dev/null && [ "$now" -lt "$retry_at" ] 2>/dev/null; then
+        return 1
+    fi
+
     if tcpdump_running; then
+        rm -f "$TCPDUMP_RETRY_FILE"
         runtime_set lan_discovery_status_tcpdump="运行中"
         return 0
     fi
@@ -192,7 +204,18 @@ start_tcpdump() {
     fi
     echo "$(date '+%H:%M:%S') LAN实时二层监听启动：$iface" | logger -t lan-supervisor
     /usr/bin/lan_tcpdump_listener.sh "$iface" > /tmp/lan_tcpdump_listener.log 2>&1 &
-    echo "$!" > "$TCPDUMP_PIDFILE"
+    pid="$!"
+    echo "$pid" > "$TCPDUMP_PIDFILE"
+    # 子进程可能立即因环境错误退出；给它一个短暂观察窗口，避免监督程序持续重启失败进程。
+    sleep 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$TCPDUMP_PIDFILE"
+        printf '%s
+' $((now + 5)) > "$TCPDUMP_RETRY_FILE"
+        runtime_set lan_discovery_status_tcpdump="启动失败，5秒后重试"
+        return 1
+    fi
+    rm -f "$TCPDUMP_RETRY_FILE"
     runtime_set lan_discovery_status_tcpdump="运行中"
     return 0
 }
