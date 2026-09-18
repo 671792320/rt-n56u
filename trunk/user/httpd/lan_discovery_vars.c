@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "common.h"
 
@@ -7,9 +8,8 @@
  * Keep LAN discovery settings inside Padavan's normal GetVariables() save
  * path without modifying the large generated variables.c table.
  *
- * The wrapper appends our configuration variables to the native variable
- * table. validate_asp_apply()/validate_cgi() can therefore save them through
- * the same nvram_set() mechanism as every other WebUI parameter.
+ * Runtime state is deliberately kept under /tmp and exposed through EJ;
+ * these values must not be treated as persistent NVRAM configuration.
  */
 
 static struct variable lan_discovery_extra[] = {
@@ -19,6 +19,9 @@ static struct variable lan_discovery_extra[] = {
     {"lan_discovery_dhcp_timeout", "", NULL, FALSE},
     {"lan_discovery_discover_enable", "", NULL, FALSE},
     {"lan_discovery_cycle", "", NULL, FALSE},
+    {"lan_discovery_probe_timeout", "", NULL, FALSE},
+    {"lan_discovery_miss_limit", "", NULL, FALSE},
+    {"lan_discovery_clear_on_unplug", "", NULL, FALSE},
     {"lan_discovery_raw", "", NULL, FALSE},
     {"lan_discovery_onvif", "", NULL, FALSE},
     {"lan_discovery_onvif_port", "", NULL, FALSE},

@@ -468,6 +468,8 @@ if (found_app_mentohust()){
 	menuL2_link.push(mentohust_array[1]);
 } else menuL2_link.push("");
 
+menuL2_link.push("Advanced_LANDiscover_Content.asp");
+
 //Level 1 Menu in Gateway, Router mode
 menuL1_title = new Array("", "<#menu1#>", "", "", "", "<#menu4#>", "<#menu5_8#>", "<#menu5#>");
 menuL1_link = new Array("", "index.asp", "", "", "", "Main_TrafficMonitor_realtime.asp", "Advanced_System_Info.asp", "as.asp");

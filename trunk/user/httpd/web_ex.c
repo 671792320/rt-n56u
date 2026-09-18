@@ -168,6 +168,14 @@ sys_script(char *name)
 			system("echo -n > /tmp/syscmd.log\n");
 		}
 	}
+	else if (strcmp(name, "lan_discovery_clear_log")==0)
+	{
+		FILE *fp;
+		fp = fopen("/etc/storage/lan_discovery.log", "w");
+		if (fp) fclose(fp);
+		nvram_set("lan_discovery_log", "");
+		nvram_set("lan_discovery_status_last", "-");
+	}
 	else if (strcmp(name, "syslog.sh")==0)
 	{
 		;   // to nothing
@@ -440,6 +448,44 @@ ej_nvram_get_x(int eid, webs_t wp, int argc, char **argv)
 	if (ejArgs(argc, argv, "%s %s", &sid, &name) < 2) {
 		websError(wp, 400, "Insufficient args\n");
 		return -1;
+	}
+
+	/* LAN监听运行状态全部来自/tmp；只有配置项继续读取NVRAM。 */
+	if (strcmp(name, "lan_discovery_devices") == 0) {
+		FILE *fp = fopen("/tmp/lan_discovery_devices.txt", "r");
+		int ch;
+		if (!fp) return 0;
+		while ((ch = fgetc(fp)) != EOF) {
+			if (ch < 0 || (ch >= 0x20 && ch != '"' && ch != '&' && ch != '<' && ch != '>'))
+				ret += fprintf(wp, "%c", ch);
+			else
+				ret += fprintf(wp, "&#%d;", ch);
+		}
+		fclose(fp);
+		fflush(wp);
+		return ret;
+	}
+
+	if (strncmp(name, "lan_discovery_status_", 21) == 0 ||
+	    strcmp(name, "lan_discovery_log") == 0 ||
+	    strcmp(name, "lan_discovery_interfaces") == 0) {
+		char path[128];
+		FILE *fp;
+		int ch;
+		snprintf(path, sizeof(path), "/tmp/lan_discovery_runtime/%s", name);
+		fp = fopen(path, "r");
+		if (fp) {
+			while ((ch = fgetc(fp)) != EOF) {
+				if (ch < 0 || (ch >= 0x20 && ch != '"' && ch != '&' && ch != '<' && ch != '>'))
+					ret += fprintf(wp, "%c", ch);
+				else
+					ret += fprintf(wp, "&#%d;", ch);
+			}
+			fclose(fp);
+			fflush(wp);
+			return ret;
+		}
+		return 0;
 	}
 
 	cn = nvram_safe_get(name);
@@ -4056,6 +4102,60 @@ ej_available_disk_names_and_sizes(int eid, webs_t wp, int argc, char **argv)
 }
 #endif
 
+static int
+ej_lan_discovery_devices(int eid, webs_t wp, int argc, char **argv)
+{
+	FILE *fp;
+	int ch;
+
+	/* 已发现设备列表是运行时数据，唯一来源为/tmp文本文件。 */
+	fp = fopen("/tmp/lan_discovery_devices.txt", "r");
+	if (!fp)
+		return 0;
+
+	while ((ch = fgetc(fp)) != EOF)
+		fputc(ch, wp);
+
+	fclose(fp);
+	fflush(wp);
+	return 0;
+}
+
+static int
+ej_lan_discovery_targets(int eid, webs_t wp, int argc, char **argv)
+{
+	FILE *fp;
+	char line[128];
+	int first = 1;
+
+	/* 运行态目标列表只读/tmp；状态文件不存在时回退到旧状态变量，保证WebUI接口不中断。 */
+	fp = fopen("/tmp/lan_discovery_runtime/lan_discovery_targets.state", "r");
+	if (!fp) {
+		const char *fallback = nvram_safe_get("lan_discovery_status_targets");
+		if (fallback && *fallback)
+			websWrite(wp, "%s", fallback);
+		return 0;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		char *p;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		if (line[0] == '\0')
+			continue;
+		p = strchr(line, '|');
+		if (!p || !p[1])
+			continue;
+		if (!first)
+			websWrite(wp, ";");
+		websWrite(wp, "%s", line);
+		first = 0;
+	}
+
+	fclose(fp);
+	return 0;
+}
+
 struct ej_handler ej_handlers[] =
 {
 	{ "nvram_get_x", ej_nvram_get_x},
@@ -4070,6 +4170,8 @@ struct ej_handler ej_handlers[] =
 	{ "nvram_dump", ej_dump},
 	{ "firmware_caps_hook", ej_firmware_caps_hook},
 	{ "json_system_status", ej_system_status_hook},
+	{ "lan_discovery_devices", ej_lan_discovery_devices},
+	{ "lan_discovery_targets", ej_lan_discovery_targets},
 
 	{ "netdev", ej_netdev},
 	{ "bandwidth", ej_bandwidth},

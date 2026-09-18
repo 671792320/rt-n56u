@@ -135,6 +135,9 @@
  #define KERNEL_MIN_FREE_KBYTES		1024
  #define DNS_RELAY_CACHE_MAX		160
  #define LOG_ROTATE_SIZE_MAX		80
+void start_lan_discovery(void);
+void stop_lan_discovery(void);
+
 #endif
 
 //////////////////////////////////////////////////////////
