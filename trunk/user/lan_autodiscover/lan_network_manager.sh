@@ -357,11 +357,11 @@ process_targets() {
 
 while :; do
     if ! link_up; then
-        # LAN拔出只表示“发现暂停”；不撤销任何临时IP、目标状态和SNAT规则。
+        # LAN拔出后直接退出网络管理器，由supervisor按需重新启动。
+        # 这里只停止网络管理进程，绝不撤销已有临时IP、目标状态和SNAT规则。
         runtime_set lan_discovery_status_link "DOWN"
         runtime_set lan_discovery_status_state "LAN拔出：保留现有临时网段/SNAT"
-        sleep 1
-        continue
+        exit 0
     fi
 
     localip="$(local_ip)"
