@@ -200,7 +200,7 @@ start_tcpdump() {
     fi
     if [ ! -x /usr/bin/lan_tcpdump_listener.sh ]; then
         runtime_set lan_discovery_status_tcpdump="程序不存在"
-        echo "$(date '+%H:%M:%S') LAN实时tcpdump监听程序不存在" | logger -t lan-supervisor
+        slog "实时二层监听入口程序不存在"
         return 1
     fi
     slog "实时二层监听启动：接口=$iface"
@@ -369,7 +369,7 @@ while :; do
         last_iface="$iface"
         last_link="-1"
         runtime_set lan_discovery_status_if="$iface"
-        echo "$(date '+%H:%M:%S') LAN监听接口：$iface" | logger -t lan-supervisor
+        slog "监听接口：$iface"
     fi
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
