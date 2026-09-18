@@ -291,6 +291,7 @@ stop_worker() {
     rmdir "$WORKER_LOCKDIR" 2>/dev/null
     runtime_set lan_discovery_status_worker="已停止"
     killall camdiscover 2>/dev/null
+    killall arpscan 2>/dev/null
     killall dhcpdetect 2>/dev/null
     killall lanhealth 2>/dev/null
     rm -f /tmp/lan_discovery_runtime/lanhealth.pid
