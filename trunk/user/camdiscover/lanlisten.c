@@ -158,6 +158,7 @@ static void process_arp(const unsigned char *buf, int len,
                         const char *event_file, time_t now)
 {
     int offset = ETH_HLEN;
+    unsigned short proto;
     const struct arphdr *arp;
     const unsigned char *p;
     unsigned long sender_ip;
@@ -166,7 +167,8 @@ static void process_arp(const unsigned char *buf, int len,
     if (len < ETH_HLEN + (int)sizeof(struct arphdr) + 20)
         return;
 
-    if (ntohs(*(const unsigned short *)(buf + 12)) == ETH_P_8021Q) {
+    memcpy(&proto, buf + 12, sizeof(proto));
+    if (ntohs(proto) == ETH_P_8021Q) {
         offset += 4;
         if (len < offset + (int)sizeof(struct arphdr) + 20)
             return;
@@ -203,7 +205,8 @@ static void process_ipv4(const unsigned char *buf, int len,
         if (len < ETH_HLEN + 4 + 20)
             return;
         offset += 4;
-        if (ntohs(*(const unsigned short *)(buf + 16)) != ETH_P_IP)
+        memcpy(&proto, buf + 16, sizeof(proto));
+        if (ntohs(proto) != ETH_P_IP)
             return;
     } else if (ntohs(eth->h_proto) != ETH_P_IP) {
         return;
