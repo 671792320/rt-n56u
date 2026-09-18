@@ -6,16 +6,16 @@
 PIDFILE=/tmp/lan_autodiscover_worker.pid
 NETMGR_PIDFILE=/tmp/lan_network_manager.pid
 TCPDUMP_PIDFILE=/tmp/lan_tcpdump_listener.pid
-TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
 SUPERVISOR_LOCKDIR=/var/run/lan_discovery_supervisor.lock
 WORKER_LOCKDIR=/var/run/lan_autodiscover.lock
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 RUNTIME_DIR=/tmp/lan_discovery_runtime
+TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
 mkdir -p "$RUNTIME_DIR"
 
 if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
-    echo "$(date '+%H:%M:%S') LAN监督程序已经运行" | logger -t lan-supervisor
+    slog "监督程序已经运行"
     exit 0
 fi
 trap 'rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
@@ -30,6 +30,7 @@ runtime_set() {
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
+slog() { logger -t lan-supervisor "【LAN监督】$*"; }
 
 # 按完整命令行兜底回收旧版/失配PID文件留下的孤儿进程。
 kill_matching_processes() {
@@ -70,7 +71,7 @@ migrate_lan_discovery_config() {
         [ -n "$(nv lan_discovery_custom)" ] || nvram set lan_discovery_custom="# Q7标准探测配置\nonvif|3702|1\nssdp|1900|1\nhik|37020|1\ndahua|37810|1\narp|-|1"
         nvram set lan_discovery_config_version="$LAN_DISCOVERY_CONFIG_VERSION"
         nvram commit
-        echo "$(date '+%H:%M:%S') LAN发现配置迁移完成，版本=$LAN_DISCOVERY_CONFIG_VERSION，LAN拔出保留临时网段/SNAT" | logger -t lan-supervisor
+        slog "发现配置迁移完成：版本=$LAN_DISCOVERY_CONFIG_VERSION，LAN拔出保留临时网段/SNAT"
     fi
 }
 
@@ -145,11 +146,11 @@ start_network_manager() {
     if [ ! -x /usr/bin/lan_network_manager.sh ]; then
         runtime_set lan_discovery_status_network_manager="程序不存在"
         if [ "$(cat "$RUNTIME_DIR/lan_discovery_status_network_manager" 2>/dev/null)" != "程序不存在" ]; then
-            echo "$(date '+%H:%M:%S') LAN网络模式管理器不存在" | logger -t lan-supervisor
+            slog "网络模式管理器不存在"
         fi
         return 1
     fi
-    echo "$(date '+%H:%M:%S') LAN网络模式管理器启动：$iface" | logger -t lan-supervisor
+    slog "网络模式管理器启动：接口=$iface"
     /usr/bin/lan_network_manager.sh > /tmp/lan_network_manager.log 2>&1 &
     echo "$!" > "$NETMGR_PIDFILE"
     runtime_set lan_discovery_status_network_manager="运行中"
@@ -161,7 +162,7 @@ stop_network_manager() {
     if network_manager_running; then
         pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
         was_running=1
-        echo "$(date '+%H:%M:%S') LAN网络模式管理器停止" | logger -t lan-supervisor
+        slog "网络模式管理器停止"
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
@@ -176,7 +177,7 @@ stop_network_manager() {
     # 已建立的目标网段、临时IP和SNAT由目标网段状态机独立保存。
     runtime_set lan_discovery_status_network_manager="已停止"
     if [ "$was_running" = "1" ]; then
-        echo "$(date '+%H:%M:%S') LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT" | logger -t lan-supervisor
+        slog "LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT"
     fi
 }
 
@@ -202,7 +203,7 @@ start_tcpdump() {
         echo "$(date '+%H:%M:%S') LAN实时tcpdump监听程序不存在" | logger -t lan-supervisor
         return 1
     fi
-    echo "$(date '+%H:%M:%S') LAN实时二层监听启动：$iface" | logger -t lan-supervisor
+    slog "实时二层监听启动：接口=$iface"
     /usr/bin/lan_tcpdump_listener.sh "$iface" > /tmp/lan_tcpdump_listener.log 2>&1 &
     pid="$!"
     echo "$pid" > "$TCPDUMP_PIDFILE"
@@ -210,8 +211,7 @@ start_tcpdump() {
     sleep 1
     if ! kill -0 "$pid" 2>/dev/null; then
         rm -f "$TCPDUMP_PIDFILE"
-        printf '%s
-' $((now + 5)) > "$TCPDUMP_RETRY_FILE"
+        printf '%s\n' $((now + 5)) > "$TCPDUMP_RETRY_FILE"
         runtime_set lan_discovery_status_tcpdump="启动失败，5秒后重试"
         return 1
     fi
@@ -223,7 +223,7 @@ start_tcpdump() {
 stop_tcpdump() {
     if tcpdump_running; then
         pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null)"
-        echo "$(date '+%H:%M:%S') LAN实时二层监听停止" | logger -t lan-supervisor
+        slog "实时二层监听停止"
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
@@ -244,7 +244,7 @@ stop_tcpdump() {
     rm -f "$TCPDUMP_PIDFILE"
     # 兼容已经存在的旧版孤儿监听脚本和tcpdump。
     kill_matching_processes "/usr/bin/lan_tcpdump_listener.sh"
-    kill_matching_processes "/usr/sbin/tcpdump -l -n -e -i eth2.1"
+    kill_matching_processes "/usr/bin/lanlisten"
     runtime_set lan_discovery_status_tcpdump="已停止"
 }
 
@@ -319,7 +319,7 @@ start_worker() {
         runtime_set lan_discovery_status_worker="程序不存在"
         return 1
     fi
-    echo "$(date '+%H:%M:%S') LAN监听启动发现工作进程：$iface" | logger -t lan-supervisor
+    slog "发现工作进程启动：接口=$iface"
     /usr/bin/lan_autodiscover.sh > /tmp/lan_autodiscover_worker.log 2>&1 &
     echo "$!" > "$PIDFILE"
     runtime_set lan_discovery_status_worker="运行中"
@@ -331,7 +331,7 @@ stop_worker() {
     if worker_running; then
         pid="$(cat "$PIDFILE" 2>/dev/null)"
         was_running=1
-        echo "$(date '+%H:%M:%S') LAN监听停止发现工作进程" | logger -t lan-supervisor
+        slog "发现工作进程停止"
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
@@ -376,7 +376,7 @@ while :; do
         last_link="-1"
         if [ "$enable" = "1" ]; then
             runtime_set lan_discovery_status_enable="已启用"
-            echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
+            slog "LAN监听已启用"
         fi
     fi
 
@@ -402,7 +402,7 @@ while :; do
         if [ "$link" = "1" ]; then
             runtime_set lan_discovery_status_link="UP"
             runtime_set lan_discovery_status_state="DHCP检测"
-            echo "$(date '+%H:%M:%S') LAN口已插入：$iface" | logger -t lan-supervisor
+            slog "LAN口已插入：接口=$iface"
             # 网络管理器、实时二层监听和周期主动发现同时工作。
             start_network_manager "$iface"
             start_tcpdump "$iface"
@@ -411,7 +411,7 @@ while :; do
             runtime_set lan_discovery_status_link="DOWN"
             runtime_set lan_discovery_status_state="LAN拔出：保留现有临时网段/SNAT"
             runtime_set lan_discovery_status_dhcp="未检测"
-            echo "$(date '+%H:%M:%S') LAN口已拔出：暂停发现但保留现有规则" | logger -t lan-supervisor
+            slog "LAN口已拔出：暂停发现，保留现有临时网段/SNAT"
             stop_worker
             stop_tcpdump
             stop_network_manager
