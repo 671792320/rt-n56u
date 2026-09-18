@@ -68,7 +68,7 @@ log_line() {
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
     runtime_set "lan_discovery_log=$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
     runtime_set "lan_discovery_status_last=$(now)"
-    logger -t lan-autodiscover "$(sanitize_text "$*")"
+    logger -t lan-autodiscover "【LAN发现】$(sanitize_text "$*")"
 }
 
 iface_ipv4() {
