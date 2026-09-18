@@ -16,6 +16,8 @@ SEEN_FILE="$RUNTIME_DIR/tcpdump_seen.txt"
 LOG_FILE=/tmp/lan_discovery.log
 LOGTAG=lan-autodiscover
 COOLDOWN=10
+# 仍然捕获全部IPv4；只缩短抓包快照，避免视频/大报文把不必要的载荷复制到用户态。
+TCPDUMP_SNAPLEN=96
 BROADCAST_THRESHOLD="$(nvram get lan_discovery_broadcast_threshold 2>/dev/null)"
 LOOP_THRESHOLD="$(nvram get lan_discovery_loop_threshold 2>/dev/null)"
 case "$BROADCAST_THRESHOLD" in ''|*[!0-9]*) BROADCAST_THRESHOLD=1000;; esac
@@ -247,7 +249,7 @@ if ! mkfifo "$STREAM_FIFO" 2>/dev/null; then
     exit 1
 fi
 
-"$TCPDUMP" -l -n -e -i "$IFACE" 'arp[6:2] = 2 or ip' 2>/dev/null > "$STREAM_FIFO" &
+"$TCPDUMP" -l -n -e -s "$TCPDUMP_SNAPLEN" -q -i "$IFACE" 'arp[6:2] = 2 or ip' 2>/dev/null > "$STREAM_FIFO" &
 TCPDUMP_PID=$!
 printf '%s\n' "$TCPDUMP_PID" > "$TCPDUMP_PIDFILE"
 
