@@ -7,6 +7,10 @@
 
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 IFACE="${1:-eth2.1}"
+LOCKDIR=/var/run/lan_tcpdump_listener.lock
+STREAM_FIFO="$RUNTIME_DIR/lan_tcpdump_stream.fifo"
+TCPDUMP_PIDFILE="$RUNTIME_DIR/lan_tcpdump_child.pid"
+TCPDUMP_PID=""
 EVENT_FILE="$RUNTIME_DIR/tcpdump_discovery_events.txt"
 SEEN_FILE="$RUNTIME_DIR/tcpdump_seen.txt"
 LOG_FILE=/tmp/lan_discovery.log
@@ -20,6 +24,22 @@ case "$LOOP_THRESHOLD" in ''|*[!0-9]*) LOOP_THRESHOLD=10;; esac
 [ "$LOOP_THRESHOLD" -ge 1 ] 2>/dev/null || LOOP_THRESHOLD=1
 
 mkdir -p "$RUNTIME_DIR"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    logger -t lan-autodiscover "LAN实时二层监听程序已经运行"
+    exit 0
+fi
+
+cleanup() {
+    if [ -n "$TCPDUMP_PID" ]; then
+        kill "$TCPDUMP_PID" 2>/dev/null
+        sleep 1
+        kill -0 "$TCPDUMP_PID" 2>/dev/null && kill -9 "$TCPDUMP_PID" 2>/dev/null
+    fi
+    rm -f "$TCPDUMP_PIDFILE" "$STREAM_FIFO"
+    rmdir "$LOCKDIR" 2>/dev/null
+}
+trap cleanup EXIT INT TERM HUP
+
 touch "$EVENT_FILE" "$SEEN_FILE"
 
 LOCAL_MAC="$(cat /sys/class/net/br0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')"
@@ -220,14 +240,23 @@ TCPDUMP="$(command -v tcpdump 2>/dev/null)"
 [ -n "$TCPDUMP" ] || TCPDUMP="/usr/sbin/tcpdump"
 [ -x "$TCPDUMP" ] || { log "系统没有tcpdump，实时监听未启动"; exit 1; }
 
-# tcpdump持续监听；只捕获ARP回复和IPv4，避免把Q7自己的ARP请求作为设备发现。
-"$TCPDUMP" -l -n -e -i "$IFACE" 'arp[6:2] = 2 or ip' 2>/dev/null |
+# tcpdump独立运行并记录PID，避免监督程序停止外层shell后留下孤儿tcpdump。
+rm -f "$STREAM_FIFO"
+if ! mkfifo "$STREAM_FIFO" 2>/dev/null; then
+    log "无法创建实时监听FIFO，监听未启动"
+    exit 1
+fi
+
+"$TCPDUMP" -l -n -e -i "$IFACE" 'arp[6:2] = 2 or ip' 2>/dev/null > "$STREAM_FIFO" &
+TCPDUMP_PID=$!
+printf '%s\n' "$TCPDUMP_PID" > "$TCPDUMP_PIDFILE"
+
 while IFS= read -r line; do
     count_health_packet "$line"
     case "$line" in
         *ARP*) parse_arp "$line";;
         *" IP "*|*" IPv4 "*) parse_ip "$line";;
     esac
-done
+done < "$STREAM_FIFO"
 
 exit 0
