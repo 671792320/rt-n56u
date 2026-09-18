@@ -156,18 +156,27 @@ start_network_manager() {
 }
 
 stop_network_manager() {
+    was_running=0
     if network_manager_running; then
         pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
+        was_running=1
         echo "$(date '+%H:%M:%S') LAN网络模式管理器停止" | logger -t lan-supervisor
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
     rm -f "$NETMGR_PIDFILE"
+
+    # 无论PID文件是否存在，都清理旧版/失配PID留下的网络管理器孤儿进程。
+    # 只结束管理器本身，不调用SNAT down，不删除已经建立的临时IP。
+    kill_matching_processes "/usr/bin/lan_network_manager.sh"
+
     # LAN拔出只暂停网络管理器，绝不调用lan_snat.sh down或lan_takeover.sh -r。
     # 已建立的目标网段、临时IP和SNAT由目标网段状态机独立保存。
     runtime_set lan_discovery_status_network_manager="已停止"
-    echo "$(date '+%H:%M:%S') LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT" | logger -t lan-supervisor
+    if [ "$was_running" = "1" ]; then
+        echo "$(date '+%H:%M:%S') LAN拔出：停止网络管理器，保留全部临时网段、临时IP和SNAT" | logger -t lan-supervisor
+    fi
 }
 
 start_tcpdump() {
