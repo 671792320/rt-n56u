@@ -30,6 +30,17 @@ runtime_set() {
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 
+# 按完整命令行兜底回收旧版/失配PID文件留下的孤儿进程。
+kill_matching_processes() {
+    pattern="$1"
+    for pid in $(ps 2>/dev/null | awk -v p="$pattern" 'index($0,p) && $1 ~ /^[0-9]+$/ {print $1}'); do
+        case "$pid" in
+            ''|1|$) ;;
+            *) kill "$pid" 2>/dev/null ;;
+        esac
+    done
+}
+
 # Q7 LAN发现配置迁移：4版固定采用“LAN拔出保留临时网段/SNAT”。
 # 旧版的清理开关不再参与运行时行为，避免拔插事件误删正在使用的访问规则。
 LAN_DISCOVERY_CONFIG_VERSION=4
@@ -198,6 +209,9 @@ stop_tcpdump() {
         rm -f "$RUNTIME_DIR/lan_tcpdump_child.pid"
     fi
     rm -f "$TCPDUMP_PIDFILE"
+    # 兼容已经存在的旧版孤儿监听脚本和tcpdump。
+    kill_matching_processes "/usr/bin/lan_tcpdump_listener.sh"
+    kill_matching_processes "/usr/sbin/tcpdump -l -n -e -i eth2.1"
     runtime_set lan_discovery_status_tcpdump="已停止"
 }
 
@@ -280,20 +294,26 @@ start_worker() {
 }
 
 stop_worker() {
+    was_running=0
     if worker_running; then
         pid="$(cat "$PIDFILE" 2>/dev/null)"
+        was_running=1
         echo "$(date '+%H:%M:%S') LAN监听停止发现工作进程" | logger -t lan-supervisor
         kill "$pid" 2>/dev/null
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; fi
     fi
+    # 无论PID文件是否存在，都清理已知的Q7 LAN发现脚本实例。
+    if [ "$was_running" = "1" ] || [ -d "$WORKER_LOCKDIR" ]; then
+        kill_matching_processes "/usr/bin/lan_autodiscover.sh"
+        killall camdiscover 2>/dev/null
+        killall arpscan 2>/dev/null
+        killall dhcpdetect 2>/dev/null
+        killall lanhealth 2>/dev/null
+    fi
     rm -f "$PIDFILE"
     rmdir "$WORKER_LOCKDIR" 2>/dev/null
     runtime_set lan_discovery_status_worker="已停止"
-    killall camdiscover 2>/dev/null
-    killall arpscan 2>/dev/null
-    killall dhcpdetect 2>/dev/null
-    killall lanhealth 2>/dev/null
     rm -f /tmp/lan_discovery_runtime/lanhealth.pid
     runtime_set lan_discovery_status_health="未监视"
     runtime_set lan_discovery_status_broadcast="0"
@@ -324,15 +344,19 @@ while :; do
         if [ "$enable" = "1" ]; then
             runtime_set lan_discovery_status_enable="已启用"
             echo "$(date '+%H:%M:%S') LAN监听已启用" | logger -t lan-supervisor
-        else
-            runtime_set lan_discovery_status_enable="已禁用"
-            echo "$(date '+%H:%M:%S') LAN监听已禁用，仅停止发现程序，不关闭LAN接口" | logger -t lan-supervisor
-            stop_worker
-            stop_tcpdump
-            stop_network_manager
         fi
     fi
-    if [ "$enable" != "1" ]; then sleep 1; continue; fi
+
+    if [ "$enable" != "1" ]; then
+        runtime_set lan_discovery_status_enable="已禁用"
+        runtime_set lan_discovery_status_state="LAN监听已禁用"
+        # 禁用状态下每轮都执行兜底清理，防止旧版PID失配或孤儿进程残留。
+        stop_worker
+        stop_tcpdump
+        stop_network_manager
+        sleep 1
+        continue
+    fi
 
     if [ -e "/sys/class/net/$iface" ]; then
         if is_link_up "$iface"; then link=1; else link=0; fi
