@@ -173,6 +173,14 @@ if [ "$1" = "up" ]; then
     } > "$STATE_FILE"
     log "SNAT已启用：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
 else
-    log "SNAT规则检查并补齐：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+    missing=0
+    rule_exists filter FORWARD -i br0 -o br0 -s "$LAN_NET/24" -d "$TARGET_NET/24" -j ACCEPT || missing=1
+    rule_exists filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$LAN_NET/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || missing=1
+    rule_exists nat POSTROUTING -s "$LAN_NET/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$TARGET_IP" || missing=1
+    if [ "$missing" = "1" ]; then
+        log "检测到SNAT规则缺失，正在补齐：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+        apply_rules "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || exit 1
+        log "SNAT规则已补齐：$LAN_NET/24 -> $TARGET_NET/24，源地址=$TARGET_IP"
+    fi
 fi
 exit 0
