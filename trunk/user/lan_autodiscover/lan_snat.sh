@@ -26,9 +26,24 @@ find_iptables() {
 
 IPTABLES="$(find_iptables 2>/dev/null)"
 
+beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_snat"
+mkdir -p "$LOG_DEDUPE_DIR"
+
 log() {
-    logger -t "$LOGTAG" "[snat] $*"
-    printf '%s\n' "[snat] $*"
+    plain="$*"
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    last_ts="$(cat "$LOG_DEDUPE_DIR/ts" 2>/dev/null)"
+    case "$last_ts" in ''|*[!0-9]*) last_ts=0;; esac
+    last_msg="$(cat "$LOG_DEDUPE_DIR/msg" 2>/dev/null)"
+    if [ "$last_msg" = "$plain" ] && [ "$now_ts" -ge "$last_ts" ] 2>/dev/null && [ $((now_ts - last_ts)) -lt 5 ] 2>/dev/null; then
+        return 0
+    fi
+    printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
+    printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
+    logger -t "$LOGTAG" "[北京时间 $(beijing_now)] [snat] $plain"
+    printf '%s\n' "[北京时间 $(beijing_now)] [snat] $plain"
 }
 
 acquire_lock() {
@@ -36,7 +51,6 @@ acquire_lock() {
     while ! mkdir "$LOCK_DIR" 2>/dev/null; do
         n=$((n + 1))
         [ "$n" -ge 10 ] && {
-            log "SNAT操作等待锁超时，跳过本轮，避免并发修改iptables"
             return 1
         }
         sleep 1
@@ -123,7 +137,7 @@ case "$1" in
             rm -f "$STATE_FILE"
             exit 0
         fi
-        acquire_lock || exit 0
+        acquire_lock || exit 1
         cleanup
         exit 0
         ;;
@@ -141,7 +155,7 @@ esac
 check_args "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || exit 1
 [ -n "$IPTABLES" ] || { log "iptables不存在，无法启用SNAT"; exit 1; }
 
-acquire_lock || exit 0
+acquire_lock || exit 1
 
 if [ "$1" = "up" ]; then
     # 只有目标网段、临时源地址或本地网段真正变化时才清理旧规则。
