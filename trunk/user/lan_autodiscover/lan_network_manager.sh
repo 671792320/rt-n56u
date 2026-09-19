@@ -86,13 +86,26 @@ runtime_set() {
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"
 }
 
-time_now() { date '+%H:%M:%S'; }
+beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_network_manager"
+mkdir -p "$LOG_DEDUPE_DIR"
 
 log() {
-    msg="$(time_now) 【网络管理】$*"
+    plain="$*"
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    last_ts="$(cat "$LOG_DEDUPE_DIR/ts" 2>/dev/null)"
+    case "$last_ts" in ''|*[!0-9]*) last_ts=0;; esac
+    last_msg="$(cat "$LOG_DEDUPE_DIR/msg" 2>/dev/null)"
+    if [ "$last_msg" = "$plain" ] && [ "$now_ts" -ge "$last_ts" ] 2>/dev/null && [ $((now_ts - last_ts)) -lt 5 ] 2>/dev/null; then
+        return 0
+    fi
+    printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
+    printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
+    msg="$(beijing_now) 【网络管理】$plain"
     printf '%s\n' "$msg" >> "$LOG_FILE"
-    logger -t lan-autodiscover "【LAN网络】$*"
-    runtime_set lan_discovery_status_last "$(time_now)"
+    logger -t lan-autodiscover "[北京时间 $(beijing_now)] 【LAN网络】$plain"
+    runtime_set lan_discovery_status_last "$(beijing_now)"
 }
 
 link_up() {
