@@ -153,7 +153,7 @@ write_target_state() {
 }
 
 update_runtime_targets() {
-    tmp="$RUNTIME_DIR/.lan_discovery_targets.tmp.$"
+    tmp="$RUNTIME_DIR/.manager_targets.tmp"
     : > "$tmp"
     for f in "$RUNTIME_DIR"/lan_takeover_*.state; do
         [ -r "$f" ] || continue
