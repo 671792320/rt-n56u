@@ -20,7 +20,7 @@ if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
     case "$old_pid" in
         ''|*[!0-9]*) old_pid="";;
     esac
-    if [ -n "$old_pid" ] && [ "$old_pid" != "$" ] && kill -0 "$old_pid" 2>/dev/null && [ -r "/proc/$old_pid/cmdline" ]; then
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null && [ -r "/proc/$old_pid/cmdline" ]; then
         cmdline="$(tr '\\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)"
         case "$cmdline" in
             *"/usr/bin/lan_discovery_supervisor.sh"*) exit 0;;
@@ -30,7 +30,8 @@ if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
     rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || exit 0
     mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || exit 0
 fi
-printf '%s\n' "$" > "$SUPERVISOR_LOCKDIR/pid"
+supervisor_pid="$(ps 2>/dev/null | awk '$0 ~ /lan_discovery_supervisor.sh/ && $1 ~ /^[0-9]+$/ {print $1; exit}')"
+printf '%s\n' "$supervisor_pid" > "$SUPERVISOR_LOCKDIR/pid"
 trap 'rm -f "$SUPERVISOR_LOCKDIR/pid" 2>/dev/null; rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 nv() { nvram get "$1" 2>/dev/null; }
