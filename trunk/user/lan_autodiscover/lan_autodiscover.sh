@@ -151,16 +151,6 @@ is_link_up() {
     return 1
 }
 
-set_link_status() {
-    iface="$1"
-    link="$2"
-    runtime_set "lan_discovery_status_if=$iface"
-    runtime_set "lan_discovery_status_role=LAN"
-    runtime_set "lan_discovery_status_ip=$(iface_ipv4 "$iface")"
-    runtime_set "lan_discovery_status_mac=$(iface_mac "$iface")"
-    runtime_set "lan_discovery_status_link=$link"
-}
-
 start_health() {
     iface="$1"
     [ -x /usr/bin/lanhealth ] || { runtime_set "lan_discovery_status_health=检测程序不存在"; return 0; }
@@ -478,6 +468,8 @@ run_discovery() {
     fi
 
     # 目标网段属于本次开机周期的持久状态。
+    /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
+
     # Q7自身LAN网段不属于目标网段，不再写入DEVICE_DB，也不参与主动ARP扫描。
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
@@ -582,7 +574,6 @@ while :; do
 
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
-        runtime_set "lan_discovery_status_if=$iface"
         log_line 1 "检测接口切换为 $iface"
     fi
 
@@ -593,8 +584,6 @@ while :; do
     }
 
     if is_link_up "$iface"; then link="UP"; state=1; else link="DOWN"; state=0; fi
-    set_link_status "$iface" "$link"
-
     if [ "$state" != "$last_state" ]; then
         last_state="$state"
         if [ "$state" = "1" ]; then
