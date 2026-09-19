@@ -92,6 +92,14 @@ remove_one() {
         rule_del_all filter FORWARD -i br0 -o br0 -s "$target_net/24" -d "$lan_net/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         log "手动删除SNAT：$lan_net/24 -> $target_net/24，临时地址=$target_ip"
     fi
+
+    # 手动删除必须同时释放目标锁定状态和临时地址，
+    # 否则后续重新发现同一网段时会被旧状态永久拦截。
+    target_key="$(state_key "$target_net")"
+    rm -f "$RUNTIME_DIR/lan_target_state_${target_key}.state"
+    if [ -x /usr/bin/lan_takeover.sh ]; then
+        /usr/bin/lan_takeover.sh -r "$target_net" >/dev/null 2>&1 || :
+    fi
     rm -f "$state"
 }
 remove_all() {
