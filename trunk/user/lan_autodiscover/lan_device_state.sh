@@ -210,6 +210,13 @@ append_subnet() {
 }
 
 case "$1" in
+record)
+    line="$2"
+    acquire_db_lock || exit 0
+    upsert_device_record "$line"
+    release_db_lock
+    ;;
+
 subnet)
     subnet="$2"
     [ -n "$subnet" ] || exit 0
