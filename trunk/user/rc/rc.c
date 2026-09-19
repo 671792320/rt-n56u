@@ -940,6 +940,10 @@ init_router(void)
 	notify_leds_detect_link();
 
 	start_rwfs_optware();
+
+	/* Q7 LAN发现监督器：基础网络和系统服务就绪后统一启动。 */
+	start_lan_discovery();
+
 #if defined(APP_NAPT66)
 	start_napt66();
 #endif
@@ -961,6 +965,7 @@ shutdown_router(int level)
 	int is_ap_mode = get_ap_mode();
 	const char *script_name = SCRIPT_SHUTDOWN;
 
+	stop_lan_discovery();
 	stop_misc();
 
 	if (level < 2)
