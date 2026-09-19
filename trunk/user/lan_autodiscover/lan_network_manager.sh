@@ -75,7 +75,7 @@ mkdir -p "$RUNTIME_DIR"
 runtime_set() {
     key="$1"
     value="$2"
-    tmp="$RUNTIME_DIR/.$key.tmp.$"
+    tmp="$RUNTIME_DIR/.manager_$key.tmp"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"
 }
 
