@@ -195,7 +195,6 @@ static void process_ipv4(const unsigned char *buf, int len,
     const struct ethhdr *eth;
     unsigned short proto;
     unsigned long src;
-    unsigned long dst;
     (void)event_file;
 
     if (len < ETH_HLEN + 20)
@@ -229,7 +228,6 @@ static void process_ipv4(const unsigned char *buf, int len,
      * 公网地址误认为LAN目标网段，进而触发错误SNAT。
      */
     emit_event("TCP/IP", src, eth->h_source, now);
-    (void)dst;
 }
 
 int main(int argc, char **argv)
