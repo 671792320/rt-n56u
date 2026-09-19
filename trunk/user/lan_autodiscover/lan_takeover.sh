@@ -10,6 +10,13 @@ LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"
 runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.takeover_${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
 beijing_now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
 log() {
+    level=2
+    case "$1" in
+        0|1|2|3) level="$1"; shift;;
+    esac
+    current="$(nvram get lan_discovery_log_level 2>/dev/null)"
+    case "$current" in 0|1|2|3) ;; *) current=1;; esac
+    [ "$current" -ge "$level" ] 2>/dev/null || return 0
     msg="$(beijing_now) 【临时地址】$*"
     logger -t "$LOGTAG" "$msg"
     printf '%s\n' "$msg"
@@ -27,7 +34,7 @@ remove_one() {
         old_ip="$(sed -n 's/^ip=//p' "$state_file" | head -n 1)"
         if valid_ip "$old_ip" && [ "$old_ip" != "0.0.0.0" ] && [ -n "$old_iface" ]; then
             ip addr del "$old_ip/24" dev "$old_iface" 2>/dev/null || :
-            log "已撤销：接口=$old_iface 地址=$old_ip/24 网段=${network}/24"
+            log 2 "已撤销：接口=$old_iface 地址=$old_ip/24 网段=${network}/24"
         fi
     fi
     rm -f "$state_file"
@@ -129,7 +136,7 @@ reuse_existing() {
         runtime_set lan_discovery_status_target_network "$NETWORK/24"
         runtime_set lan_discovery_status_target_ip "$old_ip"
         runtime_set lan_discovery_status_target_iface "$BR_IF"
-        log "复用成功：接口=$BR_IF 地址=$old_ip/24 目标网段=${NETWORK}/24"
+        log 2 "复用成功：接口=$BR_IF 地址=$old_ip/24 目标网段=${NETWORK}/24"
         return 0
     fi
     return 1
@@ -140,7 +147,7 @@ NETWORK_RAW="${2:-}"
 mkdir -p "$RUNTIME_DIR"
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    log "已有临时IP分配事务正在执行，本轮跳过，防止重复占用同一地址"
+    log 1 "已有临时IP分配事务正在执行，本轮跳过，防止重复占用同一地址"
     exit 1
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || :' EXIT INT TERM
@@ -160,12 +167,12 @@ fi
 
 case "$IFACE" in
     eth2.1|br0) ;;
-    *) log "参数错误：不支持的LAN接口=$IFACE"; exit 1;;
+    *) log 1 "参数错误：不支持的LAN接口=$IFACE"; exit 1;;
 esac
 
 NETWORK="$(normalize_network "$NETWORK_RAW")"
 if [ -z "$NETWORK" ] || [ "$NETWORK" = "0.0.0.0" ]; then
-    log "参数错误：无效目标网段=$NETWORK_RAW"
+    log 1 "参数错误：无效目标网段=$NETWORK_RAW"
     exit 1
 fi
 
@@ -185,7 +192,7 @@ FREE_IP="$(find_free_ip)"
 # 真正写入前再次确认当前运行时地址列表没有抢先占用候选地址。
 [ -n "$FREE_IP" ] && ! is_used "$FREE_IP" || FREE_IP=""
 if [ -z "$FREE_IP" ] || [ "$FREE_IP" = "0.0.0.0" ]; then
-    log "未找到可用临时地址：目标网段=${NETWORK}/24"
+    log 1 "未找到可用临时地址：目标网段=${NETWORK}/24"
     exit 1
 fi
 
@@ -193,7 +200,7 @@ if ip addr add "$FREE_IP/24" dev "$BR_IF" 2>/dev/null; then
     # 地址已加入本机后立即再看一次内核地址表，防止状态文件和实际状态不一致。
     if ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $FREE_IP/24"; then
         ip addr del "$FREE_IP/24" dev "$BR_IF" 2>/dev/null || :
-        log "临时地址加入后校验失败：接口=$BR_IF 地址=$FREE_IP/24"
+        log 1 "临时地址加入后校验失败：接口=$BR_IF 地址=$FREE_IP/24"
         exit 1
     fi
     tmp_state="$STATE_FILE.takeover.tmp"
@@ -206,9 +213,9 @@ if ip addr add "$FREE_IP/24" dev "$BR_IF" 2>/dev/null; then
     runtime_set lan_discovery_status_target_network "$NETWORK/24"
     runtime_set lan_discovery_status_target_ip "$FREE_IP"
     runtime_set lan_discovery_status_target_iface "$BR_IF"
-    log "接管成功：接口=$BR_IF 地址=$FREE_IP/24 目标网段=${NETWORK}/24"
+    log 1 "接管成功：接口=$BR_IF 地址=$FREE_IP/24 目标网段=${NETWORK}/24"
     exit 0
 fi
 
-log "添加失败：接口=$BR_IF 地址=$FREE_IP/24"
+log 1 "添加失败：接口=$BR_IF 地址=$FREE_IP/24"
 exit 1
