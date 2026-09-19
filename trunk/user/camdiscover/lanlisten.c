@@ -193,6 +193,7 @@ static void process_ipv4(const unsigned char *buf, int len,
     int ihl;
     const struct iphdr *ip;
     const struct ethhdr *eth;
+    unsigned short proto;
     unsigned long src;
     unsigned long dst;
     (void)event_file;
