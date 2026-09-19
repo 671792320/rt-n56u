@@ -196,7 +196,7 @@ if ip addr add "$FREE_IP/24" dev "$BR_IF" 2>/dev/null; then
         log "临时地址加入后校验失败：接口=$BR_IF 地址=$FREE_IP/24"
         exit 1
     fi
-    tmp_state="$STATE_FILE.tmp.$$"
+    tmp_state="$STATE_FILE.takeover.tmp"
     {
         printf 'iface=%s\n' "$BR_IF"
         printf 'ip=%s\n' "$FREE_IP"
