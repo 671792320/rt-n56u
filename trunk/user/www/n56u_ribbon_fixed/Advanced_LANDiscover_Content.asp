@@ -542,11 +542,16 @@ function initial(){
 <td>MAC</td><td id="status_mac">-</td>
 </tr>
 <tr>
-<td>广播速率</td><td id="status_broadcast">0/s</td>
-<td>MAC回流</td><td id="status_loop">0/s</td>
+<td title="每秒检测到的广播报文数量">广播速率</td><td id="status_broadcast">0/s</td>
+<td title="每秒检测到疑似二层环路回流报文的数量">MAC回流</td><td id="status_loop">0/s</td>
 <td colspan="4">红色文字表示健康状态异常</td>
 </tr>
 </table>
+<div class="note" style="margin:4px 0 10px">
+<b>广播速率：</b>表示LAN口每秒检测到多少个广播报文。短时间有变化属于正常网络活动；如果长期明显偏高，可能存在广播风暴或异常设备。
+&nbsp;&nbsp;
+<b>MAC回流：</b>表示检测到疑似二层环路回流的报文速率，即发出的网络帧又从LAN口绕回来。正常应长期为 <b>0/s</b>；持续出现非0值时，应检查网线、交换机或是否形成网络环路。
+</div>
 
 <h4 class="section-head">发现统计</h4>
 <table class="table table-bordered table-condensed summary-table">
