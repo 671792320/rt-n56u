@@ -1,15 +1,14 @@
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <stdlib.h>
 
 /*
- * Start the persistent LAN discovery supervisor once during real system init.
- * The supervisor itself remains alive regardless of the WebUI enable switch.
- * lan_discovery_enable only controls whether the discovery worker is started,
- * so disabling discovery never disables LAN link/IP event monitoring.
+ * Q7 LAN发现监督器按Padavan正常启动流程启动：
+ * init_router()在系统基础服务、LAN和日志等组件就绪后调用start_lan_discovery()。
+ * 不使用constructor，避免在rc进程装载阶段抢跑网络初始化。
  */
-static void __attribute__((constructor)) lan_discovery_constructor(void)
+void
+start_lan_discovery(void)
 {
 	pid_t pid;
 
@@ -21,14 +20,19 @@ static void __attribute__((constructor)) lan_discovery_constructor(void)
 		return;
 
 	if (pid == 0) {
-		pid_t child;
 		setsid();
-		sleep(8);
-		child = fork();
-		if (child == 0) {
-			execl("/usr/bin/lan_discovery_supervisor.sh", "lan_discovery_supervisor.sh", (char *)NULL);
-			_exit(127);
-		}
-		_exit(child < 0 ? 126 : 0);
+		execl("/usr/bin/lan_discovery_supervisor.sh",
+		      "lan_discovery_supervisor.sh", (char *)NULL);
+		_exit(127);
 	}
+}
+
+void
+stop_lan_discovery(void)
+{
+	system("killall lan_discovery_supervisor.sh 2>/dev/null");
+	system("killall lan_network_manager.sh 2>/dev/null");
+	system("killall lan_autodiscover.sh 2>/dev/null");
+	system("killall lan_tcpdump_listener.sh 2>/dev/null");
+	system("killall lanlisten 2>/dev/null");
 }
