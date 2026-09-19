@@ -24,7 +24,7 @@ touch "$DEVICE_DB" "$LOG_FILE"
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
-now() { date '+%H:%M:%S'; }
+now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
 
 # LAN总开关与设备发现开关必须同时开启，避免子循环绕过主开关继续运行。
 discovery_enabled() {
@@ -57,18 +57,28 @@ sanitize_mac() {
     esac
 }
 
+LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_autodiscover"
+mkdir -p "$LOG_DEDUPE_DIR"
+
 log_line() {
-    line="$(sanitize_text "$(now) $*" | sed 's/\\//g')"
-    last="$(tail -n 1 "$LOG_FILE" 2>/dev/null)"
-    if [ "$last" = "$line" ]; then
+    plain="$(sanitize_text "$*" | sed 's/\\//g')"
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    last_ts="$(cat "$LOG_DEDUPE_DIR/ts" 2>/dev/null)"
+    case "$last_ts" in ''|*[!0-9]*) last_ts=0;; esac
+    last_msg="$(cat "$LOG_DEDUPE_DIR/msg" 2>/dev/null)"
+    if [ "$last_msg" = "$plain" ] && [ "$now_ts" -ge "$last_ts" ] 2>/dev/null && [ $((now_ts - last_ts)) -lt 5 ] 2>/dev/null; then
         runtime_set "lan_discovery_status_last=$(now)"
         return
     fi
+    printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
+    printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
+    line="$(now) $plain"
     printf '%s\n' "$line" >> "$LOG_FILE"
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
     runtime_set "lan_discovery_log=$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
     runtime_set "lan_discovery_status_last=$(now)"
-    logger -t lan-autodiscover "【LAN发现】$(sanitize_text "$*")"
+    logger -t lan-autodiscover "[北京时间 $(now)] 【LAN发现】$plain"
 }
 
 iface_ipv4() {
