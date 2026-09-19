@@ -15,10 +15,11 @@ TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
 mkdir -p "$RUNTIME_DIR"
 
 if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
-    slog "监督程序已经运行"
+    # 已有监督器运行：直接退出，不重复刷日志。
     exit 0
 fi
-trap 'rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
+printf '%s\n' "$" > "$SUPERVISOR_LOCKDIR/pid"
+trap 'rm -f "$SUPERVISOR_LOCKDIR/pid" 2>/dev/null; rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
 
 nv() { nvram get "$1" 2>/dev/null; }
 runtime_set() {
@@ -30,7 +31,23 @@ runtime_set() {
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
-slog() { logger -t lan-supervisor "【LAN监督】$*"; }
+beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_supervisor"
+mkdir -p "$LOG_DEDUPE_DIR"
+slog() {
+    msg="$*"
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    last_ts="$(cat "$LOG_DEDUPE_DIR/ts" 2>/dev/null)"
+    case "$last_ts" in ''|*[!0-9]*) last_ts=0;; esac
+    last_msg="$(cat "$LOG_DEDUPE_DIR/msg" 2>/dev/null)"
+    if [ "$last_msg" = "$msg" ] && [ "$now_ts" -ge "$last_ts" ] 2>/dev/null && [ $((now_ts - last_ts)) -lt 5 ] 2>/dev/null; then
+        return 0
+    fi
+    printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
+    printf '%s' "$msg" > "$LOG_DEDUPE_DIR/msg"
+    logger -t lan-supervisor "[北京时间 $(beijing_now)] 【LAN监督】$msg"
+}
 
 # 按完整命令行兜底回收旧版/失配PID文件留下的孤儿进程。
 kill_matching_processes() {
