@@ -222,9 +222,14 @@ static void process_ipv4(const unsigned char *buf, int len,
         return;
 
     src = ntohl(ip->saddr);
-    dst = ntohl(ip->daddr);
+
+    /*
+     * 实时监听只登记“进入LAN口的数据源地址”。
+     * 目的IP不能作为目标设备依据，否则Q7收到的外部访问流量会把
+     * 公网地址误认为LAN目标网段，进而触发错误SNAT。
+     */
     emit_event("TCP/IP", src, eth->h_source, now);
-    emit_event("TCP/IP-DST", dst, eth->h_dest, now);
+    (void)dst;
 }
 
 int main(int argc, char **argv)
