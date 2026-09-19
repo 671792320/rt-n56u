@@ -359,10 +359,6 @@ sync_runtime_status() {
         runtime_set lan_discovery_status_link="DOWN"
         return
     fi
-    [ -f "$DEVICE_DB" ] || : > "$DEVICE_DB"
-    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
-    case "$count" in ''|*[!0-9]*) count=0;; esac
-    runtime_set lan_discovery_status_count="$count"
     if [ "$(cfg lan_discovery_discover_enable 1)" != "1" ]; then
         runtime_set lan_discovery_status_state="设备发现未启用"
     elif tcpdump_running; then
@@ -372,38 +368,6 @@ sync_runtime_status() {
     elif ps 2>/dev/null | grep -q '[d]hcpdetect'; then
         runtime_set lan_discovery_status_state="DHCP检测"
     fi
-    # DHCP结果以runtime状态文件为准；临时探测日志删除后不再把已经得到的结果改回“未检测”。
-    # 新一轮物理插入时由下面的插入事件先进入“检测中”，worker完成后再写最终结果。
-    if [ -f /tmp/dhcpdetect_lan.log ]; then
-        line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' /tmp/dhcpdetect_lan.log 2>/dev/null)"
-        gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
-        server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
-        if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-            runtime_set lan_discovery_status_dhcp="网关 $gateway"
-        elif [ -n "$server" ] && [ "$server" != "-" ]; then
-            runtime_set lan_discovery_status_dhcp="DHCP服务器 $server（未提供网关）"
-        elif grep -q '\[dhcpdetect\].*no DHCP server reply' /tmp/dhcpdetect_lan.log 2>/dev/null; then
-            runtime_set lan_discovery_status_dhcp="未发现DHCP"
-        fi
-    fi
-
-    # 网络健康状态由健康检测PID同步，避免worker重启后页面仍显示“未监视”。
-    if [ -r "$RUNTIME_DIR/lanhealth.pid" ]; then
-        hpid="$(cat "$RUNTIME_DIR/lanhealth.pid" 2>/dev/null)"
-        case "$hpid" in
-            ''|*[!0-9]*) rm -f "$RUNTIME_DIR/lanhealth.pid"; hpid="";;
-        esac
-        if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then
-            runtime_set lan_discovery_status_health="运行中"
-        else
-            rm -f "$RUNTIME_DIR/lanhealth.pid"
-            current_health="$(cat "$RUNTIME_DIR/lan_discovery_status_health" 2>/dev/null)"
-            case "$current_health" in
-                运行中|检测启动中) runtime_set lan_discovery_status_health="未监视";;
-            esac
-        fi
-    fi
-
     last="$(tail -n 1 "$LOG_FILE" 2>/dev/null | sed -n 's/^\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) .*/\1/p')"
     [ -n "$last" ] && runtime_set lan_discovery_status_last="$last" || runtime_set lan_discovery_status_last="$(date '+%H:%M:%S')"
 }
@@ -489,10 +453,6 @@ stop_worker() {
     rm -f "$PIDFILE" "$WORKER_RETRY_FILE"
     rmdir "$WORKER_LOCKDIR" 2>/dev/null
     runtime_set lan_discovery_status_worker="已停止"
-    rm -f /tmp/lan_discovery_runtime/lanhealth.pid
-    runtime_set lan_discovery_status_health="未监视"
-    runtime_set lan_discovery_status_broadcast="0"
-    runtime_set lan_discovery_status_loop="0"
 }
 
 last_enable="-1"
@@ -504,7 +464,6 @@ set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
 runtime_set lan_discovery_status_network_manager="已停止"
 runtime_set lan_discovery_status_tcpdump="已停止"
-runtime_set lan_discovery_status_health="未监视"
 
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
@@ -515,6 +474,7 @@ while :; do
         last_link="-1"
         last_child_check=0
         runtime_set lan_discovery_status_if="$iface"
+        runtime_set lan_discovery_status_role="LAN"
         slog "监听接口：$iface"
     fi
 
@@ -552,10 +512,6 @@ while :; do
         if [ "$link" = "1" ]; then
             runtime_set lan_discovery_status_link="UP"
             runtime_set lan_discovery_status_state="DHCP检测"
-            current_dhcp="$(cat "$RUNTIME_DIR/lan_discovery_status_dhcp" 2>/dev/null)"
-            case "$current_dhcp" in
-                ''|未检测) runtime_set lan_discovery_status_dhcp="检测中";;
-            esac
             slog "LAN口已插入：接口=$iface"
             # 插拔事件立即启动；正常运行期间每5秒只做一次子进程健康检查。
             start_network_manager "$iface"
@@ -564,7 +520,6 @@ while :; do
         else
             runtime_set lan_discovery_status_link="DOWN"
             runtime_set lan_discovery_status_state="LAN拔出：保留现有临时网段/SNAT"
-            runtime_set lan_discovery_status_dhcp="未检测"
             slog "LAN口已拔出：暂停发现，保留现有临时网段/SNAT"
             stop_worker
             stop_tcpdump
