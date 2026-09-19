@@ -113,7 +113,7 @@ proto)
     ;;
 
 finish)
-    tmp="${STATE_FILE}.tmp.$"
+    tmp="${STATE_FILE}.state.tmp"
     candidate_ips="${RUNTIME_DIR}/candidate_ips.tmp.$"
     : > "$candidate_ips"
 
