@@ -82,7 +82,7 @@ log_line() {
     log_size="$(wc -c < "$LOG_FILE" 2>/dev/null)"
     case "$log_size" in ''|*[!0-9]*) log_size=0;; esac
     if [ "$log_size" -gt 65536 ] 2>/dev/null; then
-        tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp.$" 2>/dev/null &&
+        tail -n 200 "$LOG_FILE" > "${LOG_FILE}.discovery.tmp" 2>/dev/null &&
             mv -f "@TMPLOG@" "$LOG_FILE"
     fi
 
