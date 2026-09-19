@@ -86,7 +86,11 @@ runtime_set() {
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"
 }
 
-beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+beijing_now() {
+    tz="$(nvram get time_zone_x 2>/dev/null)"
+    [ -n "$tz" ] || tz='GMT-8'
+    TZ="$tz" date '+%Y-%m-%d %H:%M:%S'
+}
 LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_network_manager"
 mkdir -p "$LOG_DEDUPE_DIR"
 
@@ -104,7 +108,7 @@ log() {
     printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
     msg="$(beijing_now) 【网络管理】$plain"
     printf '%s\n' "$msg" >> "$LOG_FILE"
-    logger -t lan-autodiscover "[北京时间 $(beijing_now)] 【LAN网络】$plain"
+    logger -t lan-autodiscover "【LAN网络】$plain"
     runtime_set lan_discovery_status_last "$(beijing_now)"
 }
 
@@ -208,6 +212,19 @@ apply_target() {
     [ "$target_net" != "$source_net" ] || return 0
     [ "$target_net" != "0.0.0.0" ] || return 1
 
+    pending_file="$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
+    if [ -r "$pending_file" ]; then
+        retry_after="$(cat "$pending_file" 2>/dev/null)"
+        now_ts="$(date +%s 2>/dev/null)"
+        case "$retry_after:$now_ts" in
+            *[!0-9:]*|:) retry_after=0;;
+        esac
+        if [ "$now_ts" -lt "$retry_after" ] 2>/dev/null; then
+            return 1
+        fi
+        rm -f "$pending_file"
+    fi
+
     takeover_file="$(takeover_state_file "$target_net")"
     current_ip="$(state_get "$takeover_file" ip)"
 
@@ -231,9 +248,15 @@ apply_target() {
     # 新目标或临时地址刚恢复时才立即写入SNAT；已知目标不再每个实时数据包都执行iptables检查。
     if [ "$target_was_known" = "0" ]; then
         if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
-            log "SNAT启用失败：$source_net/24 → $target_net/24"
+            pending_file="$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
+            now_ts="$(date +%s 2>/dev/null)"
+            case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+            printf '%s\n' "$((now_ts + 10))" > "$pending_file"
+            log "SNAT暂未完成，10秒后重试：$source_net/24 → $target_net/24"
             return 1
         fi
+        write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
+        rm -f "$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
         log "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
     else
         last_seen="$(state_get "$state_file" last_seen)"
