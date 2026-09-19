@@ -1086,6 +1086,12 @@ handle_notifications(void)
 		{
 			full_restart_lan();
 		}
+		else if (!strcmp(entry->d_name, "restart_lan_discovery"))
+		{
+			/* WebUI配置变化后，只重启LAN发现服务本身，不重启网络。 */
+			stop_lan_discovery();
+			start_lan_discovery();
+		}
 		else if (!strcmp(entry->d_name, "stop_whole_wan"))
 		{
 			stop_wan();
