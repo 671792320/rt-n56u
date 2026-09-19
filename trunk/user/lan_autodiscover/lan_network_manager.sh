@@ -342,7 +342,12 @@ while :; do
         exit 0
     fi
 
-    localip="$(local_ip)"
+    # 正常情况下直接读取Padavan保存的LAN地址，避免调用local_ip函数产生同名Shell子进程。
+    localip="$(nvram get lan_ipaddr 2>/dev/null)"
+    case "$localip" in
+        *.*.*.*) ;;
+        *) sleep 2; continue;;
+    esac
     localnet="$(network_from_ip "$localip")"
     [ -n "$localnet" ] || { sleep 2; continue; }
 
