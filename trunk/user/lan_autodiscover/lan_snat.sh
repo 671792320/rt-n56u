@@ -26,7 +26,11 @@ find_iptables() {
 
 IPTABLES="$(find_iptables 2>/dev/null)"
 
-beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+beijing_now() {
+    tz="$(nvram get time_zone_x 2>/dev/null)"
+    [ -n "$tz" ] || tz='GMT-8'
+    TZ="$tz" date '+%Y-%m-%d %H:%M:%S'
+}
 LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_snat"
 mkdir -p "$LOG_DEDUPE_DIR"
 
@@ -42,19 +46,12 @@ log() {
     fi
     printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
     printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
-    logger -t "$LOGTAG" "[北京时间 $(beijing_now)] [snat] $plain"
+    logger -t "$LOGTAG" "[snat] $plain"
     printf '%s\n' "[北京时间 $(beijing_now)] [snat] $plain"
 }
 
 acquire_lock() {
-    n=0
-    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-        n=$((n + 1))
-        [ "$n" -ge 10 ] && {
-            return 1
-        }
-        sleep 1
-    done
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
     trap 'rmdir "$LOCK_DIR" 2>/dev/null || :' EXIT INT TERM
     return 0
 }
