@@ -113,8 +113,8 @@ proto)
     ;;
 
 finish)
-    tmp="${STATE_FILE}.tmp"
-    candidate_ips="${RUNTIME_DIR}/candidate_ips.tmp"
+    tmp="${STATE_FILE}.tmp.$"
+    candidate_ips="${RUNTIME_DIR}/candidate_ips.tmp.$"
     : > "$candidate_ips"
 
     # 目标网段记录不能随着设备状态重建而丢失。
@@ -152,11 +152,17 @@ finish)
         old_status="$(printf '%s' "$old" | cut -d'|' -f3)"
         old_miss="$(printf '%s' "$old" | cut -d'|' -f4)"
         [ "$mac" != "-" ] || mac="${old_mac:--}"
-        [ "$mac" != "-" ] || mac="$(get_neigh_mac "$ip")"
-        [ -n "$mac" ] || mac="-"
         case "$old_miss" in ''|*[!0-9]*) old_miss=0;; esac
 
-        ping_status="$(ping_device "$ip")"
+        # 只有本轮确实收到ARP或协议事件的IP才执行一次Ping。
+        # 历史离线地址不再每轮全部Ping，避免设备和目标网段越多CPU越高。
+        if [ "$current_arp" = "1" ] || [ "$current_proto" = "1" ]; then
+            [ "$mac" != "-" ] || mac="$(get_neigh_mac "$ip")"
+            ping_status="$(ping_device "$ip")"
+        else
+            ping_status="未探测"
+        fi
+        [ -n "$mac" ] || mac="-"
 
         # 当前轮只要ARP、协议响应或Ping任一项成功，就认为设备在线。
         if [ "$current_arp" = "1" ] || [ "$current_proto" = "1" ] || [ "$ping_status" = "通" ]; then
