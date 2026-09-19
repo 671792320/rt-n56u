@@ -8,7 +8,12 @@ LOGTAG=lan-autodiscover
 LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"
 
 runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
-log() { msg="$(date '+%H:%M:%S') 【临时地址】$*"; logger -t "$LOGTAG" "$msg"; printf '%s\n' "$msg"; }
+beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+log() {
+    msg="$(beijing_now) 【临时地址】$*"
+    logger -t "$LOGTAG" "[北京时间 $(beijing_now)] $msg"
+    printf '%s\n' "$msg"
+}
 valid_ip() { case "$1" in *.*.*.*) return 0;; *) return 1;; esac; }
 normalize_network() { printf '%s\n' "$1" | awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}'; }
 state_key() { printf '%s\n' "$1" | tr '.' '_'; }
