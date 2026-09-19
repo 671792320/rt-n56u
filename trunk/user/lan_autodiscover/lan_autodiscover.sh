@@ -453,7 +453,6 @@ run_camdiscover() {
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
                         device_state_event "$line"
-: # 设备数据库统一由lan_device_state.sh写入
                         ;;
                     *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line 3 "【设备探测】$line";;
                 esac
@@ -465,7 +464,6 @@ run_camdiscover() {
     wait "$pid" 2>/dev/null
     [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
     rm -f "$CAM_LOG"
-            /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
 }
 
 run_discovery() {
@@ -481,7 +479,6 @@ run_discovery() {
 
     # 目标网段属于本次开机周期的持久状态。
     # Q7自身LAN网段不属于目标网段，不再写入DEVICE_DB，也不参与主动ARP扫描。
-            /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
     # 主动扫描周期独立于单次响应窗口；平时只低频检查配置和链路，避免每秒重复轮询。
