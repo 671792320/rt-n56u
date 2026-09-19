@@ -142,7 +142,7 @@ write_target_state() {
     miss_count="$3"
     scan_seq="$4"
     state_file="$(target_state_file "$target_net")"
-    tmp="${state_file}.tmp.$"
+    tmp="${state_file}.manager.tmp"
     {
         printf 'target_net=%s\n' "$target_net"
         printf 'target_ip=%s\n' "$target_ip"
