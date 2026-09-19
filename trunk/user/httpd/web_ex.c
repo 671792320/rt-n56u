@@ -176,6 +176,12 @@ sys_script(char *name)
 		nvram_set("lan_discovery_log", "");
 		nvram_set("lan_discovery_status_last", "-");
 	}
+	else if (strcmp(name, "lan_discovery_restart")==0)
+	{
+		/* LAN发现配置应用后通过rc通知统一重启发现服务。 */
+		nvram_commit_safe();
+		notify_rc("restart_lan_discovery");
+	}
 	else if (strcmp(name, "syslog.sh")==0)
 	{
 		;   // to nothing
