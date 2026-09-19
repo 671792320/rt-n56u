@@ -16,7 +16,7 @@ DHCP_LOG=/tmp/dhcpdetect_lan.log
 ARP_LOG=/tmp/arpscan_lan.log
 CAM_LOG=/tmp/camdiscover_lan.log
 CUSTOM_CONF=/tmp/camdiscover_custom.conf
-CUSTOM_TMP="$RUNTIME_DIR/custom_parse.tmp.$"
+CUSTOM_TMP="$RUNTIME_DIR/custom_parse.discovery.tmp"
 ACTIVE_SCAN_PID=""
 
 mkdir -p /tmp "$RUNTIME_DIR"
