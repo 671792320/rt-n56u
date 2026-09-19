@@ -214,10 +214,18 @@ apply_target() {
         rm -f "$pending_file"
     fi
 
+    state_file="$(target_state_file "$target_net")"
+    # 目标网段一旦建立SNAT就进入本次开机周期锁定状态。
+    # 后续相同网段实时事件直接丢弃，不重新选临时地址、不重建SNAT。
+    if [ -r "$state_file" ]; then
+        runtime_set lan_discovery_status_state "实时发现：目标网段已锁定"
+        return 0
+    fi
+
     takeover_file="$(takeover_state_file "$target_net")"
     current_ip="$(state_get "$takeover_file" ip)"
 
-    # 临时地址不存在、状态文件丢失或者地址已经从br0消失时，立即重新接管。
+    # 新目标第一次出现时才分配该网段内的空闲临时地址。
     if [ -z "$current_ip" ] || ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
         if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
             log "目标网段接管失败：$target_net/24"
@@ -228,33 +236,6 @@ apply_target() {
             log "无法取得目标网段临时地址：$target_net/24"
             return 1
         }
-    fi
-
-    state_file="$(target_state_file "$target_net")"
-    target_was_known=0
-    [ -r "$state_file" ] && target_was_known=1
-
-    # 新目标或临时地址刚恢复时才立即写入SNAT；已知目标不再每个实时数据包都执行iptables检查。
-    if [ "$target_was_known" = "0" ]; then
-        if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
-            pending_file="$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
-            now_ts="$(date +%s 2>/dev/null)"
-            case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-            printf '%s\n' "$((now_ts + 10))" > "$pending_file"
-            log "SNAT暂未完成，10秒后重试：$source_net/24 → $target_net/24"
-            return 1
-        fi
-        write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
-        rm -f "$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
-        log "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
-    else
-        last_seen="$(state_get "$state_file" last_seen)"
-        case "$last_seen" in ''|*[!0-9]*) last_seen=0;; esac
-        now_ts="$(date +%s 2>/dev/null)"
-        case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-        if [ "$now_ts" -le "$last_seen" ] 2>/dev/null || [ $((now_ts - last_seen)) -ge 5 ] 2>/dev/null; then
-            write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
-        fi
     fi
 
     runtime_set lan_discovery_status_state "实时发现：目标网段已接管"
@@ -399,12 +380,12 @@ check_existing_targets() {
         source_net="$localnet"
         [ -n "$current_ip" ] || continue
 
-        # LAN重新插入、设备重启或规则被其它系统修改后，只补缺失部分，不删除已有目标。
+        # 目标网段已经锁定后，不因临时地址异常自动重新分配。
+        # 只有重启或用户手动清除SNAT后才重新建立完整接管状态。
         if ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
-            /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1 || continue
-            current_ip="$(state_get "$takeover_file" ip)"
+            log "已锁定目标的临时地址不存在，保持锁定不自动重建：$target_net/24"
+            continue
         fi
-        [ -n "$current_ip" ] || continue
         /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1 || :
     done
     update_runtime_targets
