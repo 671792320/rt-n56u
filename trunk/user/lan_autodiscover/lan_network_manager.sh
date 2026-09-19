@@ -90,6 +90,13 @@ LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_network_manager"
 mkdir -p "$LOG_DEDUPE_DIR"
 
 log() {
+    level=2
+    case "$1" in
+        0|1|2|3) level="$1"; shift;;
+    esac
+    current="$(nvram get lan_discovery_log_level 2>/dev/null)"
+    case "$current" in 0|1|2|3) ;; *) current=1;; esac
+    [ "$current" -ge "$level" ] 2>/dev/null || return 0
     plain="$*"
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
@@ -213,12 +220,12 @@ apply_target() {
     # 新目标第一次出现时才分配该网段内的空闲临时地址。
     if [ -z "$current_ip" ] || ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
         if ! /usr/bin/lan_takeover.sh "$IFACE" "$target_net" >> "$LOG_FILE" 2>&1; then
-            log "目标网段接管失败：$target_net/24"
+            log 1 "目标网段接管失败：$target_net/24"
             return 1
         fi
         current_ip="$(state_get "$takeover_file" ip)"
         [ -n "$current_ip" ] || {
-            log "无法取得目标网段临时地址：$target_net/24"
+            log 1 "无法取得目标网段临时地址：$target_net/24"
             return 1
         }
     fi
@@ -228,13 +235,13 @@ apply_target() {
         now_ts="$(date +%s 2>/dev/null)"
         case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
         printf '%s\n' "$((now_ts + 10))" > "$pending_file"
-        log "SNAT暂未完成，10秒后重试：$source_net/24 → $target_net/24"
+        log 1 "SNAT暂未完成，10秒后重试：$source_net/24 → $target_net/24"
         return 1
     fi
 
     write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
     rm -f "$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
-    log "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
+    log 1 "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
     runtime_set lan_discovery_status_state "实时发现：目标网段已接管"
     update_runtime_targets
     return 0
@@ -346,7 +353,7 @@ check_existing_targets() {
         # 目标网段已经锁定后，不因临时地址异常自动重新分配。
         # 只有重启或用户手动清除SNAT后才重新建立完整接管状态。
         if ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
-            log "已锁定目标的临时地址不存在，保持锁定不自动重建：$target_net/24"
+            log 2 "已锁定目标的临时地址不存在，保持锁定不自动重建：$target_net/24"
             continue
         fi
         /usr/bin/lan_snat.sh check "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1 || :
