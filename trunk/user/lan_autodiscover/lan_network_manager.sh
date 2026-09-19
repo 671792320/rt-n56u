@@ -71,6 +71,8 @@ PROTO_CURSOR_FILE="$RUNTIME_DIR/realtime_proto.cursor"
 TCPDUMP_CURSOR_FILE="$RUNTIME_DIR/realtime_tcpdump.cursor"
 
 mkdir -p "$RUNTIME_DIR"
+# Padavan后台服务启动时一次性建立事件文件，运行期间不再反复判断文件是否存在。
+touch "$RUNTIME_DIR/arp_seen.txt" "$RUNTIME_DIR/device_protocol_events.txt" "$RUNTIME_DIR/tcpdump_discovery_events.txt"
 
 runtime_set() {
     key="$1"
