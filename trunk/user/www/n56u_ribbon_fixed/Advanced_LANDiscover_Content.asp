@@ -160,10 +160,13 @@ function renderTargets(){
         b.appendChild(btn);
     }
 }
+function deviceCurrent(d){
+    return !!d && (d.status==='在线' || d.ping==='通');
+}
 function classifyIp(ip,t){
     if(t&&t.temp===ip)return'temp';
     var d=device_map[ip];
-    if(!d)return'empty';
+    if(!deviceCurrent(d))return'empty';
     if(d.macs.length>1)return'conflict';
     return'found';
 }
@@ -182,7 +185,7 @@ function renderSummary(){
         for(var j=1;j<=255;j++){
             var ip=base+'.'+j;
             var d=device_map[ip];
-            if(d){
+            if(deviceCurrent(d)){
                 found++;
                 if(d.macs.length>1)conflict++;
             }
@@ -247,7 +250,7 @@ function renderMatrix(){
 }
 function countTargetFound(net){
     var base=targetBase(net),n=0;
-    for(var i=1;i<=255;i++)if(device_map[base+'.'+i])n++;
+    for(var i=1;i<=255;i++)if(deviceCurrent(device_map[base+'.'+i]))n++;
     return n;
 }
 function countTargetConflict(net){
