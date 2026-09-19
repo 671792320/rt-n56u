@@ -9,10 +9,13 @@
 <link rel="icon" href="images/favicon.png">
 <link rel="stylesheet" type="text/css" href="/bootstrap/css/bootstrap.min.css">
 <link rel="stylesheet" type="text/css" href="/bootstrap/css/main.css">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/engage.itoggle.css">
 <script type="text/javascript" src="/jquery.js"></script>
 <script type="text/javascript" src="/bootstrap/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="/bootstrap/js/engage.itoggle.min.js"></script>
 <script type="text/javascript" src="/state.js"></script>
 <script type="text/javascript" src="/general.js"></script>
+<script type="text/javascript" src="/itoggle.js"></script>
 <script type="text/javascript" src="/popup.js"></script>
 <script type="text/javascript" src="/help.js"></script>
 <script>
@@ -401,7 +404,8 @@ function applyRule(){
     var ui=document.getElementById('lan_discovery_custom_ui'),hidden=document.getElementById('lan_discovery_custom');
     if(ui&&hidden)hidden.value=uiToInternal(ui.value);
     showLoading();
-    document.form.action_mode.value=' Apply ';
+    document.form.action_mode.value=' Update ';
+    document.form.action_script.value='lan_discovery_restart';
     document.form.current_page.value='Advanced_LANDiscover_Content.asp';
     document.form.next_page.value='Advanced_LANDiscover_Content.asp';
     document.form.submit();
@@ -421,6 +425,9 @@ function initial(){
     show_banner(1);
     show_menu(5,3,1);
     show_footer();
+    init_itoggle('lan_discovery_enable');
+    init_itoggle('lan_discovery_dhcp_enable');
+    init_itoggle('lan_discovery_discover_enable');
     var f=document.form;
     if(!f.lan_discovery_dhcp_timeout.value)f.lan_discovery_dhcp_timeout.value='3';
     if(!f.lan_discovery_cycle.value)f.lan_discovery_cycle.value='10';
@@ -438,6 +445,7 @@ function initial(){
 .live-box{height:170px;overflow:auto;padding:8px;background:#111;color:#ddd;font:12px/1.55 monospace;white-space:pre-wrap}
 .custom-area{width:100%;min-height:180px;box-sizing:border-box;font:13px/1.55 monospace;white-space:pre}
 .note{color:#888}
+.hidden-builtin{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
 .target-tabs{padding:2px 0 5px}
 .ip-grid{table-layout:fixed;margin-bottom:8px}
 .ip-grid td{text-align:center;vertical-align:middle;padding:2px 0!important;height:23px}
@@ -534,31 +542,46 @@ function initial(){
 <tr>
 <th>LAN发现服务</th>
 <td>
-<select name="lan_discovery_enable" class="span2">
-<option value="1" <% nvram_match_x("", "lan_discovery_enable", "1", "selected"); %>>启用</option>
-<option value="0" <% nvram_match_x("", "lan_discovery_enable", "0", "selected"); %>>停用</option>
-</select>
+<div class="main_itoggle">
+<div id="lan_discovery_enable_on_of">
+<input type="checkbox" id="lan_discovery_enable_fake" <% nvram_match_x("", "lan_discovery_enable", "1", "checked"); %>>
+</div>
+</div>
+<div class="hidden-builtin">
+<input type="radio" id="lan_discovery_enable_1" name="lan_discovery_enable" value="1" <% nvram_match_x("", "lan_discovery_enable", "1", "checked"); %>>
+<input type="radio" id="lan_discovery_enable_0" name="lan_discovery_enable" value="0" <% nvram_match_x("", "lan_discovery_enable", "0", "checked"); %>>
+</div>
 <span class="note">控制LAN发现后台服务是否运行</span>
 </td>
 </tr>
 <tr>
 <th>DHCP检测</th>
 <td>
-<select name="lan_discovery_dhcp_enable" class="span2">
-<option value="1" <% nvram_match_x("", "lan_discovery_dhcp_enable", "1", "selected"); %>>启用</option>
-<option value="0" <% nvram_match_x("", "lan_discovery_dhcp_enable", "0", "selected"); %>>停用</option>
-</select>
+<div class="main_itoggle">
+<div id="lan_discovery_dhcp_enable_on_of">
+<input type="checkbox" id="lan_discovery_dhcp_enable_fake" <% nvram_match_x("", "lan_discovery_dhcp_enable", "1", "checked"); %>>
+</div>
+</div>
+<div class="hidden-builtin">
+<input type="radio" id="lan_discovery_dhcp_enable_1" name="lan_discovery_dhcp_enable" value="1" <% nvram_match_x("", "lan_discovery_dhcp_enable", "1", "checked"); %>>
+<input type="radio" id="lan_discovery_dhcp_enable_0" name="lan_discovery_dhcp_enable" value="0" <% nvram_match_x("", "lan_discovery_dhcp_enable", "0", "checked"); %>>
+</div>
 <input class="mini" name="lan_discovery_dhcp_timeout" onkeypress="return is_number(this,event);" value="<% nvram_get_x("", "lan_discovery_dhcp_timeout"); %>"> 秒
 </td>
 </tr>
 <tr>
 <th>主动设备发现</th>
 <td>
-<select name="lan_discovery_discover_enable" class="span2">
-<option value="1" <% nvram_match_x("", "lan_discovery_discover_enable", "1", "selected"); %>>启用</option>
-<option value="0" <% nvram_match_x("", "lan_discovery_discover_enable", "0", "selected"); %>>停用</option>
-</select>
-<span class="note">实时二层监听独立运行</span>
+<div class="main_itoggle">
+<div id="lan_discovery_discover_enable_on_of">
+<input type="checkbox" id="lan_discovery_discover_enable_fake" <% nvram_match_x("", "lan_discovery_discover_enable", "1", "checked"); %>>
+</div>
+</div>
+<div class="hidden-builtin">
+<input type="radio" id="lan_discovery_discover_enable_1" name="lan_discovery_discover_enable" value="1" <% nvram_match_x("", "lan_discovery_discover_enable", "1", "checked"); %>>
+<input type="radio" id="lan_discovery_discover_enable_0" name="lan_discovery_discover_enable" value="0" <% nvram_match_x("", "lan_discovery_discover_enable", "0", "checked"); %>>
+</div>
+<span class="note">实时二层监听持续运行；关闭后仅停止主动补漏</span>
 </td>
 </tr>
 <tr>
