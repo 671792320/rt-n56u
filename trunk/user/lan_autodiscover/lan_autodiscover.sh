@@ -36,7 +36,7 @@ runtime_set() {
     item="$1"
     key="${item%%=*}"
     value="${item#*=}"
-    tmp="$RUNTIME_DIR/.$key.tmp.$"
+    tmp="$RUNTIME_DIR/.discovery_$key.tmp"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
 
