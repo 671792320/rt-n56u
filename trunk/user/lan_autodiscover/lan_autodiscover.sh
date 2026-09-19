@@ -424,6 +424,7 @@ EOF
         done < "$ARP_LOG"
     fi
     rm -f "$ARP_LOG"
+    sync_device_cache
 }
 
 run_dhcp_detect() {
@@ -502,8 +503,7 @@ run_camdiscover() {
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
                         device_state_event "$line"
-                        clean="$(append_device "$line")"
-                        [ -n "$clean" ] && format_device_log "$line"
+                        append_device "$line" >/dev/null 2>&1
                         ;;
                     *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line "【设备探测】$line";;
                 esac
@@ -515,6 +515,7 @@ run_camdiscover() {
     wait "$pid" 2>/dev/null
     [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
     rm -f "$CAM_LOG"
+    sync_device_cache
 }
 
 run_discovery() {
@@ -534,6 +535,7 @@ run_discovery() {
     sync_device_cache
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
+    # 主动扫描周期独立于单次响应窗口；平时只低频检查配置和链路，避免每秒重复轮询。
     sweep_cycle="$(cfg lan_discovery_sweep_cycle 120)"
     case "$sweep_cycle" in ''|*[!0-9]*) sweep_cycle=120;; esac
     [ "$sweep_cycle" -ge 30 ] 2>/dev/null || sweep_cycle=30
@@ -546,10 +548,12 @@ run_discovery() {
             log_line "LAN监听或设备发现已关闭"
             break
         }
-        discover_cycle="$(cfg lan_discovery_cycle 10)"
-        case "$discover_cycle" in ''|*[!0-9]*) discover_cycle=10;; esac
-        [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
-        [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
+
+        # 允许WebUI修改主动补漏周期，但不再每秒重复执行完整扫描。
+        configured_sweep="$(cfg lan_discovery_sweep_cycle "$sweep_cycle")"
+        case "$configured_sweep" in ''|*[!0-9]*) configured_sweep="$sweep_cycle";; esac
+        [ "$configured_sweep" -ge 30 ] 2>/dev/null && [ "$configured_sweep" -le 3600 ] 2>/dev/null &&
+            sweep_cycle="$configured_sweep"
 
         now_sec="$(date +%s 2>/dev/null)"
         case "$now_sec" in ''|*[!0-9]*) now_sec=0;; esac
@@ -563,33 +567,33 @@ run_discovery() {
             custom="$(nv lan_discovery_custom)"
             read_standard_config "$custom"
             cycle_start="$now_sec"
-            log_line "低频主动补漏开始：ARP + 协议探测，周期=$sweep_cycle""s"
+            log_line "低频主动补漏开始：ARP + 协议探测，周期=${sweep_cycle}s"
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh begin
                 run_arpscan "$iface"
             fi
+            discover_cycle="$(cfg lan_discovery_cycle 10)"
+            case "$discover_cycle" in ''|*[!0-9]*) discover_cycle=10;; esac
+            [ "$discover_cycle" -ge 1 ] 2>/dev/null || discover_cycle=1
+            [ "$discover_cycle" -le 3600 ] 2>/dev/null || discover_cycle=3600
             run_camdiscover "$iface" "$discover_cycle"
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh finish
             fi
 
-            # 这里才表示一轮真正的“低频主动补漏”已经完成。
-            # discover_cycle 只是单次响应等待窗口，不能被网络管理器当成完整扫描轮次。
+            sync_device_cache
+            # 这里才表示一轮真正的低频主动补漏已经完成。
             runtime_set "lan_discovery_sweep_complete=$cycle_start"
             last_sweep="$cycle_start"
+            log_line "低频主动补漏完成：下一轮约${sweep_cycle}s后开始"
         fi
-        if ! is_link_up "$iface"; then break; fi
 
-        elapsed=$(( $(date +%s) - cycle_start ))
-        wait_seconds=$((discover_cycle - elapsed))
-        [ "$wait_seconds" -lt 0 ] 2>/dev/null && wait_seconds=0
-        log_line "本轮主动探测完成，继续监听，下一轮周期 ${discover_cycle}s"
-        while [ "$wait_seconds" -gt 0 ]; do
-            discovery_enabled || break
-            is_link_up "$iface" || break
-            sleep 1
-            wait_seconds=$((wait_seconds - 1))
-        done
+        if ! is_link_up "$iface"; then
+            break
+        fi
+
+        # supervisor负责1秒级插拔检测；worker空闲时只需每2秒检查一次状态。
+        sleep 2
     done
     runtime_set "lan_discovery_status_state=等待接口"
 }
