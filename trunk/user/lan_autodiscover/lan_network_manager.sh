@@ -291,6 +291,7 @@ process_realtime_events() {
 
 collect_cycle_targets() {
     local_net="$1"
+    cycle_started="$2"
     tmp="$RUNTIME_DIR/.lan_cycle_targets.tmp"
     : > "$tmp"
 
@@ -307,7 +308,7 @@ collect_cycle_targets() {
     # 实时二层监听同样属于本轮真实活动，不能因为主动ARP/协议扫描没命中
     # 就把仍在通信的目标网段清掉，否则下一条实时事件又会重新触发“首次接管”。
     if [ -r "$RUNTIME_DIR/tcpdump_discovery_events.txt" ]; then
-        cut -d'|' -f1 "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
+        awk -F'|' -v start="$cycle_started" '$4 >= start {print $1}'             "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
             while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
     fi
 
@@ -318,7 +319,12 @@ collect_cycle_targets() {
 }
 
 latest_completed_cycle() {
-    grep '本轮主动探测完成，继续监听，下一轮周期 ' "$LOG_FILE" 2>/dev/null | tail -n 1
+    [ -r "$RUNTIME_DIR/lan_discovery_sweep_complete" ] || return 1
+    marker="$(cat "$RUNTIME_DIR/lan_discovery_sweep_complete" 2>/dev/null)"
+    case "$marker" in
+        ''|*[!0-9]*) return 1;;
+    esac
+    printf '%s\n' "$marker"
 }
 
 cycle_seen_before() {
@@ -333,10 +339,10 @@ save_cycle_cursor() { printf '%s\n' "$1" > "$CYCLE_CURSOR_FILE"; }
 process_completed_cycle() {
     localnet="$1"
     marker="$2"
-    cycle_started="$(date +%s 2>/dev/null)"
-    case "$cycle_started" in ''|*[!0-9]*) cycle_started=0;; esac
+    # marker就是本轮真正主动补漏开始的时间，而不是10秒探测窗口结束时间。
+    cycle_started="$marker"
 
-    collect_cycle_targets "$localnet"
+    collect_cycle_targets "$localnet" "$cycle_started"
     scan_seq="$(date +%s 2>/dev/null)-$(wc -l < "$CURRENT_ACTIVE_FILE" 2>/dev/null | tr -d ' ')"
     runtime_set lan_discovery_status_state "处理完整扫描轮次：目标网段状态增量更新"
 
