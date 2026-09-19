@@ -20,7 +20,12 @@ manager_pid_valid() {
     esac
     [ "$pid" != "$" ] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-    ps 2>/dev/null | awk -v p="$pid" '($1 == p && index($0, "/usr/bin/lan_network_manager.sh")) {found=1} END {exit(found ? 0 : 1)}'
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    case "$cmdline" in
+        *"/usr/bin/lan_network_manager.sh"*) return 0;;
+    esac
+    return 1
 }
 
 acquire_manager_lock() {
