@@ -366,7 +366,52 @@ EOF
     : > "$ARP_LOG"
     /usr/bin/arpscan $args > "$ARP_LOG" 2>&1 &
     pid=$!
-run_dhcp_detect() {
+
+    # ARP扫描运行期间持续消费结果文件，并把设备事件统一交给lan_device_state.sh。
+    while kill -0 "$pid" 2>/dev/null; do
+        if ! discovery_enabled; then
+            kill "$pid" 2>/dev/null
+            break
+        fi
+
+        if [ -s "$ARP_LOG" ]; then
+            while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                case "$line" in
+                    DEVICE\ *)
+                        device_state_event "$line"
+                        format_device_log "$line"
+                        ;;
+                    *probe\ sent*|*probe\ FAILED*|*scan\ FAILED*)
+                        log_line 3 "【ARP扫描】$line"
+                        ;;
+                esac
+            done < "$ARP_LOG"
+            : > "$ARP_LOG"
+        fi
+        sleep 1
+    done
+
+    wait "$pid" 2>/dev/null
+
+    # 处理arpscan退出前最后一次尚未消费的输出。
+    if [ -s "$ARP_LOG" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in
+                DEVICE\ *)
+                    device_state_event "$line"
+                    format_device_log "$line"
+                    ;;
+                *probe\ sent*|*probe\ FAILED*|*scan\ FAILED*)
+                    log_line 3 "【ARP扫描】$line"
+                    ;;
+            esac
+        done < "$ARP_LOG"
+    fi
+    : > "$ARP_LOG"
+
+    run_dhcp_detect() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
