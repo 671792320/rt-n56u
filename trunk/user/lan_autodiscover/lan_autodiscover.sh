@@ -281,6 +281,18 @@ append_device() {
     if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] && [ -n "$new_mac" ] && [ "$new_mac" != "-" ] && [ "$old_mac" != "$new_mac" ]; then
         printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s\n' "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
     fi
+    # 实时ARP/协议发现一旦收到回包，立即在设备库标记为“本轮已发现”。
+    # 不等待后续Ping或状态重建，WebUI可以直接显示当前发现结果。
+    : > "$tmp"
+    awk -v ip="$ip" '$0 !~ (" IP=" ip " ") || $0 ~ /type=SUBNET /' "$DEVICE_DB" 2>/dev/null > "$tmp"
+    case "$clean" in
+        *"type=SUBNET "*)
+            printf '%s\n' "$clean" >> "$tmp"
+            ;;
+        *)
+            printf '%s STATUS=在线 PING=未探测\n' "$clean" >> "$tmp"
+            ;;
+    esac
     mv -f "$tmp" "$DEVICE_DB"
     printf '%s' "$clean"
 }
