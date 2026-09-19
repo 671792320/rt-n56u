@@ -196,12 +196,12 @@ stop_lan_discovery(void)
 	kill_services(svcs, 3, 1);
 	kill_pidfile_s("/tmp/lan_network_manager.pid", SIGTERM);
 	kill_pidfile_s("/tmp/lan_autodiscover_worker.pid", SIGTERM);
-	if (check_if_file_exist("/usr/bin/lan_snat.sh"))
-		eval("/usr/bin/lan_snat.sh", "down");
-	if (check_if_file_exist("/usr/bin/lan_takeover.sh"))
-		eval("/usr/bin/lan_takeover.sh", "-r");
 	unlink("/tmp/lan_network_manager.pid");
 	unlink("/tmp/lan_autodiscover_worker.pid");
+	/*
+	 * 停止发现服务不等于删除已经锁定的SNAT。
+	 * 目标网段、临时IP和SNAT只有重启或用户手动down时才重新建立/清除。
+	 */
 }
 
 void
