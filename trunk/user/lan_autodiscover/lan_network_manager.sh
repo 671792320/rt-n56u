@@ -251,9 +251,12 @@ consume_realtime_targets() {
     proto_file="$RUNTIME_DIR/device_protocol_events.txt"
     tcp_file="$RUNTIME_DIR/tcpdump_discovery_events.txt"
 
-    arp_cursor="$(cat "$ARP_CURSOR_FILE" 2>/dev/null)"
-    proto_cursor="$(cat "$PROTO_CURSOR_FILE" 2>/dev/null)"
-    tcp_cursor="$(cat "$TCPDUMP_CURSOR_FILE" 2>/dev/null)"
+    arp_cursor=0
+    proto_cursor=0
+    tcp_cursor=0
+    IFS= read -r arp_cursor < "$ARP_CURSOR_FILE" 2>/dev/null || arp_cursor=0
+    IFS= read -r proto_cursor < "$PROTO_CURSOR_FILE" 2>/dev/null || proto_cursor=0
+    IFS= read -r tcp_cursor < "$TCPDUMP_CURSOR_FILE" 2>/dev/null || tcp_cursor=0
     case "$arp_cursor" in ''|*[!0-9]*) arp_cursor=0;; esac
     case "$proto_cursor" in ''|*[!0-9]*) proto_cursor=0;; esac
     case "$tcp_cursor" in ''|*[!0-9]*) tcp_cursor=0;; esac
@@ -364,18 +367,17 @@ esac
 localnet="$(network_from_ip "$localip")"
 [ -n "$localnet" ] || exit 0
 
-last_maintenance=0
+maintenance_ticks=0
 
 while :; do
     # 实时监听事件每2秒处理一次；无新增事件时不进入SNAT判断。
     process_realtime_events "$localnet"
 
-    now_ts="$(date +%s 2>/dev/null)"
-    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-    if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 60 ] 2>/dev/null; then
+    maintenance_ticks=$((maintenance_ticks + 1))
+    if [ "$maintenance_ticks" -ge 30 ]; then
         # 仅检查已有SNAT规则是否仍存在，不重新选择临时IP，也不因扫描缺失删除目标。
         check_existing_targets "$localnet"
-        last_maintenance="$now_ts"
+        maintenance_ticks=0
     fi
 
     # supervisor负责1秒级插拔检测；manager只保留低频业务轮询。
