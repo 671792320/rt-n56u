@@ -90,9 +90,155 @@ add_protocol() {
     esac
 }
 
+DB_LOCKDIR="$RUNTIME_DIR/.lan_device_db.lock"
+
+acquire_db_lock() {
+    if mkdir "$DB_LOCKDIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$DB_LOCKDIR/pid"
+        return 0
+    fi
+    old_pid="$(cat "$DB_LOCKDIR/pid" 2>/dev/null)"
+    case "$old_pid" in
+        ''|*[!0-9]*) old_pid="";;
+    esac
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        return 1
+    fi
+    rm -f "$DB_LOCKDIR/pid" 2>/dev/null
+    rmdir "$DB_LOCKDIR" 2>/dev/null || :
+    mkdir "$DB_LOCKDIR" 2>/dev/null || return 1
+    printf '%s\n' "$$" > "$DB_LOCKDIR/pid"
+    return 0
+}
+
+release_db_lock() {
+    old_pid="$(cat "$DB_LOCKDIR/pid" 2>/dev/null)"
+    if [ "$old_pid" = "$$" ]; then
+        rm -f "$DB_LOCKDIR/pid" 2>/dev/null
+        rmdir "$DB_LOCKDIR" 2>/dev/null
+    fi
+}
+
+clean_device_line() {
+    raw="$1"
+    type="$(printf '%s\n' "$raw" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    ip="$(printf '%s\n' "$raw" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+    mac="$(printf '%s\n' "$raw" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
+    [ -n "$type" ] || type=IP
+    [ -n "$ip" ] || return 1
+    case "$ip" in
+        *.*.*.*) ;;
+        *) return 1;;
+    esac
+    mac="$(norm_mac "$mac")"
+    if [ "$type" = "SUBNET" ]; then
+        prefix="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\([0-9][0-9]*\).*/\1/p')"
+        [ -n "$prefix" ] || prefix=24
+        printf 'DEVICE type=SUBNET IP=%s INFO=%s' "$ip" "$prefix"
+        return 0
+    fi
+    printf 'DEVICE type=%s IP=%s MAC=%s' "$type" "$ip" "$mac"
+    info="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\(.*\)$/\1/p')"
+    [ -n "$info" ] && printf ' INFO=%s' "$info"
+}
+
+upsert_device_record() {
+    raw="$1"
+    clean="$(clean_device_line "$raw")" || return 1
+    ip="$(printf '%s\n' "$clean" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+    new_mac="$(printf '%s\n' "$clean" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
+    [ -n "$ip" ] || return 1
+
+    old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
+    tmp="${DEVICE_DB}.state.tmp"
+
+    # 最终设备表只允许本程序写入；同一IP更新时保留其它IP和SUBNET记录。
+    awk -v ip="$ip" '{
+        if ($0 ~ /type=SUBNET /) {print; next}
+        if (index($0," IP=" ip " ") != 0) next
+        print
+    }' "$DEVICE_DB" 2>/dev/null > "$tmp"
+
+    case "$clean" in
+        *"type=SUBNET "*)
+            printf '%s\n' "$clean" >> "$tmp"
+            ;;
+        *)
+            printf '%s STATUS=在线 PING=未探测\n' "$clean" >> "$tmp"
+            ;;
+    esac
+
+    if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] &&
+       [ -n "$new_mac" ] && [ "$new_mac" != "-" ] &&
+       [ "$old_mac" != "$new_mac" ]; then
+        printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s STATUS=在线 PING=未探测\n' \
+            "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
+    fi
+
+    mv -f "$tmp" "$DEVICE_DB"
+}
+
+sort_device_db() {
+    [ -f "$DEVICE_DB" ] || return
+    tmp="${DEVICE_DB}.sort.tmp"
+    : > "$tmp"
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        ip="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
+        key="$(printf '%s\n' "$ip" | awk -F. 'NF==4 {printf "%03d%03d%03d%03d",$1,$2,$3,$4}')"
+        [ -n "$key" ] || key=999999999999
+        printf '%s|%s\n' "$key" "$row"
+    done < "$DEVICE_DB" | sort -n | cut -d'|' -f2- > "$tmp"
+    mv -f "$tmp" "$DEVICE_DB"
+}
+
+sync_device_cache() {
+    sort_device_db
+    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
+    case "$count" in ''|*[!0-9]*) count=0;; esac
+    printf '%s' "$count"
+}
+
+append_subnet() {
+    subnet="$1"
+    case "$subnet" in
+        *.*.*.0) ;;
+        *) return 1;;
+    esac
+    grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null && return 0
+    printf 'DEVICE type=SUBNET IP=%s INFO=24\n' "$subnet" >> "$DEVICE_DB"
+}
+
 case "$1" in
-begin)
-    # 开始新一轮检测，清空本轮ARP和协议事件。
+subnet)
+    subnet="$2"
+    [ -n "$subnet" ] || exit 0
+    acquire_db_lock || exit 0
+    append_subnet "$subnet"
+    sort_device_db
+    release_db_lock
+    ;;
+
+realtime)
+    ip="$2"
+    mac="$3"
+    source="$4"
+    is_ip "$ip" || exit 0
+    [ -n "$source" ] || source=TCP/IP
+    acquire_db_lock || exit 0
+    upsert_device_record "DEVICE type=$source IP=$ip MAC=$mac INFO=实时二层监听"
+    release_db_lock
+    ;;
+
+sync)
+    acquire_db_lock || exit 0
+    count="$(sync_device_cache)"
+    printf '%s' "$count" > "$RUNTIME_DIR/lan_discovery_status_count.tmp" &&
+        mv -f "$RUNTIME_DIR/lan_discovery_status_count.tmp" "$RUNTIME_DIR/lan_discovery_status_count"
+    release_db_lock
+    ;;
+
+begin)    # 开始新一轮检测，清空本轮ARP和协议事件。
     : > "$ARP_SEEN_FILE"
     : > "$EVENT_FILE"
     ;;
@@ -113,6 +259,7 @@ proto)
     ;;
 
 finish)
+    acquire_db_lock || exit 0
     tmp="${STATE_FILE}.state.tmp"
     candidate_ips="${RUNTIME_DIR}/candidate_ips.state.tmp"
     : > "$candidate_ips"
@@ -295,5 +442,7 @@ EOF
     fi
 
     mv -f "$out" "$DEVICE_DB"
+    sync_device_cache >/dev/null 2>&1
+    release_db_lock
     ;;
 esac
