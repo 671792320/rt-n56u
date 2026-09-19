@@ -282,7 +282,7 @@ consume_stream_targets() {
 
 process_realtime_events() {
     localnet="$1"
-    targets_tmp="$RUNTIME_DIR/.realtime_targets.$$"
+    targets_tmp="$RUNTIME_DIR/.manager_realtime_targets.tmp"
     : > "$targets_tmp"
 
     # 三类实时事件只做“目标网段”去重，不再为每个数据包启动一次lan_device_state.sh。
