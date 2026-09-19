@@ -217,6 +217,18 @@ record)
     release_db_lock
     ;;
 
+record_batch)
+    batch_file="$2"
+    [ -r "$batch_file" ] || exit 0
+    acquire_db_lock || exit 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        upsert_device_record "$line" || :
+    done < "$batch_file"
+    sort_device_db
+    release_db_lock
+    ;;
+
 subnet)
     subnet="$2"
     [ -n "$subnet" ] || exit 0
