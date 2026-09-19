@@ -133,9 +133,6 @@ reuse_existing() {
 
     if ! ip_owned_by_other_state "$old_ip" && ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $old_ip/24"; then
         # 复用前再做一次冲突探测；已存在于本机的地址不需要发DAD。
-        runtime_set lan_discovery_status_target_network "$NETWORK/24"
-        runtime_set lan_discovery_status_target_ip "$old_ip"
-        runtime_set lan_discovery_status_target_iface "$BR_IF"
         log 2 "复用成功：接口=$BR_IF 地址=$old_ip/24 目标网段=${NETWORK}/24"
         return 0
     fi
@@ -159,9 +156,6 @@ if [ "$IFACE" = "-r" ] || [ "$IFACE" = "--remove" ]; then
     else
         remove_all
     fi
-    runtime_set lan_discovery_status_target_network ""
-    runtime_set lan_discovery_status_target_ip ""
-    runtime_set lan_discovery_status_target_iface ""
     exit 0
 fi
 
@@ -210,9 +204,6 @@ if ip addr add "$FREE_IP/24" dev "$BR_IF" 2>/dev/null; then
         printf 'network=%s\n' "$NETWORK"
         printf 'created=%s\n' "$(date +%s)"
     } > "$tmp_state" && mv -f "$tmp_state" "$STATE_FILE"
-    runtime_set lan_discovery_status_target_network "$NETWORK/24"
-    runtime_set lan_discovery_status_target_ip "$FREE_IP"
-    runtime_set lan_discovery_status_target_iface "$BR_IF"
     log 1 "接管成功：接口=$BR_IF 地址=$FREE_IP/24 目标网段=${NETWORK}/24"
     exit 0
 fi
