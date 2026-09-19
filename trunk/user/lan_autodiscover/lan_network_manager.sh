@@ -11,10 +11,42 @@ IFACE=eth2.1
 BR_IF=br0
 LOCKDIR=/var/run/lan_network_manager.lock
 
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    logger -t lan-autodiscover "LAN网络模式管理器已经运行"
-    exit 0
-fi
+# 网络管理器必须严格保持单实例。
+# 除锁目录外，同时记录PID并校验实际命令行，避免旧PID文件或异常退出造成重复实例。
+manager_pid_valid() {
+    pid="$1"
+    case "$pid" in
+        ''|*[!0-9]*) return 1;;
+    esac
+    [ "$pid" != "$" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    ps 2>/dev/null | awk -v p="$pid" '($1 == p && index($0, "/usr/bin/lan_network_manager.sh")) {found=1} END {exit(found ? 0 : 1)}'
+}
+
+acquire_manager_lock() {
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        printf '%s\\n' "$" > "$LOCKDIR/pid"
+        return 0
+    fi
+
+    old_pid="$(cat "$LOCKDIR/pid" 2>/dev/null)"
+    if manager_pid_valid "$old_pid"; then
+        logger -t lan-autodiscover "LAN网络模式管理器已经运行：PID=$old_pid"
+        return 1
+    fi
+
+    # 锁目录残留但PID已经失效，只清理失效锁后重新获取。
+    rm -f "$LOCKDIR/pid" 2>/dev/null
+    rmdir "$LOCKDIR" 2>/dev/null || return 1
+
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        printf '%s\\n' "$" > "$LOCKDIR/pid"
+        return 0
+    fi
+    return 1
+}
+
+acquire_manager_lock || exit 0
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
@@ -23,7 +55,11 @@ STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
 CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
 cleanup() {
-    rmdir "$LOCKDIR" 2>/dev/null
+    old_pid="$(cat "$LOCKDIR/pid" 2>/dev/null)"
+    if [ "$old_pid" = "$" ]; then
+        rm -f "$LOCKDIR/pid" 2>/dev/null
+        rmdir "$LOCKDIR" 2>/dev/null
+    fi
 }
 trap cleanup EXIT INT TERM HUP
 
