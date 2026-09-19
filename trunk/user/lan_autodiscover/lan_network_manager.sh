@@ -72,11 +72,6 @@ ARP_CURSOR_FILE="$RUNTIME_DIR/realtime_arp.cursor"
 PROTO_CURSOR_FILE="$RUNTIME_DIR/realtime_proto.cursor"
 TCPDUMP_CURSOR_FILE="$RUNTIME_DIR/realtime_tcpdump.cursor"
 
-MISS_LIMIT="$(nvram get lan_discovery_miss_limit 2>/dev/null)"
-case "$MISS_LIMIT" in ''|*[!0-9]*) MISS_LIMIT=3;; esac
-[ "$MISS_LIMIT" -ge 1 ] 2>/dev/null || MISS_LIMIT=1
-[ "$MISS_LIMIT" -le 20 ] 2>/dev/null || MISS_LIMIT=20
-
 mkdir -p "$RUNTIME_DIR"
 
 runtime_set() {
@@ -149,7 +144,7 @@ write_target_state() {
     miss_count="$3"
     scan_seq="$4"
     state_file="$(target_state_file "$target_net")"
-    tmp="${state_file}.tmp"
+    tmp="${state_file}.tmp.$"
     {
         printf 'target_net=%s\n' "$target_net"
         printf 'target_ip=%s\n' "$target_ip"
@@ -160,7 +155,7 @@ write_target_state() {
 }
 
 update_runtime_targets() {
-    tmp="$RUNTIME_DIR/.lan_discovery_targets.tmp"
+    tmp="$RUNTIME_DIR/.lan_discovery_targets.tmp.$"
     : > "$tmp"
     for f in "$RUNTIME_DIR"/lan_takeover_*.state; do
         [ -r "$f" ] || continue
@@ -255,11 +250,11 @@ apply_target() {
     return 0
 }
 
-process_stream_file() {
+consume_stream_targets() {
     file="$1"
     cursor_file="$2"
     localnet="$3"
-    kind="$4"
+    output="$4"
 
     [ -r "$file" ] || return 0
     count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
@@ -271,32 +266,41 @@ process_stream_file() {
 
     start=$((cursor + 1))
     sed -n "${start},${count}p" "$file" 2>/dev/null |
-    while IFS='|' read -r ip field2 field3 field4; do
-        [ -n "$ip" ] || continue
-        net="$(network_from_ip "$ip")"
-        [ -n "$net" ] || continue
-        [ "$net" != "$localnet" ] || continue
-        case "$kind" in
-            ARP)
-                /usr/bin/lan_device_state.sh arp "$ip" "$field2" >/dev/null 2>&1 || :
-                ;;
-            PROTO)
-                /usr/bin/lan_device_state.sh proto "$ip" "$field2" >/dev/null 2>&1 || :
-                ;;
-            TCPDUMP)
-                # 实时监听只负责发现目标网段；避免每个IPv4数据包都再启动一个Shell状态进程。
-                ;;
-        esac
-        takeover_file="$(takeover_state_file "$net")"
-        current_ip="$(state_get "$takeover_file" ip)"
-        if [ -z "$current_ip" ] || ! ip -4 addr show dev "$BR_IF" 2>/dev/null | grep -q " $current_ip/24"; then
-            apply_target "$net" "$localnet" "realtime-$kind" || :
-        else
-            state_file="$(target_state_file "$net")"
-            [ -r "$state_file" ] || apply_target "$net" "$localnet" "realtime-$kind" || :
-        fi
-    done
-    printf '%s\n' "$count" > "$cursor_file"
+    awk -F'|' -v localnet="$localnet" '
+        function valid_octet(v) { return v ~ /^[0-9]+$/ && v >= 0 && v <= 255 }
+        {
+            ip=$1
+            n=split(ip,p,".")
+            if(n != 4 || !valid_octet(p[1]) || !valid_octet(p[2]) ||
+               !valid_octet(p[3]) || !valid_octet(p[4]))
+                next
+            net=p[1]"."p[2]"."p[3]".0"
+            if(net != localnet && net != "0.0.0.0")
+                print net
+        }
+    ' >> "$output"
+    printf '%s
+' "$count" > "$cursor_file"
+}
+
+process_realtime_events() {
+    localnet="$1"
+    targets_tmp="$RUNTIME_DIR/.realtime_targets.$$"
+    : > "$targets_tmp"
+
+    # 三类实时事件只做“目标网段”去重，不再为每个数据包启动一次lan_device_state.sh。
+    # 设备详细状态由主动ARP/协议扫描统一维护；实时监听只负责快速发现新网段。
+    consume_stream_targets "$RUNTIME_DIR/arp_seen.txt" "$ARP_CURSOR_FILE" "$localnet" "$targets_tmp"
+    consume_stream_targets "$RUNTIME_DIR/device_protocol_events.txt" "$PROTO_CURSOR_FILE" "$localnet" "$targets_tmp"
+    consume_stream_targets "$RUNTIME_DIR/tcpdump_discovery_events.txt" "$TCPDUMP_CURSOR_FILE" "$localnet" "$targets_tmp"
+
+    sort -u "$targets_tmp" -o "$targets_tmp" 2>/dev/null
+    while IFS= read -r target_net; do
+        [ -n "$target_net" ] || continue
+        # apply_target内部有目标状态锁；同一网段只允许第一次建立SNAT。
+        apply_target "$target_net" "$localnet" "realtime" || :
+    done < "$targets_tmp"
+    rm -f "$targets_tmp"
 }
 
 process_realtime_events() {
@@ -378,7 +382,7 @@ process_completed_cycle() {
     save_cycle_cursor "$marker"
     update_runtime_targets
     rm -f "$CURRENT_ACTIVE_FILE"
-    log "本轮目标网段状态更新完成：连续${MISS_LIMIT}个完整扫描轮次未发现且无实时活动才清理"
+    log "本轮目标网段状态更新完成：已锁定目标不因扫描缺失自动清理"
 }
 
 check_existing_targets() {
@@ -422,7 +426,7 @@ while :; do
 
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-    if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 30 ] 2>/dev/null; then
+    if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 60 ] 2>/dev/null; then
         latest_marker="$(latest_completed_cycle)"
         if [ -n "$latest_marker" ] && ! cycle_seen_before "$latest_marker"; then
             process_completed_cycle "$localnet" "$latest_marker"
