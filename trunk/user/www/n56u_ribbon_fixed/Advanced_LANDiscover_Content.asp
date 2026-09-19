@@ -414,16 +414,6 @@ function clearLog(){
     document.form.submit();
     return false;
 }
-function clearDevices(){
-    if(!login_safe())return false;
-    showLoading();
-    document.form.action_mode.value=' Update ';
-    document.form.action_script.value='lan_discovery_clear_devices';
-    document.form.current_page.value='Advanced_LANDiscover_Content.asp';
-    document.form.next_page.value='Advanced_LANDiscover_Content.asp';
-    document.form.submit();
-    return false;
-}
 function initial(){
     show_banner(1);
     show_menu(5,3,1);
@@ -601,7 +591,6 @@ function initial(){
 <tr><td style="border:0">
 <center>
 <input class="btn btn-primary" style="width:219px" type="button" value="应用" onclick="applyRule();return false;">
-<input class="btn btn-mini" type="button" value="清空发现设备" onclick="clearDevices();return false;" style="margin-left:8px;">
 </center>
 </td></tr>
 </table>
