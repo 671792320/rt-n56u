@@ -343,8 +343,7 @@ consume_realtime_events() {
             printf "%d\n", proto_total + 0 > pcfile
             printf "%d\n", tcp_total + 0 > tcfile
         }
-    
-" "$arp_file" "$proto_file" "$tcp_file"
+    ' "$arp_file" "$proto_file" "$tcp_file"
 }
 process_realtime_events() {
     localnet="$1"
