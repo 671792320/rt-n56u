@@ -16,7 +16,7 @@ DHCP_LOG=/tmp/dhcpdetect_lan.log
 ARP_LOG=/tmp/arpscan_lan.log
 CAM_LOG=/tmp/camdiscover_lan.log
 CUSTOM_CONF=/tmp/camdiscover_custom.conf
-CUSTOM_TMP="$RUNTIME_DIR/custom_parse.tmp"
+CUSTOM_TMP="$RUNTIME_DIR/custom_parse.tmp.$"
 ACTIVE_SCAN_PID=""
 
 mkdir -p /tmp "$RUNTIME_DIR"
@@ -58,6 +58,7 @@ sanitize_mac() {
 }
 
 LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_autodiscover"
+LOG_CACHE_TS=0
 mkdir -p "$LOG_DEDUPE_DIR"
 
 log_line() {
@@ -74,9 +75,22 @@ log_line() {
     printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
     printf '%s' "$plain" > "$LOG_DEDUPE_DIR/msg"
     line="$(now) $plain"
-    printf '%s\n' "$line" >> "$LOG_FILE"
-    tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
-    runtime_set "lan_discovery_log=$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
+    printf '%s
+' "$line" >> "$LOG_FILE"
+
+    # 日志只在达到大小上限时裁剪，避免每条设备事件都tail整个日志文件。
+    log_size="$(wc -c < "$LOG_FILE" 2>/dev/null)"
+    case "$log_size" in ''|*[!0-9]*) log_size=0;; esac
+    if [ "$log_size" -gt 65536 ] 2>/dev/null; then
+        tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp.$" 2>/dev/null &&
+            mv -f "@TMPLOG@" "$LOG_FILE"
+    fi
+
+    # WebUI每5秒刷新一次，日志缓存最多每2秒更新一次，避免高频runtime_set。
+    if [ "$LOG_CACHE_TS" = "0" ] || [ $((now_ts - LOG_CACHE_TS)) -ge 2 ] 2>/dev/null; then
+        runtime_set "lan_discovery_log=$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
+        LOG_CACHE_TS="$now_ts"
+    fi
     runtime_set "lan_discovery_status_last=$(now)"
     logger -t lan-autodiscover "【LAN发现】$plain"
 }
@@ -268,7 +282,6 @@ append_device() {
         printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s\n' "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
     fi
     mv -f "$tmp" "$DEVICE_DB"
-    sync_device_cache
     printf '%s' "$clean"
 }
 
@@ -382,8 +395,7 @@ EOF
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
                         device_state_event "$line"
-                        clean="$(append_device "$line")"
-                        [ -n "$clean" ] && format_device_log "$line"
+                        append_device "$line" >/dev/null 2>&1
                         ;;
                     \[arpscan\]*)
                         arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"
@@ -405,8 +417,7 @@ EOF
                     [ "$type" = "SUBNET" ] && continue
                     register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
                     device_state_event "$line"
-                    clean="$(append_device "$line")"
-                    [ -n "$clean" ] && format_device_log "$line"
+                    append_device "$line" >/dev/null 2>&1
                     ;;
                 \[arpscan\]*) arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"; log_line "【ARP扫描】$arp_line";;
             esac
@@ -520,7 +531,6 @@ run_discovery() {
     # 已知目标网段属于持久运行状态，LAN重新插入时不能清除，否则ARP扫描会暂时丢失历史目标。
     # 只补充当前Q7自身网段；已有192.168.x.x/172.16.x.x等目标网段继续保留。
     register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"
-    run_dhcp_detect "$iface"
     sync_device_cache
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
