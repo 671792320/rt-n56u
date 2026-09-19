@@ -26,6 +26,13 @@ beijing_now() {
 LOG_DEDUPE_DIR=$RUNTIME_DIR/.log_dedupe_snat
 mkdir -p "$LOG_DEDUPE_DIR"
 log() {
+    level=2
+    case "$1" in
+        0|1|2|3) level="$1"; shift;;
+    esac
+    current="$(nvram get lan_discovery_log_level 2>/dev/null)"
+    case "$current" in 0|1|2|3) ;; *) current=1;; esac
+    [ "$current" -ge "$level" ] 2>/dev/null || return 0
     plain="$*"
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
@@ -65,10 +72,10 @@ rule_del_all() {
 
 check_args() {
     case "$1:$2:$3" in *.*.*.*:*.*.*.*:*.*.*.*) ;; *) return 1;; esac
-    [ "$1" != "$3" ] || { log "SNAT参数无效：目标网段与本地网段相同：$1"; return 1; }
+    [ "$1" != "$3" ] || { log 1 "SNAT参数无效：目标网段与本地网段相同：$1"; return 1; }
     target_prefix="$(printf '%s\n' "$1" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
     ip_prefix="$(printf '%s\n' "$2" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
-    [ "$target_prefix" = "$ip_prefix" ] || { log "SNAT参数无效：临时地址不属于目标网段：$1 -> $2"; return 1; }
+    [ "$target_prefix" = "$ip_prefix" ] || { log 1 "SNAT参数无效：临时地址不属于目标网段：$1 -> $2"; return 1; }
     return 0
 }
 
@@ -90,7 +97,7 @@ remove_one() {
         rule_del_all nat POSTROUTING -s "$lan_net/24" -d "$target_net/24" -o br0 -j SNAT --to-source "$target_ip"
         rule_del_all filter FORWARD -i br0 -o br0 -s "$lan_net/24" -d "$target_net/24" -j ACCEPT
         rule_del_all filter FORWARD -i br0 -o br0 -s "$target_net/24" -d "$lan_net/24" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        log "手动删除SNAT：$lan_net/24 -> $target_net/24，临时地址=$target_ip"
+        log 1 "手动删除SNAT：$lan_net/24 -> $target_net/24，临时地址=$target_ip"
     fi
 
     # 手动删除必须同时释放目标锁定状态和临时地址，
@@ -133,7 +140,7 @@ case "$1" in
 esac
 
 check_args "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || exit 1
-[ -n "$IPTABLES" ] || { log "iptables不存在，无法维护SNAT"; exit 1; }
+[ -n "$IPTABLES" ] || { log 1 "iptables不存在，无法维护SNAT"; exit 1; }
 acquire_lock || exit 1
 
 STATE_FILE="$(state_file "$TARGET_NET")"
@@ -149,7 +156,7 @@ if [ "$1" = "up" ]; then
     fi
 
     apply_rules "$TARGET_NET" "$TARGET_IP" "$LAN_NET" || {
-        log "SNAT规则写入失败：$LAN_NET/24 -> $TARGET_NET/24，临时地址=$TARGET_IP"
+        log 1 "SNAT规则写入失败：$LAN_NET/24 -> $TARGET_NET/24，临时地址=$TARGET_IP"
         exit 1
     }
 
@@ -162,7 +169,7 @@ if [ "$1" = "up" ]; then
         printf 'locked=1\n'
         printf 'created=%s\n' "$(date +%s 2>/dev/null)"
     } > "$tmp" && mv -f "$tmp" "$STATE_FILE"
-    log "SNAT已锁定：$LAN_NET/24 -> $TARGET_NET/24，临时地址=$TARGET_IP"
+    log 1 "SNAT已锁定：$LAN_NET/24 -> $TARGET_NET/24，临时地址=$TARGET_IP"
     exit 0
 fi
 
@@ -177,6 +184,6 @@ rule_exists filter FORWARD -i br0 -o br0 -s "$TARGET_NET/24" -d "$state_lan/24" 
 rule_exists nat POSTROUTING -s "$state_lan/24" -d "$TARGET_NET/24" -o br0 -j SNAT --to-source "$state_ip" || missing=1
 if [ "$missing" = "1" ]; then
     apply_rules "$TARGET_NET" "$state_ip" "$state_lan" || exit 1
-    log "SNAT规则已补齐：$state_lan/24 -> $TARGET_NET/24，临时地址=$state_ip"
+    log 2 "SNAT规则已补齐：$state_lan/24 -> $TARGET_NET/24，临时地址=$state_ip"
 fi
 exit 0
