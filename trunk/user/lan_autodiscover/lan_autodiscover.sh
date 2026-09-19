@@ -274,17 +274,17 @@ append_device() {
     ip="$(printf '%s\n' "$clean" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
     new_mac="$(printf '%s\n' "$clean" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
     [ -n "$ip" ] || return
+
     old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
     tmp="${DEVICE_DB}.tmp"
-    awk -v ip="$ip" '{if ($0 ~ /type=IP_CONFLICT /) next; if (index($0," IP=" ip " ") != 0) next; print}' "$DEVICE_DB" 2>/dev/null > "$tmp"
-    printf '%s\n' "$clean" >> "$tmp"
-    if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] && [ -n "$new_mac" ] && [ "$new_mac" != "-" ] && [ "$old_mac" != "$new_mac" ]; then
-        printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s\n' "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
-    fi
-    # 实时ARP/协议发现一旦收到回包，立即在设备库标记为“本轮已发现”。
-    # 不等待后续Ping或状态重建，WebUI可以直接显示当前发现结果。
-    : > "$tmp"
-    awk -v ip="$ip" '$0 !~ (" IP=" ip " ") || $0 ~ /type=SUBNET /' "$DEVICE_DB" 2>/dev/null > "$tmp"
+
+    # 同一IP实时更新时只替换该IP的设备记录，保留SUBNET及其它IP记录。
+    awk -v ip="$ip" '{
+        if ($0 ~ /type=SUBNET /) {print; next}
+        if (index($0," IP=" ip " ") != 0) next
+        print
+    }' "$DEVICE_DB" 2>/dev/null > "$tmp"
+
     case "$clean" in
         *"type=SUBNET "*)
             printf '%s\n' "$clean" >> "$tmp"
@@ -293,10 +293,18 @@ append_device() {
             printf '%s STATUS=在线 PING=未探测\n' "$clean" >> "$tmp"
             ;;
     esac
+
+    # 同一个IP出现不同MAC时保留冲突记录，供WebUI显示IP冲突。
+    if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] &&
+       [ -n "$new_mac" ] && [ "$new_mac" != "-" ] &&
+       [ "$old_mac" != "$new_mac" ]; then
+        printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s STATUS=在线 PING=未探测\n' \
+            "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
+    fi
+
     mv -f "$tmp" "$DEVICE_DB"
     printf '%s' "$clean"
 }
-
 register_subnet_from_ip() {
     ip="$1"
     case "$ip" in *.*.*.*) ;; *) return;; esac
