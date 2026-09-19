@@ -410,8 +410,9 @@ EOF
         done < "$ARP_LOG"
     fi
     : > "$ARP_LOG"
+}
 
-    run_dhcp_detect() {
+run_dhcp_detect() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
