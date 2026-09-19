@@ -7,7 +7,7 @@ RUNTIME_DIR=/tmp/lan_discovery_runtime
 LOGTAG=lan-autodiscover
 LOCK_DIR="$RUNTIME_DIR/.lan_takeover.lock"
 
-runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.${key}.tmp.$"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
+runtime_set() { key="$1"; value="$2"; tmp="$RUNTIME_DIR/.takeover_${key}.tmp"; printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"; }
 beijing_now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
 log() {
     msg="$(beijing_now) 【临时地址】$*"
