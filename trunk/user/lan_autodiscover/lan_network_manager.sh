@@ -53,7 +53,6 @@ acquire_manager_lock() {
 
 acquire_manager_lock || exit 0
 RUNTIME_DIR=/tmp/lan_discovery_runtime
-DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
@@ -166,9 +165,6 @@ update_runtime_targets() {
     sort -u "$tmp" > "$TARGETS_FILE"
     rm -f "$tmp"
 
-    targets_text="$(awk 'BEGIN{ORS=""} {if(NR>1) printf ";"; printf "%s",$0}' "$TARGETS_FILE" 2>/dev/null)"
-    nvram set lan_discovery_status_targets "$targets_text" 2>/dev/null || :
-
     first="$(head -n 1 "$TARGETS_FILE" 2>/dev/null)"
     if [ -n "$first" ]; then
         first_net="${first%%|*}"
@@ -180,7 +176,6 @@ update_runtime_targets() {
         runtime_set lan_discovery_status_target_network ""
         runtime_set lan_discovery_status_target_ip ""
         runtime_set lan_discovery_status_target_iface ""
-        nvram set lan_discovery_status_targets "" 2>/dev/null || :
     fi
 }
 
