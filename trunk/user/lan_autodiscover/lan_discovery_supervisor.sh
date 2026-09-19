@@ -15,8 +15,20 @@ TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
 mkdir -p "$RUNTIME_DIR"
 
 if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
-    # 已有监督器运行：直接退出，不重复刷日志。
-    exit 0
+    # 锁目录存在时先校验其中的PID；只有确认仍有监督器运行才退出。
+    old_pid="$(cat "$SUPERVISOR_LOCKDIR/pid" 2>/dev/null)"
+    case "$old_pid" in
+        ''|*[!0-9]*) old_pid="";;
+    esac
+    if [ -n "$old_pid" ] && [ "$old_pid" != "$" ] && kill -0 "$old_pid" 2>/dev/null && [ -r "/proc/$old_pid/cmdline" ]; then
+        cmdline="$(tr '\\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)"
+        case "$cmdline" in
+            *"/usr/bin/lan_discovery_supervisor.sh"*) exit 0;;
+        esac
+    fi
+    rm -f "$SUPERVISOR_LOCKDIR/pid" 2>/dev/null
+    rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || exit 0
+    mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null || exit 0
 fi
 printf '%s\n' "$" > "$SUPERVISOR_LOCKDIR/pid"
 trap 'rm -f "$SUPERVISOR_LOCKDIR/pid" 2>/dev/null; rmdir "$SUPERVISOR_LOCKDIR" 2>/dev/null' EXIT INT TERM HUP
@@ -423,6 +435,7 @@ last_enable="-1"
 last_iface=""
 last_link="-1"
 last_status_sync=0
+last_child_check=0
 set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
 runtime_set lan_discovery_status_network_manager="已停止"
@@ -432,28 +445,33 @@ runtime_set lan_discovery_status_health="未监视"
 while :; do
     enable="$(cfg lan_discovery_enable 0)"
     iface="$(cfg lan_discovery_ifname eth2.1)"
+
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         last_link="-1"
+        last_child_check=0
         runtime_set lan_discovery_status_if="$iface"
         slog "监听接口：$iface"
     fi
+
     if [ "$enable" != "$last_enable" ]; then
         last_enable="$enable"
         last_link="-1"
+        last_child_check=0
         if [ "$enable" = "1" ]; then
             runtime_set lan_discovery_status_enable="已启用"
             slog "LAN监听已启用"
+        else
+            runtime_set lan_discovery_status_enable="已禁用"
+            runtime_set lan_discovery_status_state="LAN监听已禁用"
+            # 仅在状态真正切换到禁用时清理一次，禁止每秒重复kill和扫描孤儿进程。
+            stop_worker
+            stop_tcpdump
+            stop_network_manager
         fi
     fi
 
     if [ "$enable" != "1" ]; then
-        runtime_set lan_discovery_status_enable="已禁用"
-        runtime_set lan_discovery_status_state="LAN监听已禁用"
-        # 禁用状态下每轮都执行兜底清理，防止旧版PID失配或孤儿进程残留。
-        stop_worker
-        stop_tcpdump
-        stop_network_manager
         sleep 1
         continue
     fi
@@ -466,11 +484,12 @@ while :; do
 
     if [ "$link" != "$last_link" ]; then
         last_link="$link"
+        last_child_check=0
         if [ "$link" = "1" ]; then
             runtime_set lan_discovery_status_link="UP"
             runtime_set lan_discovery_status_state="DHCP检测"
             slog "LAN口已插入：接口=$iface"
-            # 网络管理器、实时二层监听和周期主动发现同时工作。
+            # 插拔事件立即启动；正常运行期间每5秒只做一次子进程健康检查。
             start_network_manager "$iface"
             start_tcpdump "$iface"
             start_worker "$iface"
@@ -485,17 +504,18 @@ while :; do
         fi
     fi
 
-    if [ "$link" = "1" ]; then
+    now_status="$(date +%s 2>/dev/null)"
+    case "$now_status" in ''|*[!0-9]*) now_status=0;; esac
+    if [ "$link" = "1" ] && { [ "$last_child_check" = "0" ] || [ $((now_status - last_child_check)) -ge 5 ] 2>/dev/null; }; then
         start_network_manager "$iface"
         start_tcpdump "$iface"
         start_worker "$iface"
+        last_child_check="$now_status"
     fi
-    now_status="$(date +%s 2>/dev/null)"
-    case "$now_status" in ''|*[!0-9]*) now_status=0;; esac
+
     if [ "$last_status_sync" = "0" ] || [ $((now_status - last_status_sync)) -ge 10 ] 2>/dev/null; then
         sync_runtime_status "$iface"
         last_status_sync="$now_status"
     fi
-    set_supervisor_status "运行中"
     sleep 1
 done
