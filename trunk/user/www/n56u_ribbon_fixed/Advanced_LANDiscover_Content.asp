@@ -165,7 +165,9 @@ function renderTargets(){
     }
 }
 function deviceCurrent(d){
-    return !!d && (d.status==='在线' || d.ping==='通');
+    /* 已发现以实际设备记录为准；ARP/协议记录本身就是当前发现依据。
+       Ping仅作为附加信息，不应因为Ping不可用把已经发现的设备计为“未使用”。 */
+    return !!d && (d.macs.length>0 || d.proto.length>0 || d.status==='在线' || d.ping==='通');
 }
 function classifyIp(ip,t){
     if(t&&t.temp===ip)return'temp';
@@ -238,14 +240,9 @@ function renderMatrix(){
             a.href='#';
             a.title=ip+'：'+statusText(kind);
             a.setAttribute('data-ip',ip);
-            var icon=document.createElement('span');
-            icon.className='ip-state-icon';
-            icon.setAttribute('aria-hidden','true');
-            icon.innerHTML=kind==='found'?'●':(kind==='temp'?'◆':(kind==='conflict'?'!':'·'));
             var num=document.createElement('span');
             num.className='ip-num';
             num.innerHTML=n;
-            a.appendChild(icon);
             a.appendChild(num);
             a.style.display='block';
             a.onclick=function(){
@@ -470,30 +467,40 @@ function initial(){
 .target-tabs .btn{font-size:12px}
 .ip-grid td.ip-cell{background:#fff}
 .ip-grid td.ip-cell a{position:relative;line-height:18px}
-.ip-grid td.ip-cell .ip-state-icon{
-    display:inline-block;
-    width:12px;
-    margin-right:2px;
-    text-align:center;
-    font-size:10px;
+.ip-grid td.ip-cell{
+    background:#fff;
+}
+.ip-grid td.state-found{
+    background:#dff0d8;
+}
+.ip-grid td.state-found a{
+    color:#3c763d;
     font-weight:bold;
-    vertical-align:1px;
 }
-.ip-grid td.state-found .ip-state-icon{color:#5cb85c}
-.ip-grid td.state-temp .ip-state-icon{color:#5bc0de}
-.ip-grid td.state-conflict .ip-state-icon{
-    color:#fff;
-    width:14px;
-    height:14px;
-    line-height:14px;
-    border-radius:50%;
-    background:#d9534f;
+.ip-grid td.state-temp{
+    background:#d9edf7;
 }
-.ip-grid td.state-empty .ip-state-icon{color:#bbb}
-.ip-grid td.state-found .ip-num{color:#468847}
-.ip-grid td.state-temp .ip-num{color:#31708f}
-.ip-grid td.state-conflict .ip-num{color:#b94a48;font-weight:bold}
-.ip-grid td.state-empty .ip-num{color:#777}
+.ip-grid td.state-temp a{
+    color:#31708f;
+    font-weight:bold;
+}
+.ip-grid td.state-conflict{
+    background:#f2dede;
+}
+.ip-grid td.state-conflict a{
+    color:#a94442;
+    font-weight:bold;
+}
+.ip-grid td.state-empty{
+    background:#fff;
+}
+.ip-grid td.state-empty a{
+    color:#777;
+}
+.ip-grid td.ip-cell .ip-num{
+    display:block;
+    line-height:18px;
+}
 </style>
 </head>
 <body onload="initial();" onunload="return unload_body();">
