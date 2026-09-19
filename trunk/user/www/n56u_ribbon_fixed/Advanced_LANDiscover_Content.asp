@@ -151,7 +151,8 @@ function renderTargets(){
         btn.className='btn btn-mini '+(t.net===selected_target?'btn-primary':'');
         btn.style.marginRight='5px';
         btn.style.marginBottom='4px';
-        btn.innerHTML=targetShort(t.net);
+        /* 目标网段直接显示完整CIDR，避免多个网段时用户无法区分当前对象。 */
+        btn.innerHTML=escHtml(t.net);
         btn.title=t.net+'  临时IP：'+t.temp;
         btn.setAttribute('data-net',t.net);
         btn.onclick=function(){
@@ -180,11 +181,12 @@ function statusText(kind){
     return'未使用';
 }
 function renderSummary(){
-    var nets=target_items.length;
-    var found=0,conflict=0,temp=0,total=nets*255;
-    for(var i=0;i<target_items.length;i++){
-        if(target_items[i].temp!=='-')temp++;
-        var base=targetBase(target_items[i].net);
+    /* 统计始终只针对当前选中的单个目标网段，不再把多个网段合并。 */
+    var t=findTarget(selected_target);
+    var found=0,conflict=0,temp=0,unused=255;
+    if(t){
+        temp=(t.temp&&t.temp!=='-')?1:0;
+        var base=targetBase(t.net);
         for(var j=1;j<=255;j++){
             var ip=base+'.'+j;
             var d=device_map[ip];
@@ -193,11 +195,13 @@ function renderSummary(){
                 if(d.macs.length>1)conflict++;
             }
         }
+        unused=255-found-temp;
+        if(unused<0)unused=0;
+        $j('#summary_targets').text(t.net);
+    }else{
+        $j('#summary_targets').text('-');
+        unused=0;
     }
-    var used=found+temp;
-    var unused=total-used;
-    if(unused<0)unused=0;
-    $j('#summary_targets').text(nets);
     $j('#summary_found').text(found);
     $j('#summary_temp').text(temp);
     $j('#summary_conflict').text(conflict);
@@ -229,14 +233,21 @@ function renderMatrix(){
             }
             var ip=targetBase(t.net)+'.'+n;
             var kind=classifyIp(ip,t);
-            if(kind==='found')td.className='success';
-            else if(kind==='temp')td.className='info';
-            else if(kind==='conflict')td.className='error';
+            td.className='ip-cell state-'+kind;
             var a=document.createElement('a');
             a.href='#';
-            a.innerHTML=n;
-            a.style.display='block';
+            a.title=ip+'：'+statusText(kind);
             a.setAttribute('data-ip',ip);
+            var icon=document.createElement('span');
+            icon.className='ip-state-icon';
+            icon.setAttribute('aria-hidden','true');
+            icon.innerHTML=kind==='found'?'●':(kind==='temp'?'◆':(kind==='conflict'?'!':'·'));
+            var num=document.createElement('span');
+            num.className='ip-num';
+            num.innerHTML=n;
+            a.appendChild(icon);
+            a.appendChild(num);
+            a.style.display='block';
             a.onclick=function(){
                 showIpDetail(this.getAttribute('data-ip'),findTarget(selected_target));
                 return false;
@@ -455,6 +466,34 @@ function initial(){
 .detail-table th{white-space:nowrap}
 .section-head{margin:8px 0}
 .summary-table td{white-space:nowrap;text-align:center}
+.summary-table #summary_targets{font-size:13px;font-weight:bold}
+.target-tabs .btn{font-size:12px}
+.ip-grid td.ip-cell{background:#fff}
+.ip-grid td.ip-cell a{position:relative;line-height:18px}
+.ip-grid td.ip-cell .ip-state-icon{
+    display:inline-block;
+    width:12px;
+    margin-right:2px;
+    text-align:center;
+    font-size:10px;
+    font-weight:bold;
+    vertical-align:1px;
+}
+.ip-grid td.state-found .ip-state-icon{color:#5cb85c}
+.ip-grid td.state-temp .ip-state-icon{color:#5bc0de}
+.ip-grid td.state-conflict .ip-state-icon{
+    color:#fff;
+    width:14px;
+    height:14px;
+    line-height:14px;
+    border-radius:50%;
+    background:#d9534f;
+}
+.ip-grid td.state-empty .ip-state-icon{color:#bbb}
+.ip-grid td.state-found .ip-num{color:#468847}
+.ip-grid td.state-temp .ip-num{color:#31708f}
+.ip-grid td.state-conflict .ip-num{color:#b94a48;font-weight:bold}
+.ip-grid td.state-empty .ip-num{color:#777}
 </style>
 </head>
 <body onload="initial();" onunload="return unload_body();">
