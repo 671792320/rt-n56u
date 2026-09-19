@@ -12,6 +12,7 @@ DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 RUNTIME_DIR=/tmp/lan_discovery_runtime
 TCPDUMP_RETRY_FILE="$RUNTIME_DIR/lan_tcpdump_retry"
+WORKER_RETRY_FILE="$RUNTIME_DIR/lan_worker_retry"
 mkdir -p "$RUNTIME_DIR"
 
 if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
@@ -45,9 +46,21 @@ runtime_set() {
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
 beijing_now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
+log_level() {
+    level="$(nvram get lan_discovery_log_level 2>/dev/null)"
+    case "$level" in
+        0|1|2|3) printf '%s' "$level";;
+        *) printf '1';;
+    esac
+}
 LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_supervisor"
 mkdir -p "$LOG_DEDUPE_DIR"
 slog() {
+    level=2
+    case "$1" in
+        0|1|2|3) level="$1"; shift;;
+    esac
+    [ "$(log_level)" -ge "$level" ] 2>/dev/null || return 0
     msg="$*"
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
@@ -88,6 +101,7 @@ migrate_lan_discovery_config() {
         [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
         [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
         [ -n "$(nv lan_discovery_sweep_cycle)" ] || nvram set lan_discovery_sweep_cycle=120
+        [ -n "$(nv lan_discovery_log_level)" ] || nvram set lan_discovery_log_level=1
         nvram set lan_discovery_clear_on_unplug=0
         [ -n "$(nv lan_discovery_raw)" ] || nvram set lan_discovery_raw=1
         [ -n "$(nv lan_discovery_onvif)" ] || nvram set lan_discovery_onvif=1
@@ -376,10 +390,23 @@ sync_runtime_status() {
 
 start_worker() {
     iface="$1"
+
+    # worker异常退出时采用15秒退避，避免每5秒反复fork和刷屏。
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    retry_at=0
+    IFS= read -r retry_at < "$WORKER_RETRY_FILE" 2>/dev/null || retry_at=0
+    case "$retry_at" in ''|*[!0-9]*) retry_at=0;; esac
+    if [ "$retry_at" -gt 0 ] 2>/dev/null && [ "$now_ts" -lt "$retry_at" ] 2>/dev/null; then
+        return 1
+    fi
+
     if worker_running; then
+        rm -f "$WORKER_RETRY_FILE"
         runtime_set lan_discovery_status_worker="运行中"
         return 0
     fi
+
     if [ -d "$WORKER_LOCKDIR" ]; then
         stale=""
         [ -r "$WORKER_LOCKDIR/pid" ] && stale="$(cat "$WORKER_LOCKDIR/pid" 2>/dev/null)"
@@ -394,17 +421,33 @@ start_worker() {
             return 0
         }
     fi
+
     if [ ! -x /usr/bin/lan_autodiscover.sh ]; then
         runtime_set lan_discovery_status_worker="程序不存在"
+        slog 1 "发现工作进程程序不存在"
         return 1
     fi
-    slog "发现工作进程启动：接口=$iface"
+
     /usr/bin/lan_autodiscover.sh > /tmp/lan_autodiscover_worker.log 2>&1 &
-    echo "$!" > "$PIDFILE"
+    pid="$!"
+    printf '%s\n' "$pid" > "$PIDFILE"
+    sleep 1
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$PIDFILE"
+        retry_after=$((now_ts + 15))
+        printf '%s\n' "$retry_after" > "$WORKER_RETRY_FILE"
+        reason="$(tail -n 3 /tmp/lan_autodiscover_worker.log 2>/dev/null | tr '\n' ';')"
+        runtime_set lan_discovery_status_worker="启动失败，15秒后重试"
+        slog 1 "发现工作进程启动失败：${reason:-无错误输出}"
+        return 1
+    fi
+
+    rm -f "$WORKER_RETRY_FILE"
     runtime_set lan_discovery_status_worker="运行中"
+    slog 1 "发现工作进程启动：接口=$iface"
     return 0
 }
-
 stop_worker() {
     was_running=0
     if worker_running; then
@@ -423,7 +466,7 @@ stop_worker() {
         killall dhcpdetect 2>/dev/null
         killall lanhealth 2>/dev/null
     fi
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" "$WORKER_RETRY_FILE"
     rmdir "$WORKER_LOCKDIR" 2>/dev/null
     runtime_set lan_discovery_status_worker="已停止"
     rm -f /tmp/lan_discovery_runtime/lanhealth.pid
