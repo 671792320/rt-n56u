@@ -238,6 +238,18 @@ apply_target() {
         }
     fi
 
+    if ! /usr/bin/lan_snat.sh up "$target_net" "$current_ip" "$source_net" >> "$LOG_FILE" 2>&1; then
+        pending_file="$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
+        now_ts="$(date +%s 2>/dev/null)"
+        case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+        printf '%s\n' "$((now_ts + 10))" > "$pending_file"
+        log "SNAT暂未完成，10秒后重试：$source_net/24 → $target_net/24"
+        return 1
+    fi
+
+    write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
+    rm -f "$RUNTIME_DIR/lan_pending_$(state_key "$target_net").state"
+    log "目标网段首次接管：$source_net/24 → $target_net/24，临时地址=$current_ip"
     runtime_set lan_discovery_status_state "实时发现：目标网段已接管"
     update_runtime_targets
     return 0
