@@ -93,22 +93,28 @@ add_protocol() {
 DB_LOCKDIR="$RUNTIME_DIR/.lan_device_db.lock"
 
 acquire_db_lock() {
-    if mkdir "$DB_LOCKDIR" 2>/dev/null; then
-        printf '%s\n' "$$" > "$DB_LOCKDIR/pid"
-        return 0
-    fi
-    old_pid="$(cat "$DB_LOCKDIR/pid" 2>/dev/null)"
-    case "$old_pid" in
-        ''|*[!0-9]*) old_pid="";;
-    esac
-    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-        return 1
-    fi
-    rm -f "$DB_LOCKDIR/pid" 2>/dev/null
-    rmdir "$DB_LOCKDIR" 2>/dev/null || :
-    mkdir "$DB_LOCKDIR" 2>/dev/null || return 1
-    printf '%s\n' "$$" > "$DB_LOCKDIR/pid"
-    return 0
+    attempt=0
+    while [ "$attempt" -lt 10 ]; do
+        if mkdir "$DB_LOCKDIR" 2>/dev/null; then
+            printf '%s\n' "$" > "$DB_LOCKDIR/pid"
+            return 0
+        fi
+
+        old_pid="$(cat "$DB_LOCKDIR/pid" 2>/dev/null)"
+        case "$old_pid" in
+            ''|*[!0-9]*) old_pid="";;
+        esac
+
+        if [ -z "$old_pid" ] || ! kill -0 "$old_pid" 2>/dev/null; then
+            rm -f "$DB_LOCKDIR/pid" 2>/dev/null
+            rmdir "$DB_LOCKDIR" 2>/dev/null || :
+            continue
+        fi
+
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    return 1
 }
 
 release_db_lock() {
@@ -257,7 +263,7 @@ sync)
     release_db_lock
     ;;
 
-begin)    # 开始新一轮检测，清空本轮ARP和协议事件。
+begin)\n    # 开始新一轮检测，清空本轮ARP和协议事件。
     : > "$ARP_SEEN_FILE"
     : > "$EVENT_FILE"
     ;;
