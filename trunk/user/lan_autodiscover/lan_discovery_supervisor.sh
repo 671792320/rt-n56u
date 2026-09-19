@@ -26,7 +26,7 @@ runtime_set() {
     item="$1"
     key="${item%%=*}"
     value="${item#*=}"
-    tmp="${RUNTIME_DIR}/.${key}.tmp"
+    tmp="$RUNTIME_DIR/.$key.tmp.$"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
@@ -204,9 +204,7 @@ tcpdump_running() {
 start_network_manager() {
     iface="$1"
 
-    # 先收敛历史残留，只保留一个真正的网络管理器实例。
-    normalize_network_manager_instances >/dev/null 2>&1 || :
-
+    # 正常运行时不再每秒扫描/proc；只有PID失效时才收敛历史残留。
     if network_manager_running; then
         runtime_set lan_discovery_status_network_manager="运行中"
         return 0
@@ -424,6 +422,7 @@ stop_worker() {
 last_enable="-1"
 last_iface=""
 last_link="-1"
+last_status_sync=0
 set_supervisor_status "运行中"
 runtime_set lan_discovery_status_worker="已停止"
 runtime_set lan_discovery_status_network_manager="已停止"
@@ -491,7 +490,12 @@ while :; do
         start_tcpdump "$iface"
         start_worker "$iface"
     fi
-    sync_runtime_status "$iface"
+    now_status="$(date +%s 2>/dev/null)"
+    case "$now_status" in ''|*[!0-9]*) now_status=0;; esac
+    if [ "$last_status_sync" = "0" ] || [ $((now_status - last_status_sync)) -ge 10 ] 2>/dev/null; then
+        sync_runtime_status "$iface"
+        last_status_sync="$now_status"
+    fi
     set_supervisor_status "运行中"
     sleep 1
 done
