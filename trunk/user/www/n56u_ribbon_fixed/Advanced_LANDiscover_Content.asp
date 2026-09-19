@@ -41,6 +41,7 @@ function val(v,d){return(v!==undefined&&v!==null&&String(v)!==''&&String(v)!=='-
 function linkText(v){v=String(v||'');return v==='UP'?'已插入':(v==='DOWN'?'未插入':(v||'-'));}
 function healthText(v){v=String(v||'');if(v==='OK')return'正常';if(v==='BROADCAST_STORM')return'广播风暴';if(v==='LOOP_SUSPECTED')return'疑似环路';if(v==='LOOP_BROADCAST')return'疑似环路/广播风暴';return v||'未监视';}
 function macText(v){var m=String(v||'').replace(/\\/g,'').replace(/\s+/g,'').toUpperCase();return/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(m)?m:'-';}
+function escHtml(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}
 function section(t,a,b){var p=t.indexOf(a);if(p<0)return'';p+=a.length;var q=b?t.indexOf(b,p):-1;return t.substring(p,q<0?t.length:q).replace(/^\n+|\n+$/g,'');}
 function parseData(t){
     t=html_decode(t);
@@ -263,7 +264,7 @@ function showIpDetail(ip,t){
     var kind=classifyIp(ip,t);
     var html='';
     html+='<table class="table table-bordered table-condensed detail-table">';
-    html+='<tr><th width="160">IP地址</th><td>'+ip+'</td></tr>';
+    html+='<tr><th width="160">IP地址</th><td>'+escHtml(ip)+'</td></tr>';
     html+='<tr><th>状态</th><td>'+statusText(kind)+'</td></tr>';
     if(kind==='temp'){
         html+='<tr><th>所有者</th><td>Q7</td></tr>';
@@ -271,16 +272,16 @@ function showIpDetail(ip,t){
         html+='<tr><th>SNAT状态</th><td>'+((t&&t.state)?t.state:'SNAT已锁定')+'</td></tr>';
         html+='<tr><th>所属网段</th><td>'+(t?t.net:'-')+'</td></tr>';
     }else if(d){
-        html+='<tr><th>MAC地址</th><td>'+((d.macs.length)?d.macs.join('<br>'):'-')+'</td></tr>';
-        html+='<tr><th>发现协议</th><td>'+((d.proto.length)?d.proto.join(' / '):'ARP')+'</td></tr>';
+        html+='<tr><th>MAC地址</th><td>'+((d.macs.length)?escHtml(d.macs.join('<br>')).replace(/&lt;br&gt;/g,'<br>'):'-')+'</td></tr>';
+        html+='<tr><th>发现协议</th><td>'+escHtml((d.proto.length)?d.proto.join(' / '):'ARP')+'</td></tr>';
         html+='<tr><th>Ping状态</th><td>'+((d.ping==='通')?'可达':'不可用')+'</td></tr>';
-        if(d.info.length)html+='<tr><th>设备信息</th><td>'+d.info.join('<br>')+'</td></tr>';
+        if(d.info.length)html+='<tr><th>设备信息</th><td>'+escHtml(d.info.join('<br>')).replace(/&lt;br&gt;/g,'<br>')+'</td></tr>';
         if(kind==='conflict')html+='<tr><th>冲突说明</th><td>检测到多个不同MAC占用同一IP地址</td></tr>';
     }else{
         html+='<tr><th>ARP响应</th><td>无</td></tr>';
         html+='<tr><th>说明</th><td>当前扫描周期未发现该地址</td></tr>';
     }
-    html+='<tr><th>目标网段</th><td>'+(t?t.net:'-')+'</td></tr>';
+    html+='<tr><th>目标网段</th><td>'+escHtml(t?t.net:'-')+'</td></tr>';
     html+='</table>';
     body.innerHTML=html;
 }
