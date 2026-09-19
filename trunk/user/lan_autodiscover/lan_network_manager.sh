@@ -82,7 +82,7 @@ mkdir -p "$RUNTIME_DIR"
 runtime_set() {
     key="$1"
     value="$2"
-    tmp="$RUNTIME_DIR/.${key}.tmp"
+    tmp="$RUNTIME_DIR/.$key.tmp.$"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$RUNTIME_DIR/$key"
 }
 
@@ -190,17 +190,6 @@ update_runtime_targets() {
         runtime_set lan_discovery_status_target_iface ""
         nvram set lan_discovery_status_targets "" 2>/dev/null || :
     fi
-}
-
-cleanup_one() {
-    target_net="$1"
-    if [ -x /usr/bin/lan_snat.sh ]; then
-        /usr/bin/lan_snat.sh down "$target_net" >> "$LOG_FILE" 2>&1 || :
-    fi
-    if [ -x /usr/bin/lan_takeover.sh ]; then
-        /usr/bin/lan_takeover.sh -r "$target_net" >> "$LOG_FILE" 2>&1 || :
-    fi
-    rm -f "$(target_state_file "$target_net")"
 }
 
 apply_target() {
