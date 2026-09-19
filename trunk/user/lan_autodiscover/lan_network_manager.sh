@@ -304,6 +304,13 @@ collect_cycle_targets() {
             while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
     fi
 
+    # 实时二层监听同样属于本轮真实活动，不能因为主动ARP/协议扫描没命中
+    # 就把仍在通信的目标网段清掉，否则下一条实时事件又会重新触发“首次接管”。
+    if [ -r "$RUNTIME_DIR/tcpdump_discovery_events.txt" ]; then
+        cut -d'|' -f1 "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
+            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
+    fi
+
     grep -v "^$local_net$" "$tmp" 2>/dev/null |
         grep -v '^0\.0\.0\.0$' 2>/dev/null |
         sort -u > "$CURRENT_ACTIVE_FILE"
