@@ -361,72 +361,58 @@ write_custom_config() {
 
 run_arpscan() {
     iface="$1"
+    localnet="$2"
     [ "$raw" = "1" ] || return 0
     [ -x /usr/bin/arpscan ] || { log_line "主动ARP扫描程序不存在"; return 0; }
-    args="-i $iface -t 2"
-    subnet_count=0
+
+    # 主动ARP只扫描目标网段：
+    # 1. 当前开机周期已经锁定的目标网段；
+    # 2. DHCP/设备发现登记的目标网段。
+    # Q7自身LAN网段(localnet)绝不能进入主动扫描，避免每轮重复扫描255个本机地址。
+    subnet_file="$RUNTIME_DIR/.arpscan_subnets.tmp"
+    : > "$subnet_file"
+
+    for takeover_file in "$RUNTIME_DIR"/lan_takeover_*.state; do
+        [ -r "$takeover_file" ] || continue
+        target_net="$(state_get "$takeover_file" network 2>/dev/null)"
+        [ -n "$target_net" ] || continue
+        [ "$target_net" != "$localnet" ] || continue
+        [ "$target_net" != "0.0.0.0" ] || continue
+        printf '%s|24\n' "$target_net" >> "$subnet_file"
+    done
+
     while IFS= read -r row; do
         [ -n "$row" ] || continue
         network="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([0-9.]*\) INFO=\([0-9][0-9]*\).*/\1\/\2/p')"
         [ -n "$network" ] || continue
-        args="$args -s $network"
-        subnet_count=$((subnet_count + 1))
+        network_net="\${network%%/*}"
+        [ "$network_net" != "$localnet" ] || continue
+        printf '%s\n' "$network" >> "$subnet_file"
     done <<EOF
 $(grep '^DEVICE type=SUBNET ' "$DEVICE_DB" 2>/dev/null)
 EOF
+
+    sort -u "$subnet_file" -o "$subnet_file" 2>/dev/null
+
+    args="-i $iface -t 2"
+    subnet_count=0
+    while IFS= read -r network; do
+        [ -n "$network" ] || continue
+        args="$args -s $network"
+        subnet_count=$((subnet_count + 1))
+    done < "$subnet_file"
+    rm -f "$subnet_file"
+
+    if [ "$subnet_count" -eq 0 ]; then
+        log_line "本轮主动ARP跳过：暂无目标网段"
+        return 0
+    fi
+
     runtime_set "lan_discovery_status_state=主动ARP扫描"
-    log_line "开始主动ARP扫描，已知网段 ${subnet_count} 个"
+    log_line "开始主动ARP扫描，目标网段 \${subnet_count} 个（已排除Q7本机网段 \${localnet}/24）"
     : > "$ARP_LOG"
     /usr/bin/arpscan $args > "$ARP_LOG" 2>&1 &
     pid=$!
-    ACTIVE_SCAN_PID="$pid"
-    processed=""
-    while kill -0 "$pid" 2>/dev/null; do
-        if ! discovery_enabled; then
-            kill "$pid" 2>/dev/null
-            break
-        fi
-        if [ -s "$ARP_LOG" ]; then
-            while IFS= read -r line; do
-                [ -n "$line" ] || continue
-                case "$line" in
-                    DEVICE\ *)
-                        type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
-                        [ "$type" = "SUBNET" ] && continue
-                        register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
-                        device_state_event "$line"
-                        append_device "$line" >/dev/null 2>&1
-                        ;;
-                    \[arpscan\]*)
-                        arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"
-                        log_line "【ARP扫描】$arp_line"
-                        ;;
-                esac
-            done < "$ARP_LOG"
-            : > "$ARP_LOG"
-        fi
-        sleep 1
-    done
-    wait "$pid" 2>/dev/null
-    [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
-    if [ -s "$ARP_LOG" ]; then
-        while IFS= read -r line; do
-            case "$line" in
-                DEVICE\ *)
-                    type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
-                    [ "$type" = "SUBNET" ] && continue
-                    register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
-                    device_state_event "$line"
-                    append_device "$line" >/dev/null 2>&1
-                    ;;
-                \[arpscan\]*) arp_line="$(printf '%s\n' "$line" | sed 's/^\[arpscan\][[:space:]]*//')"; log_line "【ARP扫描】$arp_line";;
-            esac
-        done < "$ARP_LOG"
-    fi
-    rm -f "$ARP_LOG"
-    sync_device_cache
-}
-
 run_dhcp_detect() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
@@ -529,9 +515,8 @@ run_discovery() {
         return 0
     fi
 
-    # 已知目标网段属于持久运行状态，LAN重新插入时不能清除，否则ARP扫描会暂时丢失历史目标。
-    # 只补充当前Q7自身网段；已有192.168.x.x/172.16.x.x等目标网段继续保留。
-    register_subnet_from_ip "$(iface_ipv4 "$iface" | cut -d/ -f1)"
+    # 目标网段属于本次开机周期的持久状态。
+    # Q7自身LAN网段不属于目标网段，不再写入DEVICE_DB，也不参与主动ARP扫描。
     sync_device_cache
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
@@ -570,7 +555,9 @@ run_discovery() {
             log_line "低频主动补漏开始：ARP + 协议探测，周期=${sweep_cycle}s"
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh begin
-                run_arpscan "$iface"
+                localip="$(iface_ipv4 "$iface" | cut -d/ -f1)"
+                localnet="$(printf '%s\n' "$localip" | awk -F. 'NF==4 {printf "%d.%d.%d.0",$1,$2,$3}')"
+                run_arpscan "$iface" "$localnet"
             fi
             discover_cycle="$(cfg lan_discovery_cycle 10)"
             case "$discover_cycle" in ''|*[!0-9]*) discover_cycle=10;; esac
@@ -606,7 +593,7 @@ cleanup() {
         ACTIVE_SCAN_PID=""
     fi
     stop_health
-    rm -f "$CUSTOM_TMP" "$CUSTOM_CONF" "$DHCP_LOG" "$ARP_LOG" "$CAM_LOG"
+    rm -f "$CUSTOM_TMP" "$CUSTOM_CONF" "$DHCP_LOG" "$ARP_LOG" "$CAM_LOG" "$RUNTIME_DIR/.arpscan_subnets.tmp"
     rmdir "$LOCKDIR" 2>/dev/null
 }
 trap cleanup EXIT INT TERM HUP
