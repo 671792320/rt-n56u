@@ -25,6 +25,13 @@ touch "$DEVICE_DB" "$LOG_FILE"
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
 now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
+log_level() {
+    level="$(nvram get lan_discovery_log_level 2>/dev/null)"
+    case "$level" in
+        0|1|2|3) printf '%s' "$level";;
+        *) printf '1';;
+    esac
+}
 
 # LAN总开关与设备发现开关必须同时开启，避免子循环绕过主开关继续运行。
 discovery_enabled() {
@@ -62,6 +69,11 @@ LOG_CACHE_TS=0
 mkdir -p "$LOG_DEDUPE_DIR"
 
 log_line() {
+    level=2
+    case "$1" in
+        0|1|2|3) level="$1"; shift;;
+    esac
+    [ "$(log_level)" -ge "$level" ] 2>/dev/null || return 0
     plain="$(sanitize_text "$*" | sed 's/\\//g')"
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
@@ -162,7 +174,7 @@ start_health() {
     runtime_set "lan_discovery_status_loop=0"
     /usr/bin/lanhealth -i "$iface" >/tmp/lanhealth.log 2>&1 &
     printf '%s\n' "$!" > "$HEALTH_PIDFILE"
-    log_line "网络环路与广播风暴检测已启动"
+    log_line 2 "网络环路与广播风暴检测已启动"
 }
 
 stop_health() {
@@ -248,11 +260,11 @@ format_device_log() {
         *) protocol="$type";;
     esac
     if [ -n "$response_len" ]; then
-        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=${response_len}字节"
+        log_line 3 "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=${response_len}字节"
     elif [ "$protocol" = "ARP" ]; then
-        log_line "发现设备：IP=$ip 协议=ARP MAC=$mac 回包响应=收到ARP回复"
+        log_line 3 "发现设备：IP=$ip 协议=ARP MAC=$mac 回包响应=收到ARP回复"
     else
-        log_line "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=已收到"
+        log_line 3 "发现设备：IP=$ip 协议=$protocol MAC=$mac 回包响应=已收到"
     fi
 }
 
@@ -383,7 +395,7 @@ run_arpscan() {
     iface="$1"
     localnet="$2"
     [ "$raw" = "1" ] || return 0
-    [ -x /usr/bin/arpscan ] || { log_line "主动ARP扫描程序不存在"; return 0; }
+    [ -x /usr/bin/arpscan ] || { log_line 1 "主动ARP扫描程序不存在"; return 0; }
 
     # 主动ARP只扫描目标网段：
     # 1. 当前开机周期已经锁定的目标网段；
@@ -424,12 +436,12 @@ EOF
     rm -f "$subnet_file"
 
     if [ "$subnet_count" -eq 0 ]; then
-        log_line "本轮主动ARP跳过：暂无目标网段"
+        log_line 2 "本轮主动ARP跳过：暂无目标网段"
         return 0
     fi
 
     runtime_set "lan_discovery_status_state=主动ARP扫描"
-    log_line "开始主动ARP扫描，目标网段 ${subnet_count} 个（已排除Q7本机网段 ${localnet}/24）"
+    log_line 3 "开始主动ARP扫描，目标网段 ${subnet_count} 个（已排除Q7本机网段 ${localnet}/24）"
     : > "$ARP_LOG"
     /usr/bin/arpscan $args > "$ARP_LOG" 2>&1 &
     pid=$!
@@ -451,18 +463,18 @@ run_dhcp_detect() {
         server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
         if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
             runtime_set "lan_discovery_status_dhcp=网关 $gateway"
-            log_line "上级DHCP：网关 $gateway"
+            log_line 1 "上级DHCP：网关 $gateway"
             register_subnet_from_ip "$gateway"
         elif [ -n "$server" ] && [ "$server" != "-" ]; then
             runtime_set "lan_discovery_status_dhcp=DHCP服务器 $server（未提供网关）"
-            log_line "上级DHCP：服务器 $server，未提供网关"
+            log_line 1 "上级DHCP：服务器 $server，未提供网关"
         else
             runtime_set "lan_discovery_status_dhcp=已发现DHCP（无网关信息）"
-            log_line "上级DHCP已发现，但报文未提供网关"
+            log_line 1 "上级DHCP已发现，但报文未提供网关"
         fi
     else
         runtime_set "lan_discovery_status_dhcp=未发现DHCP"
-        log_line "未发现DHCP"
+        log_line 2 "未发现DHCP"
     fi
 }
 
@@ -480,8 +492,8 @@ run_camdiscover() {
     [ "$probe_timeout" -ge 1 ] 2>/dev/null || probe_timeout=1
     write_custom_config "$custom"
 
-    log_line "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
-    log_line "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"
+    log_line 3 "本轮设备发现周期 ${discover_cycle}s，响应等待 ${probe_timeout}s"
+    log_line 3 "发现程序启用模块：ONVIF=$(module_cn "$onvif") SSDP=$(module_cn "$ssdp") HIK=$(module_cn "$hik") DAHUA=$(module_cn "$dahua") ARP=$(module_cn "$raw")"
     : > "$CAM_LOG"
     args="-i $iface -t $probe_timeout -o $onvif_port -s $ssdp_port -k $hik_port -d $dahua_port"
     [ "$onvif" = "1" ] && args="$args -O"
@@ -511,7 +523,7 @@ run_camdiscover() {
                         device_state_event "$line"
                         append_device "$line" >/dev/null 2>&1
                         ;;
-                    *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line "【设备探测】$line";;
+                    *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line 3 "【设备探测】$line";;
                 esac
             done < "$CAM_LOG"
             : > "$CAM_LOG"
@@ -526,7 +538,7 @@ run_camdiscover() {
 
 run_discovery() {
     iface="$1"
-    log_line "LAN口已插入 $iface"
+    log_line 1 "LAN口已插入 $iface"
     start_health "$iface"
     run_dhcp_detect "$iface"
 
@@ -550,7 +562,7 @@ run_discovery() {
     while is_link_up "$iface"; do
         discovery_enabled || {
             runtime_set "lan_discovery_status_state=设备发现未启用"
-            log_line "LAN监听或设备发现已关闭"
+            log_line 1 "LAN监听或设备发现已关闭"
             break
         }
 
@@ -572,7 +584,7 @@ run_discovery() {
             custom="$(nv lan_discovery_custom)"
             read_standard_config "$custom"
             cycle_start="$now_sec"
-            log_line "低频主动补漏开始：ARP + 协议探测，周期=${sweep_cycle}s"
+            log_line 3 "低频主动补漏开始：ARP + 协议探测，周期=${sweep_cycle}s"
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh begin
                 localip="$(iface_ipv4 "$iface" | cut -d/ -f1)"
@@ -592,7 +604,7 @@ run_discovery() {
             # 这里才表示一轮真正的低频主动补漏已经完成。
             runtime_set "lan_discovery_sweep_complete=$cycle_start"
             last_sweep="$cycle_start"
-            log_line "低频主动补漏完成：下一轮约${sweep_cycle}s后开始"
+            log_line 3 "低频主动补漏完成：下一轮约${sweep_cycle}s后开始"
         fi
 
         if ! is_link_up "$iface"; then
@@ -628,6 +640,7 @@ trap cleanup EXIT INT TERM HUP
 [ -n "$(nv lan_discovery_probe_timeout)" ] || nvram set lan_discovery_probe_timeout=5
 [ -n "$(nv lan_discovery_miss_limit)" ] || nvram set lan_discovery_miss_limit=3
 [ -n "$(nv lan_discovery_sweep_cycle)" ] || nvram set lan_discovery_sweep_cycle=120
+[ -n "$(nv lan_discovery_log_level)" ] || nvram set lan_discovery_log_level=1
 
 iface="$(cfg lan_discovery_ifname eth2.1)"
 last_iface=""
@@ -641,7 +654,7 @@ while :; do
     if [ "$iface" != "$last_iface" ]; then
         last_iface="$iface"
         runtime_set "lan_discovery_status_if=$iface"
-        log_line "检测接口切换为 $iface"
+        log_line 1 "检测接口切换为 $iface"
     fi
 
     [ "$enable" = "1" ] || {
