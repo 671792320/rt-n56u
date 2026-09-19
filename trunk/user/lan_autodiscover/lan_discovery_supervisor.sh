@@ -21,7 +21,7 @@ if ! mkdir "$SUPERVISOR_LOCKDIR" 2>/dev/null; then
         ''|*[!0-9]*) old_pid="";;
     esac
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null && [ -r "/proc/$old_pid/cmdline" ]; then
-        cmdline="$(tr '\\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)"
+        cmdline="$(tr '\000' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null)"
         case "$cmdline" in
             *"/usr/bin/lan_discovery_supervisor.sh"*) exit 0;;
         esac
