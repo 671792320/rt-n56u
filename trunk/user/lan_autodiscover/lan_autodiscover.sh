@@ -20,7 +20,7 @@ CUSTOM_TMP="$RUNTIME_DIR/custom_parse.discovery.tmp"
 ACTIVE_SCAN_PID=""
 
 mkdir -p /tmp "$RUNTIME_DIR"
-touch "$DEVICE_DB" "$LOG_FILE"
+touch "$LOG_FILE"
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
@@ -191,53 +191,6 @@ stop_health() {
     runtime_set "lan_discovery_status_loop=0"
 }
 
-clean_device_line() {
-    raw="$(sanitize_text "$1" | sed 's/\\//g')"
-    type="$(printf '%s\n' "$raw" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
-    ip="$(printf '%s\n' "$raw" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
-    mac="$(printf '%s\n' "$raw" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
-    mac="$(sanitize_mac "$mac")"
-    case "$ip" in *.*.*.*) ;; *) return 1;; esac
-    [ -n "$type" ] || type="IP"
-    if [ "$type" = "SUBNET" ]; then
-        prefix="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\([0-9][0-9]*\).*/\1/p')"
-        [ -n "$prefix" ] || prefix=24
-        printf 'DEVICE type=SUBNET IP=%s INFO=%s' "$ip" "$prefix"
-    else
-        printf 'DEVICE type=%s IP=%s MAC=%s' "$type" "$ip" "$mac"
-        info="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\(.*\)$/\1/p')"
-        [ -n "$info" ] && printf ' INFO=%s' "$info"
-    fi
-}
-
-sort_device_db() {
-    [ -f "$DEVICE_DB" ] || return
-    tmp="${DEVICE_DB}.tmp"
-    : > "$tmp"
-    while IFS= read -r row; do
-        [ -n "$row" ] || continue
-        ip="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
-        key="$(printf '%s\n' "$ip" | awk -F. 'NF==4 {printf "%03d%03d%03d%03d",$1,$2,$3,$4}')"
-        [ -n "$key" ] || key=999999999999
-        printf '%s|%s\n' "$key" "$row"
-    done < "$DEVICE_DB" | sort -n | cut -d'|' -f2- > "$tmp"
-    mv -f "$tmp" "$DEVICE_DB"
-}
-
-sync_device_cache() {
-    sort_device_db
-    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
-    runtime_set "lan_discovery_status_count=${count:-0}"
-}
-
-clear_subnet_records() {
-    [ -f "$DEVICE_DB" ] || return
-    tmp="${DEVICE_DB}.tmp"
-    grep -v 'DEVICE type=SUBNET ' "$DEVICE_DB" > "$tmp" 2>/dev/null || :
-    mv -f "$tmp" "$DEVICE_DB"
-    sync_device_cache
-}
-
 module_cn() {
     [ "$1" = "1" ] && printf '启用' || printf '停用'
 }
@@ -251,7 +204,7 @@ format_device_log() {
     [ -n "$ip" ] || return 0
     [ -n "$mac" ] || mac="-"
     case "$mac" in
-        ''|-) mac="$(ip neigh show "$ip" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}')";;
+        ''|-) mac="$(ip neigh show "$ip" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {for(i=1;i<=NF;i++) if($i=="lladdr") {print $(i+1); exit}}')" ;;
     esac
     [ -n "$mac" ] || mac="-"
     case "$type" in
@@ -275,57 +228,32 @@ device_state_event() {
     line="$1"
     type="$(printf '%s\n' "$line" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
     ip="$(printf '%s\n' "$line" | sed -n 's/.*IP=\([^ ]*\).*/\1/p')"
-    mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
     [ -n "$ip" ] || return 0
+
+    # 最终设备数据库只允许lan_device_state.sh写入；worker只负责转交事件。
     case "$type" in
-        ARP|arp) /usr/bin/lan_device_state.sh arp "$ip" "$mac" 2>/dev/null || :;;
-        SUBNET|subnet) :;;
-        *) /usr/bin/lan_device_state.sh proto "$ip" "$type" 2>/dev/null || :;;
-    esac
-}
-
-append_device() {
-    clean="$(clean_device_line "$1")" || return
-    ip="$(printf '%s\n' "$clean" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
-    new_mac="$(printf '%s\n' "$clean" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
-    [ -n "$ip" ] || return
-
-    old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
-    tmp="${DEVICE_DB}.tmp"
-
-    # 同一IP实时更新时只替换该IP的设备记录，保留SUBNET及其它IP记录。
-    awk -v ip="$ip" '{
-        if ($0 ~ /type=SUBNET /) {print; next}
-        if (index($0," IP=" ip " ") != 0) next
-        print
-    }' "$DEVICE_DB" 2>/dev/null > "$tmp"
-
-    case "$clean" in
-        *"type=SUBNET "*)
-            printf '%s\n' "$clean" >> "$tmp"
+        SUBNET|subnet)
+            subnet="$(printf '%s\n' "$line" | sed -n 's/.* IP=\([0-9.]*\).*/\1/p')"
+            /usr/bin/lan_device_state.sh subnet "$subnet" >/dev/null 2>&1 || :
+            ;;
+        ARP|arp)
+            mac="$(printf '%s\n' "$line" | sed -n 's/.*MAC=\([^ ]*\).*/\1/p')"
+            /usr/bin/lan_device_state.sh arp "$ip" "$mac" >/dev/null 2>&1 || :
+            /usr/bin/lan_device_state.sh record "$line" >/dev/null 2>&1 || :
             ;;
         *)
-            printf '%s STATUS=在线 PING=未探测\n' "$clean" >> "$tmp"
+            /usr/bin/lan_device_state.sh proto "$ip" "$type" >/dev/null 2>&1 || :
+            /usr/bin/lan_device_state.sh record "$line" >/dev/null 2>&1 || :
             ;;
     esac
-
-    # 同一个IP出现不同MAC时保留冲突记录，供WebUI显示IP冲突。
-    if [ -n "$old_mac" ] && [ "$old_mac" != "-" ] &&
-       [ -n "$new_mac" ] && [ "$new_mac" != "-" ] &&
-       [ "$old_mac" != "$new_mac" ]; then
-        printf 'DEVICE type=IP_CONFLICT IP=%s MAC=%s INFO=IP冲突：旧MAC=%s，新MAC=%s STATUS=在线 PING=未探测\n' \
-            "$ip" "$new_mac" "$old_mac" "$new_mac" >> "$tmp"
-    fi
-
-    mv -f "$tmp" "$DEVICE_DB"
-    printf '%s' "$clean"
 }
+
 register_subnet_from_ip() {
     ip="$1"
     case "$ip" in *.*.*.*) ;; *) return;; esac
     subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}')"
     [ -n "$subnet" ] || return
-    grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null || append_device "DEVICE type=SUBNET IP=${subnet} INFO=24"
+    /usr/bin/lan_device_state.sh subnet "$subnet" >/dev/null 2>&1 || :
 }
 
 # 统一从自定义接口解析标准探测，不经过管道子Shell，因此开关不会丢失。
@@ -525,7 +453,7 @@ run_camdiscover() {
                         [ "$type" = "SUBNET" ] && continue
                         register_subnet_from_ip "$(printf '%s\n' "$line" | sed -n 's/.* IP=\([^ ]*\).*/\1/p')"
                         device_state_event "$line"
-                        append_device "$line" >/dev/null 2>&1
+: # 设备数据库统一由lan_device_state.sh写入
                         ;;
                     *probe\ sent*|*probe\ FAILED*|*probes\ enabled:*|*listen\ *FAILED*) log_line 3 "【设备探测】$line";;
                 esac
@@ -537,7 +465,7 @@ run_camdiscover() {
     wait "$pid" 2>/dev/null
     [ "$ACTIVE_SCAN_PID" = "$pid" ] && ACTIVE_SCAN_PID=""
     rm -f "$CAM_LOG"
-    sync_device_cache
+            /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
 }
 
 run_discovery() {
@@ -553,7 +481,7 @@ run_discovery() {
 
     # 目标网段属于本次开机周期的持久状态。
     # Q7自身LAN网段不属于目标网段，不再写入DEVICE_DB，也不参与主动ARP扫描。
-    sync_device_cache
+            /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
 
     # tcpdump负责实时发现全部活动IP/MAC；ARP与camdiscover仅作为低频主动补漏。
     # 主动扫描周期独立于单次响应窗口；平时只低频检查配置和链路，避免每秒重复轮询。
@@ -604,7 +532,7 @@ run_discovery() {
                 /usr/bin/lan_device_state.sh finish
             fi
 
-            sync_device_cache
+            /usr/bin/lan_device_state.sh sync >/dev/null 2>&1 || :
             # 这里才表示一轮真正的低频主动补漏已经完成。
             runtime_set "lan_discovery_sweep_complete=$cycle_start"
             last_sweep="$cycle_start"
