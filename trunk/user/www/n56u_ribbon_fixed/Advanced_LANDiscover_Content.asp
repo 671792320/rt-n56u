@@ -645,6 +645,18 @@ function initial(){
 <td><input class="mini" name="lan_discovery_probe_timeout" onkeypress="return is_number(this,event);" value="<% nvram_get_x("", "lan_discovery_probe_timeout"); %>"> 秒</td>
 </tr>
 <tr>
+<th>日志等级</th>
+<td>
+<select name="lan_discovery_log_level" class="span3">
+<option value="0" <% nvram_match_x("", "lan_discovery_log_level", "0", "selected"); %>>关闭日志</option>
+<option value="1" <% nvram_match_x("", "lan_discovery_log_level", "1", "selected"); %>>重要信息</option>
+<option value="2" <% nvram_match_x("", "lan_discovery_log_level", "2", "selected"); %>>正常信息</option>
+<option value="3" <% nvram_match_x("", "lan_discovery_log_level", "3", "selected"); %>>详细调试</option>
+</select>
+<span class="note">默认重要信息；详细等级会记录ARP、协议探测和周期扫描过程。</span>
+</td>
+</tr>
+<tr>
 <th>LAN拔出处理</th>
 <td><b>保留目标网段、临时IP和SNAT</b> <span class="note">LAN重新插入后继续使用本次开机周期的锁定状态。</span></td>
 </tr>
