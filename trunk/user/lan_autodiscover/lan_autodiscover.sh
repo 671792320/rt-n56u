@@ -552,6 +552,10 @@ run_discovery() {
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh finish
             fi
+
+            # 这里才表示一轮真正的“低频主动补漏”已经完成。
+            # discover_cycle 只是单次响应等待窗口，不能被网络管理器当成完整扫描轮次。
+            runtime_set "lan_discovery_sweep_complete=$cycle_start"
             last_sweep="$cycle_start"
         fi
         if ! is_link_up "$iface"; then break; fi
