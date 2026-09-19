@@ -378,41 +378,9 @@ process_completed_cycle() {
         apply_target "$target_net" "$localnet" "$scan_seq" || log "本轮目标处理失败，下轮继续尝试：$target_net/24"
     done < "$CURRENT_ACTIVE_FILE"
 
-    # 只有完整扫描轮次才允许增加目标网段miss；管理器的实时轮询不会误删SNAT。
-    # 即使完整ARP/协议扫描未发现，只要本轮开始后tcpdump有实际活动，目标网段仍然保持。
-    for state_file in "$RUNTIME_DIR"/lan_target_state_*.state; do
-        [ -r "$state_file" ] || continue
-        target_net="$(state_get "$state_file" target_net)"
-        [ -n "$target_net" ] || continue
-        if grep -qx "$target_net" "$CURRENT_ACTIVE_FILE" 2>/dev/null; then
-            continue
-        fi
-
-        last_seen="$(state_get "$state_file" last_seen)"
-        case "$last_seen" in
-            ''|*[!0-9]*) last_seen=0;;
-        esac
-        if [ "$last_seen" -ge "$cycle_started" ] 2>/dev/null; then
-            current_ip="$(state_get "$state_file" target_ip)"
-            write_target_state "$target_net" "$current_ip" 0 "$scan_seq"
-            log "目标网段本轮主动扫描未发现，但实时监听仍有活动，保持：$target_net/24"
-            continue
-        fi
-
-        miss_count="$(state_get "$state_file" miss_count)"
-        case "$miss_count" in ''|*[!0-9]*) miss_count=0;; esac
-        miss_count=$((miss_count + 1))
-        current_ip="$(state_get "$state_file" target_ip)"
-
-        if [ "$miss_count" -ge "$MISS_LIMIT" ]; then
-            log "目标网段连续${miss_count}轮完整扫描未发现且无实时活动，确认清理：$target_net/24${current_ip:+，临时地址=$current_ip}"
-            cleanup_one "$target_net"
-        else
-            old_seq="$(state_get "$state_file" last_scan_seq)"
-            write_target_state "$target_net" "$current_ip" "$miss_count" "$old_seq"
-            log "目标网段本轮未发现，保留：$target_net/24，连续丢失=${miss_count}/${MISS_LIMIT}轮"
-        fi
-    done
+    # SNAT采用本次开机周期锁定策略。
+    # 完整扫描只负责发现新的目标网段；已经锁定的目标永不因miss_count自动删除。
+    # 因此这里不再执行目标网段清理、临时地址撤销或SNAT切换。
 
     save_cycle_cursor "$marker"
     update_runtime_targets
