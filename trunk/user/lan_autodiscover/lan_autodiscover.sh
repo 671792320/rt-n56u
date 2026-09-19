@@ -374,7 +374,7 @@ run_arpscan() {
 
     for takeover_file in "$RUNTIME_DIR"/lan_takeover_*.state; do
         [ -r "$takeover_file" ] || continue
-        target_net="$(state_get "$takeover_file" network 2>/dev/null)"
+        target_net="$(sed -n 's/^network=//p' "$takeover_file" 2>/dev/null | head -n 1)"
         [ -n "$target_net" ] || continue
         [ "$target_net" != "$localnet" ] || continue
         [ "$target_net" != "0.0.0.0" ] || continue
@@ -385,7 +385,7 @@ run_arpscan() {
         [ -n "$row" ] || continue
         network="$(printf '%s\n' "$row" | sed -n 's/.* IP=\([0-9.]*\) INFO=\([0-9][0-9]*\).*/\1\/\2/p')"
         [ -n "$network" ] || continue
-        network_net="\${network%%/*}"
+        network_net="${network%%/*}"
         [ "$network_net" != "$localnet" ] || continue
         printf '%s\n' "$network" >> "$subnet_file"
     done <<EOF
@@ -409,7 +409,7 @@ EOF
     fi
 
     runtime_set "lan_discovery_status_state=主动ARP扫描"
-    log_line "开始主动ARP扫描，目标网段 \${subnet_count} 个（已排除Q7本机网段 \${localnet}/24）"
+    log_line "开始主动ARP扫描，目标网段 ${subnet_count} 个（已排除Q7本机网段 ${localnet}/24）"
     : > "$ARP_LOG"
     /usr/bin/arpscan $args > "$ARP_LOG" 2>&1 &
     pid=$!
