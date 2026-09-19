@@ -38,7 +38,7 @@ runtime_set() {
     item="$1"
     key="${item%%=*}"
     value="${item#*=}"
-    tmp="$RUNTIME_DIR/.$key.tmp.$"
+    tmp="$RUNTIME_DIR/.supervisor_$key.tmp"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
