@@ -166,7 +166,10 @@ start_health() {
     [ -x /usr/bin/lanhealth ] || { runtime_set "lan_discovery_status_health=检测程序不存在"; return 0; }
     if [ -f "$HEALTH_PIDFILE" ]; then
         hpid="$(cat "$HEALTH_PIDFILE" 2>/dev/null)"
-        if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then return 0; fi
+        if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then
+            runtime_set "lan_discovery_status_health=运行中"
+            return 0
+        fi
         rm -f "$HEALTH_PIDFILE"
     fi
     runtime_set "lan_discovery_status_health=检测启动中"
@@ -451,6 +454,7 @@ run_dhcp_detect() {
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
     : > "$DHCP_LOG"
     runtime_set "lan_discovery_status_state=DHCP检测"
+    runtime_set "lan_discovery_status_dhcp=检测中"
     if [ "$dhcp_enable" != "1" ] || [ ! -x /usr/bin/dhcpdetect ]; then
         runtime_set "lan_discovery_status_dhcp=未启用"
         return 0
