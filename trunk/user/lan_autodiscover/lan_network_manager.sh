@@ -279,8 +279,7 @@ consume_stream_targets() {
                 print net
         }
     ' >> "$output"
-    printf '%s
-' "$count" > "$cursor_file"
+    printf '%s\\n' "$count" > "$cursor_file"
 }
 
 process_realtime_events() {
@@ -303,18 +302,10 @@ process_realtime_events() {
     rm -f "$targets_tmp"
 }
 
-process_realtime_events() {
-    localnet="$1"
-    # ARP、私有协议和tcpdump均实时进入同一个目标接管流程；管理器自身不改变miss_count。
-    process_stream_file "$RUNTIME_DIR/arp_seen.txt" "$ARP_CURSOR_FILE" "$localnet" ARP
-    process_stream_file "$RUNTIME_DIR/device_protocol_events.txt" "$PROTO_CURSOR_FILE" "$localnet" PROTO
-    process_stream_file "$RUNTIME_DIR/tcpdump_discovery_events.txt" "$TCPDUMP_CURSOR_FILE" "$localnet" TCPDUMP
-}
-
 collect_cycle_targets() {
     local_net="$1"
     cycle_started="$2"
-    tmp="$RUNTIME_DIR/.lan_cycle_targets.tmp"
+    tmp="$RUNTIME_DIR/.lan_cycle_targets.tmp.$"
     : > "$tmp"
 
     if [ -r "$RUNTIME_DIR/arp_seen.txt" ]; then
