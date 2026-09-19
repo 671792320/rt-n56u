@@ -247,13 +247,13 @@ apply_target() {
     return 0
 }
 
-consume_realtime_targets() {
+consume_realtime_events() {
     localnet="$1"
-    output="$2"
+    targets_output="$2"
+    devices_output="$3"
 
-    # 三路事件文件只通过一次awk完成：
-    # 增量读取、IPv4校验、/24网段提取、目标网段去重、游标更新。
-    # 避免每2秒重复启动wc/cat/sed/awk/sort等大量短命进程。
+    # 三路事件文件由一次awk增量读取：同时生成目标网段和实时设备事件。
+    # 目标网段继续由网络管理器处理；设备事件统一交给lan_device_state.sh。
     arp_file="$RUNTIME_DIR/arp_seen.txt"
     proto_file="$RUNTIME_DIR/device_protocol_events.txt"
     tcp_file="$RUNTIME_DIR/tcpdump_discovery_events.txt"
@@ -268,7 +268,8 @@ consume_realtime_targets() {
     case "$proto_cursor" in ''|*[!0-9]*) proto_cursor=0;; esac
     case "$tcp_cursor" in ''|*[!0-9]*) tcp_cursor=0;; esac
 
-    : > "$output"
+    : > "$targets_output"
+    : > "$devices_output"
 
     awk -F'|' \
         -v localnet="$localnet" \
@@ -277,7 +278,9 @@ consume_realtime_targets() {
         -v tc="$tcp_cursor" \
         -v acfile="$ARP_CURSOR_FILE" \
         -v pcfile="$PROTO_CURSOR_FILE" \
-        -v tcfile="$TCPDUMP_CURSOR_FILE" '
+        -v tcfile="$TCPDUMP_CURSOR_FILE" \
+        -v targetfile="$targets_output" \
+        -v devicefile="$devices_output" '
         function valid_octet(v) {
             return v ~ /^[0-9]+$/ && v >= 0 && v <= 255
         }
@@ -289,55 +292,81 @@ consume_realtime_targets() {
                 return ""
             return p[1] "." p[2] "." p[3] ".0"
         }
-        function accept_line(line, ip, net) {
-            split(line, f, "|")
-            ip = f[1]
+        function accept_target(ip, net) {
             net = target_net(ip)
             if (net != "" && net != localnet && net != "0.0.0.0")
                 seen[net] = 1
         }
+        function emit_arp(line, f) {
+            split(line, f, "|")
+            if (target_net(f[1]) != "")
+                print "DEVICE type=ARP IP=" f[1] " MAC=" f[2] " INFO=实时ARP监听" > devicefile
+        }
+        function emit_proto(line, f) {
+            split(line, f, "|")
+            if (target_net(f[1]) != "")
+                print "DEVICE type=" f[2] " IP=" f[1] " MAC=- INFO=实时协议事件" > devicefile
+        }
+        function emit_tcp(line, f) {
+            split(line, f, "|")
+            if (target_net(f[1]) != "")
+                print "DEVICE type=" f[3] " IP=" f[1] " MAC=" f[2] " INFO=实时二层监听" > devicefile
+        }
         FILENAME == ARGV[1] {
-            if (FNR > ac) accept_line($0)
+            if (FNR > ac) {
+                accept_target($1)
+                emit_arp($0)
+            }
             arp_total = FNR
             next
         }
         FILENAME == ARGV[2] {
-            if (FNR > pc) accept_line($0)
+            if (FNR > pc) {
+                accept_target($1)
+                emit_proto($0)
+            }
             proto_total = FNR
             next
         }
         FILENAME == ARGV[3] {
-            if (FNR > tc) accept_line($0)
+            if (FNR > tc) {
+                accept_target($1)
+                emit_tcp($0)
+            }
             tcp_total = FNR
             next
         }
         END {
             for (net in seen)
-                print net
+                print net > targetfile
             printf "%d\n", arp_total + 0 > acfile
             printf "%d\n", proto_total + 0 > pcfile
             printf "%d\n", tcp_total + 0 > tcfile
         }
-    ' "$arp_file" "$proto_file" "$tcp_file" >> "$output"
+    
+" "$arp_file" "$proto_file" "$tcp_file"
 }
 process_realtime_events() {
     localnet="$1"
     targets_tmp="$RUNTIME_DIR/.manager_realtime_targets.tmp"
+    devices_tmp="$RUNTIME_DIR/.manager_realtime_devices.tmp"
 
-    consume_realtime_targets "$localnet" "$targets_tmp"
+    consume_realtime_events "$localnet" "$targets_tmp" "$devices_tmp"
 
-    # 没有新增目标事件时立即返回。
-    if [ ! -s "$targets_tmp" ]; then
-        rm -f "$targets_tmp"
-        return 0
+    # 实时设备事件由设备状态程序批量写入最终数据库；network_manager不再直接写设备表。
+    if [ -s "$devices_tmp" ]; then
+        /usr/bin/lan_device_state.sh record_batch "$devices_tmp" >/dev/null 2>&1 || :
     fi
 
-    while IFS= read -r target_net; do
-        [ -n "$target_net" ] || continue
-        # apply_target内部有目标状态锁；同一网段只允许第一次建立SNAT。
-        apply_target "$target_net" "$localnet" "realtime" || :
-    done < "$targets_tmp"
-    rm -f "$targets_tmp"
+    if [ -s "$targets_tmp" ]; then
+        while IFS= read -r target_net; do
+            [ -n "$target_net" ] || continue
+            # apply_target内部有目标状态锁；同一网段只允许第一次建立SNAT。
+            apply_target "$target_net" "$localnet" "realtime" || :
+        done < "$targets_tmp"
+    fi
+
+    rm -f "$targets_tmp" "$devices_tmp"
 }
 check_existing_targets() {
     localnet="$1"
