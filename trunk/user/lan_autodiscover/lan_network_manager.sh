@@ -57,8 +57,6 @@ DEVICE_DB=/tmp/lan_discovery_devices.txt
 LOG_FILE=/tmp/lan_discovery.log
 TARGETS_FILE="$RUNTIME_DIR/lan_discovery_targets.state"
 STATE_FILE="$RUNTIME_DIR/lan_network_manager.state"
-CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
-CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
 cleanup() {
     old_pid="$(cat "$LOCKDIR/pid" 2>/dev/null)"
     if [ "$old_pid" = "$$" ]; then
@@ -302,80 +300,6 @@ process_realtime_events() {
     rm -f "$targets_tmp"
 }
 
-collect_cycle_targets() {
-    local_net="$1"
-    cycle_started="$2"
-    tmp="$RUNTIME_DIR/.lan_cycle_targets.tmp.$"
-    : > "$tmp"
-
-    if [ -r "$RUNTIME_DIR/arp_seen.txt" ]; then
-        cut -d'|' -f1 "$RUNTIME_DIR/arp_seen.txt" 2>/dev/null |
-            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
-    fi
-
-    if [ -r "$RUNTIME_DIR/device_protocol_events.txt" ]; then
-        cut -d'|' -f1 "$RUNTIME_DIR/device_protocol_events.txt" 2>/dev/null |
-            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
-    fi
-
-    # 实时二层监听同样属于本轮真实活动，不能因为主动ARP/协议扫描没命中
-    # 就把仍在通信的目标网段清掉，否则下一条实时事件又会重新触发“首次接管”。
-    if [ -r "$RUNTIME_DIR/tcpdump_discovery_events.txt" ]; then
-        awk -F'|' -v start="$cycle_started" '$4 >= start {print $1}'             "$RUNTIME_DIR/tcpdump_discovery_events.txt" 2>/dev/null |
-            while IFS= read -r ip; do network_from_ip "$ip"; done >> "$tmp"
-    fi
-
-    grep -v "^$local_net$" "$tmp" 2>/dev/null |
-        grep -v '^0\.0\.0\.0$' 2>/dev/null |
-        sort -u > "$CURRENT_ACTIVE_FILE"
-    rm -f "$tmp"
-}
-
-latest_completed_cycle() {
-    [ -r "$RUNTIME_DIR/lan_discovery_sweep_complete" ] || return 1
-    marker="$(cat "$RUNTIME_DIR/lan_discovery_sweep_complete" 2>/dev/null)"
-    case "$marker" in
-        ''|*[!0-9]*) return 1;;
-    esac
-    printf '%s\n' "$marker"
-}
-
-cycle_seen_before() {
-    marker="$1"
-    [ -r "$CYCLE_CURSOR_FILE" ] || return 1
-    old="$(cat "$CYCLE_CURSOR_FILE" 2>/dev/null)"
-    [ "$old" = "$marker" ]
-}
-
-save_cycle_cursor() { printf '%s\n' "$1" > "$CYCLE_CURSOR_FILE"; }
-
-process_completed_cycle() {
-    localnet="$1"
-    marker="$2"
-    # marker就是本轮真正主动补漏开始的时间，而不是10秒探测窗口结束时间。
-    cycle_started="$marker"
-
-    collect_cycle_targets "$localnet" "$cycle_started"
-    scan_seq="$(date +%s 2>/dev/null)-$(wc -l < "$CURRENT_ACTIVE_FILE" 2>/dev/null | tr -d ' ')"
-    runtime_set lan_discovery_status_state "处理完整扫描轮次：目标网段状态增量更新"
-
-    # 本轮真实发现的网段立即清零miss并保持现有临时IP/SNAT。
-    while IFS= read -r target_net; do
-        [ -n "$target_net" ] || continue
-        [ "$target_net" != "$localnet" ] || continue
-        apply_target "$target_net" "$localnet" "$scan_seq" || log "本轮目标处理失败，下轮继续尝试：$target_net/24"
-    done < "$CURRENT_ACTIVE_FILE"
-
-    # SNAT采用本次开机周期锁定策略。
-    # 完整扫描只负责发现新的目标网段；已经锁定的目标永不因miss_count自动删除。
-    # 因此这里不再执行目标网段清理、临时地址撤销或SNAT切换。
-
-    save_cycle_cursor "$marker"
-    update_runtime_targets
-    rm -f "$CURRENT_ACTIVE_FILE"
-    log "本轮目标网段状态更新完成：已锁定目标不因扫描缺失自动清理"
-}
-
 check_existing_targets() {
     localnet="$1"
     for takeover_file in "$RUNTIME_DIR"/lan_takeover_*.state; do
@@ -402,8 +326,7 @@ last_maintenance=0
 
 while :; do
     if ! link_up; then
-        # LAN拔出后直接退出网络管理器，由supervisor按需重新启动。
-        # 这里只停止网络管理进程，绝不撤销已有临时IP、目标状态和SNAT规则。
+        # LAN拔出只退出管理器，由supervisor重新启动；已有目标网段和SNAT保持不动。
         runtime_set lan_discovery_status_link "DOWN"
         runtime_set lan_discovery_status_state "LAN拔出：保留现有临时网段/SNAT"
         exit 0
@@ -413,18 +336,17 @@ while :; do
     localnet="$(network_from_ip "$localip")"
     [ -n "$localnet" ] || { sleep 2; continue; }
 
+    # 实时事件是唯一的新目标入口：同一目标网段经sort去重后只处理一次。
     process_realtime_events "$localnet"
 
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
     if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 60 ] 2>/dev/null; then
-        latest_marker="$(latest_completed_cycle)"
-        if [ -n "$latest_marker" ] && ! cycle_seen_before "$latest_marker"; then
-            process_completed_cycle "$localnet" "$latest_marker"
-        fi
+        # 仅检查已有SNAT规则是否仍存在，不重新选择临时IP，也不因扫描缺失删除目标。
         check_existing_targets "$localnet"
         last_maintenance="$now_ts"
     fi
 
+    # 实时监听需要及时消费事件，但不需要每秒重新执行完整扫描。
     sleep 1
 done
