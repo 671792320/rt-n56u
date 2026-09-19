@@ -117,6 +117,7 @@ link_up() {
 }
 
 local_ip() {
+    # Q7本机LAN地址由NVRAM维护，正常运行时无需每秒执行ip/grep/sed管道。
     ip_from_nvram="$(nvram get lan_ipaddr 2>/dev/null)"
     case "$ip_from_nvram" in
         *.*.*.*) printf '%s\n' "$ip_from_nvram"; return 0;;
@@ -124,7 +125,6 @@ local_ip() {
     ip -4 addr show dev "$BR_IF" 2>/dev/null |
         sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' | head -n 1
 }
-
 network_from_ip() {
     printf '%s\n' "$1" |
         awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'
@@ -262,6 +262,8 @@ consume_stream_targets() {
     [ "$count" -ge "$cursor" ] || cursor=0
     [ "$count" -gt "$cursor" ] || return 0
 
+    # 只有出现新增事件时才通知上层进行排序和SNAT判断。
+    realtime_new=1
     start=$((cursor + 1))
     sed -n "${start},${count}p" "$file" 2>/dev/null |
     awk -F'|' -v localnet="$localnet" '
@@ -284,12 +286,19 @@ process_realtime_events() {
     localnet="$1"
     targets_tmp="$RUNTIME_DIR/.manager_realtime_targets.tmp"
     : > "$targets_tmp"
+    realtime_new=0
 
     # 三类实时事件只做“目标网段”去重，不再为每个数据包启动一次lan_device_state.sh。
     # 设备详细状态由主动ARP/协议扫描统一维护；实时监听只负责快速发现新网段。
     consume_stream_targets "$RUNTIME_DIR/arp_seen.txt" "$ARP_CURSOR_FILE" "$localnet" "$targets_tmp"
     consume_stream_targets "$RUNTIME_DIR/device_protocol_events.txt" "$PROTO_CURSOR_FILE" "$localnet" "$targets_tmp"
     consume_stream_targets "$RUNTIME_DIR/tcpdump_discovery_events.txt" "$TCPDUMP_CURSOR_FILE" "$localnet" "$targets_tmp"
+
+    # 没有任何新增事件时，不执行sort，也不进入SNAT判断。
+    if [ "$realtime_new" != "1" ] || [ ! -s "$targets_tmp" ]; then
+        rm -f "$targets_tmp"
+        return 0
+    fi
 
     sort -u "$targets_tmp" -o "$targets_tmp" 2>/dev/null
     while IFS= read -r target_net; do
@@ -299,7 +308,6 @@ process_realtime_events() {
     done < "$targets_tmp"
     rm -f "$targets_tmp"
 }
-
 check_existing_targets() {
     localnet="$1"
     for takeover_file in "$RUNTIME_DIR"/lan_takeover_*.state; do
@@ -324,6 +332,8 @@ check_existing_targets() {
 
 last_maintenance=0
 
+last_event_check=0
+
 while :; do
     if ! link_up; then
         # LAN拔出只退出管理器，由supervisor重新启动；已有目标网段和SNAT保持不动。
@@ -336,8 +346,13 @@ while :; do
     localnet="$(network_from_ip "$localip")"
     [ -n "$localnet" ] || { sleep 2; continue; }
 
-    # 实时事件是唯一的新目标入口：同一目标网段经sort去重后只处理一次。
-    process_realtime_events "$localnet"
+    # 实时事件只处理新增记录；无新增数据时不排序、不做SNAT判断。
+    now_ts="$(date +%s 2>/dev/null)"
+    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
+    if [ "$last_event_check" = "0" ] || [ $((now_ts - last_event_check)) -ge 1 ] 2>/dev/null; then
+        process_realtime_events "$localnet"
+        last_event_check="$now_ts"
+    fi
 
     now_ts="$(date +%s 2>/dev/null)"
     case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
@@ -347,6 +362,6 @@ while :; do
         last_maintenance="$now_ts"
     fi
 
-    # 实时监听需要及时消费事件，但不需要每秒重新执行完整扫描。
-    sleep 1
+    # supervisor负责1秒级插拔检测；网络管理器空闲时降低到2秒轮询，避免CPU空转。
+    sleep 2
 done
