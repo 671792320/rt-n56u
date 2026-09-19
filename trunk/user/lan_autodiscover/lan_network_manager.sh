@@ -248,59 +248,88 @@ apply_target() {
     return 0
 }
 
-consume_stream_targets() {
-    file="$1"
-    cursor_file="$2"
-    localnet="$3"
-    output="$4"
+consume_realtime_targets() {
+    localnet="$1"
+    output="$2"
 
-    [ -r "$file" ] || return 0
-    count="$(wc -l < "$file" 2>/dev/null | tr -d ' ')"
-    case "$count" in ''|*[!0-9]*) count=0;; esac
-    cursor="$(cat "$cursor_file" 2>/dev/null)"
-    case "$cursor" in ''|*[!0-9]*) cursor=0;; esac
-    [ "$count" -ge "$cursor" ] || cursor=0
-    [ "$count" -gt "$cursor" ] || return 0
+    # 三路事件文件只通过一次awk完成：
+    # 增量读取、IPv4校验、/24网段提取、目标网段去重、游标更新。
+    # 避免每2秒重复启动wc/cat/sed/awk/sort等大量短命进程。
+    arp_file="$RUNTIME_DIR/arp_seen.txt"
+    proto_file="$RUNTIME_DIR/device_protocol_events.txt"
+    tcp_file="$RUNTIME_DIR/tcpdump_discovery_events.txt"
 
-    # 只有出现新增事件时才通知上层进行排序和SNAT判断。
-    realtime_new=1
-    start=$((cursor + 1))
-    sed -n "${start},${count}p" "$file" 2>/dev/null |
-    awk -F'|' -v localnet="$localnet" '
-        function valid_octet(v) { return v ~ /^[0-9]+$/ && v >= 0 && v <= 255 }
-        {
-            ip=$1
-            n=split(ip,p,".")
-            if(n != 4 || !valid_octet(p[1]) || !valid_octet(p[2]) ||
-               !valid_octet(p[3]) || !valid_octet(p[4]))
-                next
-            net=p[1]"."p[2]"."p[3]".0"
-            if(net != localnet && net != "0.0.0.0")
-                print net
+    arp_cursor="$(cat "$ARP_CURSOR_FILE" 2>/dev/null)"
+    proto_cursor="$(cat "$PROTO_CURSOR_FILE" 2>/dev/null)"
+    tcp_cursor="$(cat "$TCPDUMP_CURSOR_FILE" 2>/dev/null)"
+    case "$arp_cursor" in ''|*[!0-9]*) arp_cursor=0;; esac
+    case "$proto_cursor" in ''|*[!0-9]*) proto_cursor=0;; esac
+    case "$tcp_cursor" in ''|*[!0-9]*) tcp_cursor=0;; esac
+
+    : > "$output"
+
+    awk -F'|' \
+        -v localnet="$localnet" \
+        -v ac="$arp_cursor" \
+        -v pc="$proto_cursor" \
+        -v tc="$tcp_cursor" \
+        -v acfile="$ARP_CURSOR_FILE" \
+        -v pcfile="$PROTO_CURSOR_FILE" \
+        -v tcfile="$TCPDUMP_CURSOR_FILE" '
+        function valid_octet(v) {
+            return v ~ /^[0-9]+$/ && v >= 0 && v <= 255
         }
-    ' >> "$output"
-    printf '%s\\n' "$count" > "$cursor_file"
+        function target_net(ip, p, n) {
+            n = split(ip, p, ".")
+            if (n != 4 ||
+                !valid_octet(p[1]) || !valid_octet(p[2]) ||
+                !valid_octet(p[3]) || !valid_octet(p[4]))
+                return ""
+            return p[1] "." p[2] "." p[3] ".0"
+        }
+        function accept_line(line, ip, net) {
+            split(line, f, "|")
+            ip = f[1]
+            net = target_net(ip)
+            if (net != "" && net != localnet && net != "0.0.0.0")
+                seen[net] = 1
+        }
+        FILENAME == ARGV[1] {
+            if (FNR > ac) accept_line($0)
+            arp_total = FNR
+            next
+        }
+        FILENAME == ARGV[2] {
+            if (FNR > pc) accept_line($0)
+            proto_total = FNR
+            next
+        }
+        FILENAME == ARGV[3] {
+            if (FNR > tc) accept_line($0)
+            tcp_total = FNR
+            next
+        }
+        END {
+            for (net in seen)
+                print net
+            printf "%d\n", arp_total + 0 > acfile
+            printf "%d\n", proto_total + 0 > pcfile
+            printf "%d\n", tcp_total + 0 > tcfile
+        }
+    ' "$arp_file" "$proto_file" "$tcp_file" >> "$output"
 }
-
 process_realtime_events() {
     localnet="$1"
     targets_tmp="$RUNTIME_DIR/.manager_realtime_targets.tmp"
-    : > "$targets_tmp"
-    realtime_new=0
 
-    # 三类实时事件只做“目标网段”去重，不再为每个数据包启动一次lan_device_state.sh。
-    # 设备详细状态由主动ARP/协议扫描统一维护；实时监听只负责快速发现新网段。
-    consume_stream_targets "$RUNTIME_DIR/arp_seen.txt" "$ARP_CURSOR_FILE" "$localnet" "$targets_tmp"
-    consume_stream_targets "$RUNTIME_DIR/device_protocol_events.txt" "$PROTO_CURSOR_FILE" "$localnet" "$targets_tmp"
-    consume_stream_targets "$RUNTIME_DIR/tcpdump_discovery_events.txt" "$TCPDUMP_CURSOR_FILE" "$localnet" "$targets_tmp"
+    consume_realtime_targets "$localnet" "$targets_tmp"
 
-    # 没有任何新增事件时，不执行sort，也不进入SNAT判断。
-    if [ "$realtime_new" != "1" ] || [ ! -s "$targets_tmp" ]; then
+    # 没有新增目标事件时立即返回。
+    if [ ! -s "$targets_tmp" ]; then
         rm -f "$targets_tmp"
         return 0
     fi
 
-    sort -u "$targets_tmp" -o "$targets_tmp" 2>/dev/null
     while IFS= read -r target_net; do
         [ -n "$target_net" ] || continue
         # apply_target内部有目标状态锁；同一网段只允许第一次建立SNAT。
