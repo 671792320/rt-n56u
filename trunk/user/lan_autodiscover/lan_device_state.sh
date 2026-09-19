@@ -114,7 +114,7 @@ proto)
 
 finish)
     tmp="${STATE_FILE}.state.tmp"
-    candidate_ips="${RUNTIME_DIR}/candidate_ips.tmp.$"
+    candidate_ips="${RUNTIME_DIR}/candidate_ips.state.tmp"
     : > "$candidate_ips"
 
     # 目标网段记录不能随着设备状态重建而丢失。
