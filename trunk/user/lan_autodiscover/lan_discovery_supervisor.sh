@@ -31,7 +31,7 @@ runtime_set() {
 }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && echo "$v" || echo "$2"; }
 set_supervisor_status() { runtime_set lan_discovery_status_supervisor="$1"; }
-beijing_now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+beijing_now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
 LOG_DEDUPE_DIR="$RUNTIME_DIR/.log_dedupe_supervisor"
 mkdir -p "$LOG_DEDUPE_DIR"
 slog() {
@@ -46,7 +46,7 @@ slog() {
     fi
     printf '%s' "$now_ts" > "$LOG_DEDUPE_DIR/ts"
     printf '%s' "$msg" > "$LOG_DEDUPE_DIR/msg"
-    logger -t lan-supervisor "[北京时间 $(beijing_now)] 【LAN监督】$msg"
+    logger -t lan-supervisor "【LAN监督】$msg"
 }
 
 # 按完整命令行兜底回收旧版/失配PID文件留下的孤儿进程。
