@@ -107,16 +107,6 @@ log() {
     runtime_set lan_discovery_status_last "$(beijing_now)"
 }
 
-link_up() {
-    if [ -x /sbin/mtk_esw ]; then
-        state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
-        [ "$state" = "1" ] && return 0
-        [ "$state" = "0" ] && return 1
-    fi
-    [ -r "/sys/class/net/$IFACE/carrier" ] && [ "$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null)" = "1" ] && return 0
-    [ ! -r "/sys/class/net/$IFACE/carrier" ] && [ "$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null)" = "up" ] && return 0
-    return 1
-}
 
 local_ip() {
     # Q7本机LAN地址由NVRAM维护，正常运行时无需每秒执行ip/grep/sed管道。
@@ -364,40 +354,17 @@ check_existing_targets() {
 last_maintenance=0
 
 last_event_check=0
+# LAN插拔由supervisor统一负责；manager只处理目标网段与SNAT业务。
+# 本机LAN地址在manager启动时读取一次，LAN参数变化时由Padavan网络重启重新拉起本服务。
+localip="$(nvram get lan_ipaddr 2>/dev/null)"
+case "$localip" in
+    *.*.*.*) ;;
+    *) exit 0;;
+esac
+localnet="$(network_from_ip "$localip")"
+[ -n "$localnet" ] || exit 0
 
-while :; do
-    if ! link_up; then
-        # LAN拔出只退出管理器，由supervisor重新启动；已有目标网段和SNAT保持不动。
-        runtime_set lan_discovery_status_link "DOWN"
-        runtime_set lan_discovery_status_state "LAN拔出：保留现有临时网段/SNAT"
-        exit 0
-    fi
+last_maintenance=0
 
-    # 正常情况下直接读取Padavan保存的LAN地址，避免调用local_ip函数产生同名Shell子进程。
-    localip="$(nvram get lan_ipaddr 2>/dev/null)"
-    case "$localip" in
-        *.*.*.*) ;;
-        *) sleep 2; continue;;
-    esac
-    localnet="$(network_from_ip "$localip")"
-    [ -n "$localnet" ] || { sleep 2; continue; }
-
-    # 实时事件只处理新增记录；无新增数据时不排序、不做SNAT判断。
-    now_ts="$(date +%s 2>/dev/null)"
-    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-    if [ "$last_event_check" = "0" ] || [ $((now_ts - last_event_check)) -ge 1 ] 2>/dev/null; then
-        process_realtime_events "$localnet"
-        last_event_check="$now_ts"
-    fi
-
-    now_ts="$(date +%s 2>/dev/null)"
-    case "$now_ts" in ''|*[!0-9]*) now_ts=0;; esac
-    if [ "$last_maintenance" = "0" ] || [ $((now_ts - last_maintenance)) -ge 60 ] 2>/dev/null; then
-        # 仅检查已有SNAT规则是否仍存在，不重新选择临时IP，也不因扫描缺失删除目标。
-        check_existing_targets "$localnet"
-        last_maintenance="$now_ts"
-    fi
-
-    # supervisor负责1秒级插拔检测；网络管理器空闲时降低到2秒轮询，避免CPU空转。
-    sleep 2
+while :; do    sleep 2
 done
