@@ -115,17 +115,64 @@ worker_running() {
     return 1
 }
 
+network_manager_pid_valid() {
+    pid="$1"
+    case "$pid" in
+        ''|*[!0-9]*|1) return 1;;
+    esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    case "$cmdline" in
+        *"/usr/bin/lan_network_manager.sh"*) return 0;;
+    esac
+    return 1
+}
+
+network_manager_pids() {
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        network_manager_pid_valid "$pid" && printf '%s\\n' "$pid"
+    done
+}
+
 network_manager_running() {
     [ -r "$NETMGR_PIDFILE" ] || return 1
     pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
-    case "$pid" in
-        ''|*[!0-9]*) rm -f "$NETMGR_PIDFILE"; return 1;;
-    esac
-    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+    if network_manager_pid_valid "$pid"; then
+        return 0
+    fi
     rm -f "$NETMGR_PIDFILE"
     return 1
 }
 
+normalize_network_manager_instances() {
+    keep=""
+    if [ -r "$NETMGR_PIDFILE" ]; then
+        pid="$(cat "$NETMGR_PIDFILE" 2>/dev/null)"
+        network_manager_pid_valid "$pid" && keep="$pid"
+    fi
+
+    for pid in $(network_manager_pids); do
+        case "$pid" in
+            ''|1|$$) continue;;
+        esac
+        if [ -z "$keep" ]; then
+            keep="$pid"
+            continue
+        fi
+        if [ "$pid" != "$keep" ]; then
+            kill "$pid" 2>/dev/null
+        fi
+    done
+
+    if [ -n "$keep" ]; then
+        printf '%s\\n' "$keep" > "$NETMGR_PIDFILE"
+        return 0
+    fi
+    rm -f "$NETMGR_PIDFILE"
+    return 1
+}
 tcpdump_running() {
     [ -r "$TCPDUMP_PIDFILE" ] || return 1
     pid="$(cat "$TCPDUMP_PIDFILE" 2>/dev/null)"
@@ -139,6 +186,10 @@ tcpdump_running() {
 
 start_network_manager() {
     iface="$1"
+
+    # 先收敛历史残留，只保留一个真正的网络管理器实例。
+    normalize_network_manager_instances >/dev/null 2>&1 || :
+
     if network_manager_running; then
         runtime_set lan_discovery_status_network_manager="运行中"
         return 0
