@@ -18,7 +18,7 @@ manager_pid_valid() {
     case "$pid" in
         ''|*[!0-9]*) return 1;;
     esac
-    [ "$pid" != "$" ] || return 1
+    [ "$pid" != "$$" ] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
     [ -r "/proc/$pid/cmdline" ] || return 1
     cmdline="$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
@@ -30,7 +30,7 @@ manager_pid_valid() {
 
 acquire_manager_lock() {
     if mkdir "$LOCKDIR" 2>/dev/null; then
-        printf '%s\n' "$" > "$LOCKDIR/pid"
+        printf '%s\n' "$$" > "$LOCKDIR/pid"
         return 0
     fi
 
@@ -45,7 +45,7 @@ acquire_manager_lock() {
     rmdir "$LOCKDIR" 2>/dev/null || return 1
 
     if mkdir "$LOCKDIR" 2>/dev/null; then
-        printf '%s\n' "$" > "$LOCKDIR/pid"
+        printf '%s\n' "$$" > "$LOCKDIR/pid"
         return 0
     fi
     return 1
@@ -61,7 +61,7 @@ CYCLE_CURSOR_FILE="$RUNTIME_DIR/lan_discovery_cycle.cursor"
 CURRENT_ACTIVE_FILE="$RUNTIME_DIR/lan_discovery_cycle_active.state"
 cleanup() {
     old_pid="$(cat "$LOCKDIR/pid" 2>/dev/null)"
-    if [ "$old_pid" = "$" ]; then
+    if [ "$old_pid" = "$$" ]; then
         rm -f "$LOCKDIR/pid" 2>/dev/null
         rmdir "$LOCKDIR" 2>/dev/null
     fi
