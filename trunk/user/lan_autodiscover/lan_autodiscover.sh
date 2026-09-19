@@ -24,7 +24,7 @@ touch "$DEVICE_DB" "$LOG_FILE"
 
 nv() { nvram get "$1" 2>/dev/null; }
 cfg() { v="$(nv "$1")"; [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"; }
-now() { TZ='GMT-8' date '+%Y-%m-%d %H:%M:%S'; }
+now() { tz="$(nvram get time_zone_x 2>/dev/null)"; [ -n "$tz" ] || tz='GMT-8'; TZ="$tz" date '+%Y-%m-%d %H:%M:%S'; }
 
 # LAN总开关与设备发现开关必须同时开启，避免子循环绕过主开关继续运行。
 discovery_enabled() {
@@ -36,7 +36,7 @@ runtime_set() {
     item="$1"
     key="${item%%=*}"
     value="${item#*=}"
-    tmp="${RUNTIME_DIR}/.${key}.tmp"
+    tmp="$RUNTIME_DIR/.$key.tmp.$"
     printf '%s' "$value" > "$tmp" && mv -f "$tmp" "${RUNTIME_DIR}/${key}"
 }
 
@@ -78,7 +78,7 @@ log_line() {
     tail -n 200 "$LOG_FILE" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "$LOG_FILE"
     runtime_set "lan_discovery_log=$(tail -n 30 "$LOG_FILE" 2>/dev/null)"
     runtime_set "lan_discovery_status_last=$(now)"
-    logger -t lan-autodiscover "[北京时间 $(now)] 【LAN发现】$plain"
+    logger -t lan-autodiscover "【LAN发现】$plain"
 }
 
 iface_ipv4() {
