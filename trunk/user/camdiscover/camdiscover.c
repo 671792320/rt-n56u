@@ -70,6 +70,14 @@ static int is_self_ip(const char *ip){
     for(i=0;i<self_ip_count;i++)if(!strcmp(self_ips[i],ip))return 1;
     return 0;
 }
+static int is_private_ip(const char *ip){
+    unsigned int a,b;
+    if(!ip||sscanf(ip,"%u.%u",&a,&b)!=2)return 0;
+    if(a==10)return 1;
+    if(a==172&&b>=16&&b<=31)return 1;
+    if(a==192&&b==168)return 1;
+    return 0;
+}
 static void load_self_addresses(void){
     int fd; char buf[4096]; struct ifconf ifc; struct ifreq *ifr; int i,n;
     self_ip_count=0; fd=socket(AF_INET,SOCK_DGRAM,0); if(fd<0)return;
@@ -95,14 +103,14 @@ static void load_self_mac(const char *ifname){
 }
 static void print_ipv4_device(const char *kind,const char *ip,const char *mac){
     char key[128];
-    if(is_self_ip(ip))return;
+    if(is_self_ip(ip)||!is_private_ip(ip))return;
     snprintf(key,sizeof(key),"%s:%s:%s",kind,ip?ip:"",mac?mac:"");
     if(!seen_add(key))return;
     printf("DEVICE type=%s IP=%s",kind,ip?ip:"-"); if(mac&&*mac)printf(" MAC=%s",mac); printf("\n"); fflush(stdout);
 }
 static void print_text_device(const char *kind,const char *ip,const char *text){
     char key[128];
-    if(is_self_ip(ip))return;
+    if(is_self_ip(ip)||!is_private_ip(ip))return;
     snprintf(key,sizeof(key),"%s:%s",kind,ip?ip:"");
     if(!seen_add(key))return;
     printf("DEVICE type=%s IP=%s",kind,ip?ip:"-"); if(text&&*text)printf(" INFO=%s",text); printf("\n"); fflush(stdout);
