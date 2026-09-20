@@ -44,6 +44,7 @@ static FILE *event_fp;
 static int is_unicast_ip(unsigned long ip)
 {
     unsigned int first = (unsigned int)((ip >> 24) & 0xff);
+    unsigned int second = (unsigned int)((ip >> 16) & 0xff);
     unsigned int last = (unsigned int)(ip & 0xff);
 
     if (ip == 0 || ip == 0xffffffffUL)
@@ -52,7 +53,16 @@ static int is_unicast_ip(unsigned long ip)
         return 0;
     if (last == 0 || last == 255)
         return 0;
-    return 1;
+
+    /* LAN目标范围只接受RFC1918私有地址，禁止公网IPv4进入目标网段状态机。 */
+    if (first == 10)
+        return 1;
+    if (first == 172 && second >= 16 && second <= 31)
+        return 1;
+    if (first == 192 && second == 168)
+        return 1;
+
+    return 0;
 }
 
 static void ip_text(unsigned long ip, char *out, size_t len)
