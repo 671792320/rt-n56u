@@ -531,7 +531,25 @@ function initial(){
 }
 </script>
 <style type="text/css">
-.status-table td{white-space:nowrap;vertical-align:middle}
+.status-table{
+    width:100%;
+    table-layout:fixed;
+    margin-bottom:8px;
+}
+.status-table td,.status-table th{
+    vertical-align:middle;
+    overflow-wrap:anywhere;
+}
+.status-table td{
+    white-space:nowrap;
+}
+.status-table td.lan-health-note{
+    white-space:normal;
+    word-break:break-word;
+    overflow-wrap:anywhere;
+    line-height:18px;
+    font-size:12px;
+}
 .mini{width:55px;margin:0 3px}
 .health-danger{font-weight:bold;color:#b94a48}
 .live-box{height:170px;overflow:auto;padding:8px;background:#111;color:#ddd;font:12px/1.55 monospace;white-space:pre-wrap}
@@ -606,21 +624,6 @@ function initial(){
 .legend-temp{background:#d9edf7}
 .legend-conflict{background:#f2dede}
 .legend-empty{background:#fff}
-.status-table{
-    width:100%;
-    table-layout:fixed;
-}
-.status-table td,.status-table th{
-    word-break:break-word;
-    overflow-wrap:anywhere;
-}
-.lan-health-note{
-    white-space:normal;
-    word-break:break-word;
-    overflow-wrap:anywhere;
-    line-height:18px;
-    font-size:12px;
-}
 .discovered-table th,.discovered-table td{
     vertical-align:middle;
 }
@@ -679,12 +682,18 @@ function initial(){
 </tr>
 <tr>
 <td title="每秒检测到的广播报文数量">广播速率</td><td id="status_broadcast">0/s</td>
-<td colspan="6" class="lan-health-note">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
+<td colspan="6"></td>
+</tr>
+<tr>
+<td colspan="8" class="lan-health-note">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
 </tr>
 <tr>
 <td>MAC</td><td id="status_mac">-</td>
 <td title="每秒检测到疑似二层环路回流报文的数量">MAC回流</td><td id="status_loop">0/s</td>
-<td colspan="4" class="lan-health-note">正常应长期为 0/s；持续非0请检查网线、交换机或网络环路</td>
+<td colspan="4"></td>
+</tr>
+<tr>
+<td colspan="8" class="lan-health-note">正常应长期为 0/s；持续非0请检查网线、交换机或网络环路</td>
 </tr>
 </table>
 <div class="note" style="margin:4px 0 10px">
