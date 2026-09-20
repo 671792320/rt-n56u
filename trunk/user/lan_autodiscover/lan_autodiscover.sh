@@ -107,6 +107,18 @@ log_line() {
     logger -t lan-autodiscover "【LAN发现】$plain"
 }
 
+is_private_ip() {
+    ip="$1"
+    printf '%s\n' "$ip" | awk -F. '
+        NF==4 &&
+        (($1+0)==10 ||
+         (($1+0)==172 && ($2+0)>=16 && ($2+0)<=31) ||
+         (($1+0)==192 && ($2+0)==168))
+        { exit 0 }
+        { exit 1 }
+    '
+}
+
 iface_ipv4() {
     iface="$1"
     ip4="$(ip -4 addr show dev "$iface" 2>/dev/null | sed -n 's/^[[:space:]]*inet[[:space:]]\+\([^ ]*\).*/\1/p' | head -n 1)"
@@ -240,8 +252,8 @@ device_state_event() {
 
 register_subnet_from_ip() {
     ip="$1"
-    case "$ip" in *.*.*.*) ;; *) return;; esac
-    subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 && $1+0>=0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0",$1,$2,$3}')"
+    is_private_ip "$ip" || return 0
+    subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 {printf "%d.%d.%d.0",$1,$2,$3}')"
     [ -n "$subnet" ] || return
     /usr/bin/lan_device_state.sh subnet "$subnet" >/dev/null 2>&1 || :
 }
