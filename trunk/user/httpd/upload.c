@@ -320,6 +320,20 @@ do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 	const char *upload_file = FW_IMG_NAME;
 	int ret;
 
+	/*
+	 * 固件升级必须在HTTP上传阶段就先停止LAN发现。
+	 * 以前仅由WebUI延时触发停止，存在上传与LAN发现并发的时序竞态。
+	 * 这里由upgrade.cgi在真正收到固件POST后同步停止运行态任务，
+	 * 不修改lan_discovery_enable配置；真正刷写阶段仍由flash_firmware()再次兜底。
+	 */
+	if (access("/usr/bin/lan_discovery_stop_for_upgrade.sh", X_OK) == 0) {
+		ret = system("/usr/bin/lan_discovery_stop_for_upgrade.sh >/dev/null 2>&1");
+		if (ret != 0)
+			httpd_log("%s: unable to stop LAN discovery before firmware upload", "Firmware update");
+	} else {
+		httpd_log("%s: LAN discovery stop script not found, continue with native firmware upgrade flow", "Firmware update");
+	}
+
 	/* delete some files (need free space in /tmp) */
 	unlink("/tmp/usb.log");
 	unlink("/tmp/syscmd.log");
