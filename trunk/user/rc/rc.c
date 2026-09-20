@@ -593,11 +593,11 @@ stop_lan_discovery_for_upgrade(void)
 		NULL
 	};
 	const char *processes[] = {
-		"/usr/bin/lan_discovery_supervisor.sh",
-		"/usr/bin/lan_autodiscover.sh",
-		"/usr/bin/lan_tcpdump_listener.sh",
-		"/usr/bin/lan_network_manager.sh",
-		"/usr/bin/lanlisten",
+		"lan_discovery_supervisor.sh",
+		"lan_autodiscover.sh",
+		"lan_tcpdump_listener.sh",
+		"lan_network_manager.sh",
+		"lanlisten",
 		"camdiscover",
 		"arpscan",
 		"dhcpdetect",
