@@ -88,12 +88,13 @@ kill_matching_processes() {
 
 # Q7 LAN发现配置迁移：5版固定采用“LAN拔出保留临时网段/SNAT”，并加入主动补漏周期。
 # 旧版的清理开关不再参与运行时行为，避免拔插事件误删正在使用的访问规则。
-LAN_DISCOVERY_CONFIG_VERSION=6
+LAN_DISCOVERY_CONFIG_VERSION=7
 migrate_lan_discovery_config() {
     current="$(nv lan_discovery_config_version)"
     if [ "$current" != "$LAN_DISCOVERY_CONFIG_VERSION" ]; then
         [ -n "$(nv lan_discovery_enable)" ] || nvram set lan_discovery_enable=1
         [ -n "$(nv lan_discovery_ifname)" ] || nvram set lan_discovery_ifname=eth2.1
+        [ -n "$(nv lan_discovery_ports)" ] || nvram set lan_discovery_ports=1,2,3,4
         [ -n "$(nv lan_discovery_dhcp_enable)" ] || nvram set lan_discovery_dhcp_enable=1
         [ -n "$(nv lan_discovery_dhcp_timeout)" ] || nvram set lan_discovery_dhcp_timeout=3
         [ -n "$(nv lan_discovery_discover_enable)" ] || nvram set lan_discovery_discover_enable=1
@@ -131,19 +132,47 @@ mtk_esw_lan4_state() {
     return 2
 }
 
+port_selected() {
+    port="$1"
+    ports="$(cfg lan_discovery_ports 1,2,3,4)"
+    case ",$ports," in
+        *,"$port",*) return 0;;
+        *) return 1;;
+    esac
+}
+
+lan_port_link_up() {
+    port="$1"
+    [ "$port" -ge 1 ] 2>/dev/null && [ "$port" -le 4 ] 2>/dev/null || return 1
+    if [ -x /sbin/mtk_esw ]; then
+        state="$(/sbin/mtk_esw 10 "$port" 2>/dev/null | sed -n "s/^LAN$port link state: \([01]\)$/\1/p")"
+        case "$state" in
+            1) return 0;;
+            0) return 1;;
+        esac
+    fi
+    return 1
+}
+
 is_link_up() {
     iface="$1"
-    if [ "$iface" = "eth2.1" ]; then
-        mtk_esw_lan4_state
-        rc=$?
-        [ "$rc" = "0" ] && return 0
-        [ "$rc" = "1" ] && return 1
-    fi
-    [ -e "/sys/class/net/$iface" ] || return 1
-    if [ -r "/sys/class/net/$iface/carrier" ]; then
-        [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
-    else
-        [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0
+    selected=0
+    for port in 1 2 3 4; do
+        if port_selected "$port"; then
+            selected=1
+            if lan_port_link_up "$port"; then
+                return 0
+            fi
+        fi
+    done
+
+    # 极少数平台没有交换机端口状态工具时，退回原有Linux接口链路状态。
+    if [ "$selected" = "0" ] && [ -e "/sys/class/net/$iface" ]; then
+        if [ -r "/sys/class/net/$iface/carrier" ]; then
+            [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
+        else
+            [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" = "up" ] && return 0
+        fi
     fi
     return 1
 }

@@ -319,28 +319,34 @@ function renderStatus(o){
     if(o.health==='OK'||o.health==='未监视'||o.health==='-')$j('#status_health').removeClass('health-danger');
     else $j('#status_health').addClass('health-danger');
 }
-function renderIfaces(s){
-    var sel=document.getElementById('lan_ifname');
-    if(!sel)return;
-    var wanted='<% nvram_get_x("", "lan_discovery_ifname"); %>';
-    var ls=lines(s),found=false;
-    sel.innerHTML='';
+function renderLanPorts(){
+    var raw='<% nvram_get_x("", "lan_discovery_ports"); %>';
+    var wanted={};
+    var ls=String(raw||'').split(',');
     for(var i=0;i<ls.length;i++){
-        var f=String(ls[i]||'').trim().split('|');
-        if(f.length<5||!f[0]||f[1]!=='LAN'||/^(lo|br|ra|wds|apcli)/.test(f[0]))continue;
-        var o=document.createElement('option');
-        o.value=f[0];
-        o.text=f[0]+' | '+f[1]+' | '+(f[2]||'-')+' | '+linkText(f[4]);
-        if(f[0]===wanted){o.selected=true;found=true;}
-        sel.appendChild(o);
+        var p=String(ls[i]||'').replace(/^\s+|\s+$/g,'');
+        if(/^[1-4]$/.test(p))wanted[p]=1;
     }
-    if(!sel.options.length){
-        var o=document.createElement('option');
-        o.value=wanted||'eth2.1';
-        o.text=(wanted||'eth2.1')+' | LAN';
-        o.selected=true;
-        sel.appendChild(o);
-    }else if(!found)sel.selectedIndex=0;
+    for(var n=1;n<=4;n++){
+        var cb=document.getElementById('lan_discovery_port_'+n);
+        if(cb)cb.checked=!!wanted[String(n)];
+    }
+}
+function saveLanPorts(){
+    var ports=[];
+    for(var n=1;n<=4;n++){
+        var cb=document.getElementById('lan_discovery_port_'+n);
+        if(cb&&cb.checked)ports.push(String(n));
+    }
+    var hidden=document.getElementById('lan_discovery_ports');
+    if(hidden)hidden.value=ports.join(',');
+}
+function refreshLanPortText(){
+    var box=document.getElementById('lan_port_status');
+    if(!box)return;
+    var raw='<% nvram_get_x("", "lan_discovery_ports"); %>';
+    var ports=String(raw||'').split(',').filter(function(v){return/^[1-4]$/.test(String(v).trim());});
+    box.textContent=ports.length?('已启用：LAN'+ports.join('、LAN')):'未启用任何LAN口';
 }
 function refresh(){
     var x=new XMLHttpRequest();
@@ -348,7 +354,6 @@ function refresh(){
         if(x.readyState!==4||x.status!==200)return;
         var o=parseData(x.responseText);
         renderStatus(o);
-        renderIfaces(o.ifaces);
         target_items=parseTargets(o.targets);
         device_map=parseDevices(o.devices);
         renderTargets();
@@ -416,6 +421,7 @@ function applyRule(){
     if(!login_safe())return false;
     var ui=document.getElementById('lan_discovery_custom_ui'),hidden=document.getElementById('lan_discovery_custom');
     if(ui&&hidden)hidden.value=uiToInternal(ui.value);
+    saveLanPorts();
     showLoading();
     document.form.action_mode.value=' Update ';
     document.form.action_script.value='lan_discovery_restart';
@@ -437,6 +443,8 @@ function clearLog(){
 function initial(){
     show_banner(1);
     show_menu(5,3,1);
+    renderLanPorts();
+    refreshLanPortText();
     show_footer();
     init_itoggle('lan_discovery_enable');
     init_itoggle('lan_discovery_dhcp_enable');
@@ -526,6 +534,7 @@ function initial(){
 <input type="hidden" name="action_mode" value="">
 <input type="hidden" name="action_script" value="">
 <input type="hidden" name="lan_discovery_custom" id="lan_discovery_custom" value="">
+<input type="hidden" name="lan_discovery_ports" id="lan_discovery_ports" value="">
 
 <div class="container-fluid"><div class="row-fluid">
 <div class="span3"><div class="well sidebar-nav side_nav" style="padding:0"><ul id="mainMenu" class="clearfix"></ul><ul class="clearfix"><li><div id="subMenu" class="accordion"></div></li></ul></div></div>
@@ -587,11 +596,14 @@ function initial(){
 <h4 class="section-head">发现参数</h4>
 <table class="table table-bordered table-condensed">
 <tr>
-<th width="190">检测接口</th>
+<th width="190">启用LAN口</th>
 <td>
-<select name="lan_discovery_ifname" id="lan_ifname" class="span5">
-<option value="<% nvram_get_x("", "lan_discovery_ifname"); %>"><% nvram_get_x("", "lan_discovery_ifname"); %> | LAN</option>
-</select>
+<label class="checkbox inline"><input type="checkbox" id="lan_discovery_port_1" class="lan-port"> LAN1</label>
+<label class="checkbox inline"><input type="checkbox" id="lan_discovery_port_2" class="lan-port"> LAN2</label>
+<label class="checkbox inline"><input type="checkbox" id="lan_discovery_port_3" class="lan-port"> LAN3</label>
+<label class="checkbox inline"><input type="checkbox" id="lan_discovery_port_4" class="lan-port"> LAN4</label>
+<span class="note" style="margin-left:10px">勾选后该物理LAN口参与插拔检测；Q7数据监听仍使用汇聚接口 eth2.1。</span>
+<div id="lan_port_status" class="note" style="margin-top:5px"></div>
 </td>
 </tr>
 <tr>
