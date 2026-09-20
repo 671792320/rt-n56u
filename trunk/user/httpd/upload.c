@@ -344,10 +344,8 @@ stop_lan_discovery_before_firmware_upload(void)
 	 * 真正进入flash_firmware()后，rc.c还会再次执行同样的兜底停止。
 	 * 不修改lan_discovery_enable，升级完成重启后LAN发现按原配置恢复。
 	 */
-	for (i = 0; pidfiles[i] != NULL; i++) {
-		kill_pidfile_s(pidfiles[i], SIGTERM);
+	for (i = 0; pidfiles[i] != NULL; i++)
 		unlink(pidfiles[i]);
-	}
 
 	for (i = 0; processes[i] != NULL; i++)
 		doSystem("killall %s %s", "-q", processes[i]);
