@@ -45,14 +45,20 @@ function fwUpload(){
 		return false;
 
 	/*
-	 * 固件升级停止流程由upgrade.cgi服务端统一处理。
-	 * 上传请求直接在当前页面提交，不能再放到隐藏iframe里，
-	 * 否则浏览器在上传或升级失败时看不到任何页面反馈。
+	 * 固件升级沿用Padavan原生隐藏iframe流程。
+	 * upgrade.cgi返回Updating.asp后，由Updating.asp调用父页面的
+	 * showUpgradeBar()显示刷写进度，避免页面跳转到空白的upgrade.cgi。
+	 * LAN发现停止由服务端在收到升级请求后异步处理，刷写前再次兜底。
 	 */
 	fw_upgrade_pending = true;
 	disableCheckChangedStatus();
 	document.form.button.disabled = true;
-	document.form.target = "_self";
+
+	/* 提交前立即显示进度层，让用户能够看到上传已开始。 */
+	if (typeof(showUpgradeBar) === "function")
+		showUpgradeBar();
+
+	document.form.target = "hidden_frame";
 	document.form.submit();
 	return false;
 }
