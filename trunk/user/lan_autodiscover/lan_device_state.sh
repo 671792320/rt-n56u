@@ -235,7 +235,17 @@ sync_device_cache() {
 
 append_subnet() {
     subnet="$1"
-    is_private_ip "${subnet%.*}.1" || return 1
+    case "$subnet" in
+        *.*.*.0) ;;
+        *) return 1;;
+    esac
+
+    private_ok="$(printf '%s\n' "$subnet" | awk -F. 'NF==4 &&
+        ($1+0==10 ||
+        ($1+0==172 && $2+0>=16 && $2+0<=31) ||
+        ($1+0==192 && $2+0==168)) {print "1"}')"
+    [ "$private_ok" = "1" ] || return 1
+
     grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null && return 0
     printf 'DEVICE type=SUBNET IP=%s INFO=24\n' "$subnet" >> "$DEVICE_DB"
 }
