@@ -158,10 +158,20 @@ upsert_device_record() {
     old_mac="$(awk -v ip="$ip" '$0 ~ /DEVICE / && $0 !~ /type=SUBNET / && $0 !~ /type=IP_CONFLICT / && $0 ~ " IP=" ip " " {for(i=1;i<=NF;i++) if($i ~ /^MAC=/) {print substr($i,5); exit}}' "$DEVICE_DB" 2>/dev/null)"
     tmp="${DEVICE_DB}.state.tmp"
 
-    # 最终设备表只允许本程序写入；同一IP更新时保留其它IP和SUBNET记录。
-    awk -v ip="$ip" '{
+    # 同一IP可以同时存在ARP、HIK、ONVIF、SSDP、DAHUA等多种发现证据。
+    # 更新某一种类型时，只替换该类型，不能把其它协议记录一起删除。
+    record_type="$(printf '%s\n' "$clean" | sed -n 's/.*type=\([^ ]*\).*/\1/p')"
+    awk -v ip="$ip" -v new_type="$record_type" '{
         if ($0 ~ /type=SUBNET /) {print; next}
-        if (index($0," IP=" ip " ") != 0) next
+        if (index($0," IP=" ip " ") != 0) {
+            if ($0 ~ /type=IP_CONFLICT /) next
+            if (new_type == "ARP") {
+                if ($0 ~ /type=ARP /) next
+                print; next
+            }
+            if ($0 ~ ("type=" new_type " ")) next
+            print; next
+        }
         print
     }' "$DEVICE_DB" 2>/dev/null > "$tmp"
 
