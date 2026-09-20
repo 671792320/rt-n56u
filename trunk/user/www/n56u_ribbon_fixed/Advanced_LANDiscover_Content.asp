@@ -606,7 +606,7 @@ function initial(){
 .legend-temp{background:#d9edf7}
 .legend-conflict{background:#f2dede}
 .legend-empty{background:#fff}
-.discovered-table th,.discovered-table td{
+.lan-health-note{white-space:normal;word-break:break-all;overflow-wrap:anywhere;}\n.discovered-table th,.discovered-table td{
     vertical-align:middle;
 }
 .discovered-table .device-status-found{
@@ -669,7 +669,7 @@ function initial(){
 <tr>
 <td>MAC</td><td id="status_mac">-</td>
 <td title="每秒检测到疑似二层环路回流报文的数量">MAC回流</td><td id="status_loop">0/s</td>
-<td colspan="4">正常应长期为 0/s；持续非0时检查网线、交换机或网络环路</td>
+<td colspan="4" class="lan-health-note">正常应长期为 0/s；持续非0请检查网线、交换机或网络环路</td>
 </tr>
 </table>
 <div class="note" style="margin:4px 0 10px">
