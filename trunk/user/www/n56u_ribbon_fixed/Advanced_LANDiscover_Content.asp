@@ -97,6 +97,8 @@ function parseDevices(s){
         var ip=(z.match(/IP=([^ ]+)/)||[])[1]||'-';
         if(ip==='-'||!/^\d+\.\d+\.\d+\.\d+$/.test(ip))continue;
         var type=(z.match(/type=([^ ]+)/)||[])[1]||'ARP';
+        if(type==='HIK-SADP'||type==='HIK')type='HIK';
+        if(type==='DAHUA-DHIP'||type==='DAHUA')type='DAHUA';
         var mac=(z.match(/MAC=([^ ]+)/)||[])[1]||'-';
         var st=(z.match(/STATUS=([^ ]+)/)||[])[1]||'在线';
         var ping=(z.match(/PING=([^ ]+)/)||[])[1]||'不可用';
@@ -107,6 +109,7 @@ function parseDevices(s){
         if(mac!=='-'&&d.macs.indexOf(mac)<0)d.macs.push(mac);
         if(st==='在线')d.status='在线';
         if(ping==='通')d.ping='通';
+        else if(!d.ping&&ping&&ping!=='-')d.ping=ping;
         if(type!=='ARP'&&d.proto.indexOf(type)<0)d.proto.push(type);
         if(info!=='-'&&d.info.indexOf(info)<0)d.info.push(info);
     }
@@ -288,7 +291,8 @@ function showIpDetail(ip,t){
     }else if(d){
         html+='<tr><th>MAC地址</th><td>'+((d.macs.length)?escHtml(d.macs.join('<br>')).replace(/&lt;br&gt;/g,'<br>'):'-')+'</td></tr>';
         html+='<tr><th>发现协议</th><td>'+escHtml((d.proto.length)?d.proto.join(' / '):'ARP')+'</td></tr>';
-        html+='<tr><th>Ping状态</th><td>'+((d.ping==='通')?'可达':'不可用')+'</td></tr>';
+        var ping_text=(d.ping==='通')?'可达':(d.ping==='不通'?'不通':(d.ping==='未探测'?'未探测':'不可用'));
+        html+='<tr><th>Ping状态</th><td>'+ping_text+'</td></tr>';
         if(d.info.length)html+='<tr><th>设备信息</th><td>'+escHtml(d.info.join('<br>')).replace(/&lt;br&gt;/g,'<br>')+'</td></tr>';
         if(kind==='conflict')html+='<tr><th>冲突说明</th><td>检测到多个不同MAC占用同一IP地址</td></tr>';
     }else{
