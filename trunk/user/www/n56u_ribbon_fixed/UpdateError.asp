@@ -11,6 +11,8 @@
 </head>
 <body>
 <script>
+	if (parent && typeof(parent.hideLoadingBar) === "function")
+		parent.hideLoadingBar();
 	alert("<#FIRM_fail_desc#>");
 </script>
 </body>
