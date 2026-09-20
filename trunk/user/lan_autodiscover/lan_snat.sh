@@ -70,8 +70,19 @@ rule_del_all() {
     done
 }
 
+is_private_net() {
+    net="$1"
+    first="$(printf '%s\n' "$net" | awk -F. 'NF==4 {print $1}')"
+    second="$(printf '%s\n' "$net" | awk -F. 'NF==4 {print $2}')"
+    [ "$first" = "10" ] && return 0
+    [ "$first" = "172" ] && [ "$second" -ge 16 ] 2>/dev/null && [ "$second" -le 31 ] 2>/dev/null && return 0
+    [ "$first" = "192" ] && [ "$second" = "168" ] && return 0
+    return 1
+}
+
 check_args() {
     case "$1:$2:$3" in *.*.*.*:*.*.*.*:*.*.*.*) ;; *) return 1;; esac
+    is_private_net "$1" || { log 1 "SNAT参数无效：目标网段不是RFC1918私有网段：$1"; return 1; }
     [ "$1" != "$3" ] || { log 1 "SNAT参数无效：目标网段与本地网段相同：$1"; return 1; }
     target_prefix="$(printf '%s\n' "$1" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
     ip_prefix="$(printf '%s\n' "$2" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
