@@ -17,5 +17,6 @@ romfs:
 	$(ROMFSINST) -p +x /usr/bin/lan_snat.sh
 	$(ROMFSINST) -p +x /usr/bin/lan_network_manager.sh
 	$(ROMFSINST) -p +x /usr/bin/lan_device_state.sh
+	$(ROMFSINST) -p +x /usr/bin/lan_dhcp_probe.sh
 
 clean:
