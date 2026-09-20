@@ -13,6 +13,18 @@ SUBNET_CACHE_FILE="$RUNTIME_DIR/subnet_records.cache"
 mkdir -p "$RUNTIME_DIR"
 touch "$STATE_FILE" "$ARP_SEEN_FILE" "$EVENT_FILE" "$DEVICE_DB"
 
+is_private_ip() {
+    ip="$1"
+    printf '%s\n' "$ip" | awk -F. '
+        NF==4 &&
+        (($1+0)==10 ||
+         (($1+0)==172 && ($2+0)>=16 && ($2+0)<=31) ||
+         (($1+0)==192 && ($2+0)==168))
+        { exit 0 }
+        { exit 1 }
+    '
+}
+
 norm_mac() {
     m="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed 's/\\//g;s/[[:space:]]//g')"
     case "$m" in
@@ -132,10 +144,7 @@ clean_device_line() {
     mac="$(printf '%s\n' "$raw" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
     [ -n "$type" ] || type=IP
     [ -n "$ip" ] || return 1
-    case "$ip" in
-        *.*.*.*) ;;
-        *) return 1;;
-    esac
+    is_private_ip "$ip" || return 1
     mac="$(norm_mac "$mac")"
     if [ "$type" = "SUBNET" ]; then
         prefix="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\([0-9][0-9]*\).*/\1/p')"
@@ -209,18 +218,24 @@ sort_device_db() {
 }
 
 sync_device_cache() {
-    sort_device_db
-    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
+    # 清理早期版本遗留的公网设备/目标网段记录。
+    if [ -s "$DEVICE_DB" ]; then
+        awk '
+            /DEVICE type=SUBNET / {
+                if ($0 ~ / IP=(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/) print
+                next
+            }
+            / IP=(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/ {print}
+        ' "$DEVICE_DB" > "${DEVICE_DB}.private.tmp" 2>/dev/null && mv -f "${DEVICE_DB}.private.tmp" "$DEVICE_DB"
+    fi
+    sort_device_db    count="$(grep -v 'type=SUBNET ' "$DEVICE_DB" 2>/dev/null | grep -v 'type=IP_CONFLICT ' | wc -l | tr -d ' ')"
     case "$count" in ''|*[!0-9]*) count=0;; esac
     printf '%s' "$count"
 }
 
 append_subnet() {
     subnet="$1"
-    case "$subnet" in
-        *.*.*.0) ;;
-        *) return 1;;
-    esac
+    is_private_ip "${subnet%.*}.1" || return 1
     grep -q "DEVICE type=SUBNET IP=${subnet} INFO=24" "$DEVICE_DB" 2>/dev/null && return 0
     printf 'DEVICE type=SUBNET IP=%s INFO=24\n' "$subnet" >> "$DEVICE_DB"
 }
