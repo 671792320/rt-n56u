@@ -166,8 +166,11 @@ is_link_up() {
         fi
     done
 
-    # 极少数平台没有交换机端口状态工具时，退回原有Linux接口链路状态。
-    if [ "$selected" = "0" ] && [ -e "/sys/class/net/$iface" ]; then
+    # 未选择任何LAN口时，严格视为未启用，不再回退到eth2.1。
+    [ "$selected" = "1" ] || return 1
+
+    # 极少数平台没有交换机端口状态工具时，再退回Linux接口链路状态。
+    if [ ! -x /sbin/mtk_esw ] && [ -e "/sys/class/net/$iface" ]; then
         if [ -r "/sys/class/net/$iface/carrier" ]; then
             [ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" = "1" ] && return 0
         else
