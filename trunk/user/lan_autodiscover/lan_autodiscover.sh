@@ -252,8 +252,17 @@ device_state_event() {
 
 register_subnet_from_ip() {
     ip="$1"
-    is_private_ip "$ip" || return 0
-    subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 {printf "%d.%d.%d.0",$1,$2,$3}')"
+    case "$ip" in *.*.*.*) ;; *) return;; esac
+    subnet="$(printf '%s\n' "$ip" | awk -F. 'NF==4 &&
+        $1+0>=0 && $1+0<=255 &&
+        $2+0>=0 && $2+0<=255 &&
+        $3+0>=0 && $3+0<=255 &&
+        $4+0>=0 && $4+0<=255 &&
+        ($1+0==10 ||
+         ($1+0==172 && $2+0>=16 && $2+0<=31) ||
+         ($1+0==192 && $2+0==168) {
+            printf "%d.%d.%d.0",$1,$2,$3
+        }' )"
     [ -n "$subnet" ] || return
     /usr/bin/lan_device_state.sh subnet "$subnet" >/dev/null 2>&1 || :
 }
