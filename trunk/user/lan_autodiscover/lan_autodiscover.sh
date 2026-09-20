@@ -416,34 +416,52 @@ run_dhcp_detect() {
     iface="$1"
     dhcp_enable="$(cfg lan_discovery_dhcp_enable 1)"
     dhcp_timeout="$(cfg lan_discovery_dhcp_timeout 3)"
-    : > "$DHCP_LOG"
+    result_file="$RUNTIME_DIR/dhcp_probe.result"
+
     runtime_set "lan_discovery_status_state=DHCP检测"
     runtime_set "lan_discovery_status_dhcp=检测中"
-    if [ "$dhcp_enable" != "1" ] || [ ! -x /usr/bin/dhcpdetect ]; then
+
+    if [ "$dhcp_enable" != "1" ]; then
         runtime_set "lan_discovery_status_dhcp=未启用"
         return 0
     fi
-    /usr/bin/dhcpdetect -i "$iface" -t "$dhcp_timeout" > "$DHCP_LOG" 2>&1
-    rc=$?
-    if [ "$rc" = "0" ]; then
-        line="$(grep -m1 '^\[dhcpdetect\] DHCP server found' "$DHCP_LOG" 2>/dev/null)"
-        gateway="$(printf '%s\n' "$line" | sed -n 's/.* gateway=\([^ ]*\).*/\1/p')"
-        server="$(printf '%s\n' "$line" | sed -n 's/.* server=\([^ ]*\).*/\1/p')"
-        if [ -n "$gateway" ] && [ "$gateway" != "-" ]; then
-            runtime_set "lan_discovery_status_dhcp=网关 $gateway"
-            log_line 1 "上级DHCP：网关 $gateway"
-            register_subnet_from_ip "$gateway"
-        elif [ -n "$server" ] && [ "$server" != "-" ]; then
-            runtime_set "lan_discovery_status_dhcp=DHCP服务器 $server（未提供网关）"
-            log_line 1 "上级DHCP：服务器 $server，未提供网关"
-        else
-            runtime_set "lan_discovery_status_dhcp=已发现DHCP（无网关信息）"
-            log_line 1 "上级DHCP已发现，但报文未提供网关"
-        fi
-    else
-        runtime_set "lan_discovery_status_dhcp=未发现DHCP"
-        log_line 2 "未发现DHCP"
+
+    if [ ! -x /usr/bin/lan_dhcp_probe.sh ]; then
+        runtime_set "lan_discovery_status_dhcp=探测程序不存在"
+        log_line 1 "DHCP检测程序不存在"
+        return 1
     fi
+
+    # 使用br0进行二层DHCP探测，避免eth2.1在部分Q7交换机配置下收不到广播。
+    # 探测回调不配置地址，因此不会改变Q7当前LAN IPv4。
+    if /usr/bin/lan_dhcp_probe.sh br0 "$dhcp_timeout" "$result_file"; then
+        lease_ip="$(sed -n 's/^ip=//p' "$result_file" 2>/dev/null | head -n 1)"
+        router="$(sed -n 's/^router=//p' "$result_file" 2>/dev/null | awk '{print $1}' | head -n 1)"
+        serverid="$(sed -n 's/^serverid=//p' "$result_file" 2>/dev/null | awk '{print $1}' | head -n 1)"
+
+        if [ -n "$router" ] && [ "$router" != "0.0.0.0" ]; then
+            runtime_set "lan_discovery_status_dhcp=网关 $router"
+            log_line 1 "上级DHCP：网关 $router"
+            register_subnet_from_ip "$router"
+        elif [ -n "$serverid" ] && [ "$serverid" != "0.0.0.0" ]; then
+            runtime_set "lan_discovery_status_dhcp=DHCP服务器 $serverid（未提供网关）"
+            log_line 1 "上级DHCP：服务器 $serverid，未提供网关"
+            register_subnet_from_ip "$serverid"
+        elif [ -n "$lease_ip" ] && [ "$lease_ip" != "0.0.0.0" ]; then
+            runtime_set "lan_discovery_status_dhcp=已发现DHCP，租约 $lease_ip"
+            log_line 1 "上级DHCP已发现：租约 $lease_ip"
+            register_subnet_from_ip "$lease_ip"
+        else
+            runtime_set "lan_discovery_status_dhcp=已发现DHCP"
+            log_line 1 "上级DHCP已发现，但未取得地址信息"
+        fi
+        rm -f "$result_file"
+        return 0
+    fi
+
+    runtime_set "lan_discovery_status_dhcp=未发现DHCP"
+    log_line 2 "未发现DHCP"
+    return 1
 }
 
 run_camdiscover() {
@@ -551,6 +569,13 @@ run_discovery() {
             custom="$(nv lan_discovery_custom)"
             read_standard_config "$custom"
             cycle_start="$now_sec"
+
+            # 首轮启动时上面已经完成DHCP检测；后续周期重新检测，
+            # 这样交换机/上级网络稍后恢复DHCP时也能自动发现。
+            if [ "$last_sweep" != "0" ]; then
+                run_dhcp_detect "$iface"
+            fi
+
             log_line 3 "低频主动补漏开始：ARP + 协议探测，周期=${sweep_cycle}s"
             if [ "$raw" = "1" ]; then
                 /usr/bin/lan_device_state.sh begin
