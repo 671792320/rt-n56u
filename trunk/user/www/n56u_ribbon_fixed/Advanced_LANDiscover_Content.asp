@@ -223,9 +223,17 @@ function renderMatrix(){
         return;
     }
     title.className='matrix-header';
+    var found=countTargetFound(t.net);
+    var conflict=countTargetConflict(t.net);
+    var temp=(t.temp&&t.temp!=='-')?1:0;
+    var unused=255-found-temp;
+    if(unused<0)unused=0;
     title.innerHTML='<span class="matrix-label">当前网段</span><strong>'+escHtml(t.net)+'</strong>'
         +'<span class="matrix-meta">临时IP：<b>'+escHtml(t.temp)+'</b></span>'
-        +'<span class="matrix-meta">状态：<span class="label label-info">'+escHtml(t.state)+'</span></span>';
+        +'<span class="matrix-meta">状态：<span class="label label-info">'+escHtml(t.state)+'</span></span>'
+        +'<span class="matrix-meta">已发现：<b id="matrix_found">'+found+'</b></span>'
+        +'<span class="matrix-meta">未使用：<b id="matrix_unused">'+unused+'</b></span>'
+        +'<span class="matrix-meta">冲突：<b id="matrix_conflict">'+conflict+'</b></span>';
     var table=document.createElement('table');
     table.className='table table-bordered table-condensed ip-grid';
     var tbody=document.createElement('tbody');
@@ -357,7 +365,6 @@ function refresh(){
         target_items=parseTargets(o.targets);
         device_map=parseDevices(o.devices);
         renderTargets();
-        renderSummary();
         renderMatrix();
         if(!custom_loaded){
             var ui=document.getElementById('lan_discovery_custom_ui');
@@ -557,12 +564,16 @@ function initial(){
 <td>发现状态</td><td id="status_state">-</td>
 <td>最后活动</td><td id="status_last">-</td>
 <td>网络健康</td><td id="status_health">-</td>
-<td>MAC</td><td id="status_mac">-</td>
+<td colspan="2">红色文字表示健康状态异常</td>
 </tr>
 <tr>
 <td title="每秒检测到的广播报文数量">广播速率</td><td id="status_broadcast">0/s</td>
+<td colspan="6">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
+</tr>
+<tr>
+<td>MAC</td><td id="status_mac">-</td>
 <td title="每秒检测到疑似二层环路回流报文的数量">MAC回流</td><td id="status_loop">0/s</td>
-<td colspan="4">红色文字表示健康状态异常</td>
+<td colspan="4">正常应长期为 0/s；持续非0时检查网线、交换机或网络环路</td>
 </tr>
 </table>
 <div class="note" style="margin:4px 0 10px">
@@ -570,17 +581,6 @@ function initial(){
 &nbsp;&nbsp;
 <b>MAC回流：</b>表示检测到疑似二层环路回流的报文速率，即发出的网络帧又从LAN口绕回来。正常应长期为 <b>0/s</b>；持续出现非0值时，应检查网线、交换机或是否形成网络环路。
 </div>
-
-<h4 class="section-head">发现统计</h4>
-<table class="table table-bordered table-condensed summary-table">
-<tr>
-<td><b>目标网段</b><br><span id="summary_targets">0</span></td>
-<td><b>已发现</b><br><span id="summary_found">0</span></td>
-<td><b>临时IP</b><br><span id="summary_temp">0</span></td>
-<td><b>未使用</b><br><span id="summary_unused">0</span></td>
-<td><b>IP冲突</b><br><span id="summary_conflict">0</span></td>
-</tr>
-</table>
 
 <h4 class="section-head">目标网段</h4>
 <div id="targets" class="target-tabs"><span class="note">暂未发现目标网段</span></div>
