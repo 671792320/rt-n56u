@@ -15,6 +15,7 @@
 static struct variable lan_discovery_extra[] = {
     {"lan_discovery_enable", "", NULL, FALSE},
     {"lan_discovery_ifname", "", NULL, FALSE},
+    {"lan_discovery_ports", "", NULL, FALSE},
     {"lan_discovery_dhcp_enable", "", NULL, FALSE},
     {"lan_discovery_dhcp_timeout", "", NULL, FALSE},
     {"lan_discovery_discover_enable", "", NULL, FALSE},
