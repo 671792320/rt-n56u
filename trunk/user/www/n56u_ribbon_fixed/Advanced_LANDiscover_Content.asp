@@ -534,21 +534,42 @@ function initial(){
 .status-table{
     width:100%;
     table-layout:fixed;
-    margin-bottom:8px;
+    margin-bottom:6px;
 }
-.status-table td,.status-table th{
+.status-table col.status-label{width:11%}
+.status-table col.status-value{width:14%}
+.status-table col.status-label-wide{width:12%}
+.status-table col.status-value-wide{width:18%}
+.status-table col.status-label-port{width:8%}
+.status-table col.status-value-port{width:9%}
+.status-table col.status-label-health{width:10%}
+.status-table col.status-value-health{width:18%}
+.status-table th,.status-table td{
     vertical-align:middle;
-    overflow-wrap:anywhere;
-}
-.status-table td{
     white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
 }
-.status-table td.lan-health-note{
-    white-space:normal;
+.status-table .status-small{
+    font-size:12px;
+    color:#888;
+}
+.status-explain{
+    margin:0 0 10px;
+    padding:6px 8px;
+    border-top:1px solid #ddd;
+    border-bottom:1px solid #ddd;
+    color:#888;
+    font-size:12px;
+    line-height:18px;
     word-break:break-word;
     overflow-wrap:anywhere;
-    line-height:18px;
-    font-size:12px;
+}
+.status-explain-row{
+    display:block;
+}
+.status-explain-row + .status-explain-row{
+    margin-top:2px;
 }
 .mini{width:55px;margin:0 3px}
 .health-danger{font-weight:bold;color:#b94a48}
@@ -667,6 +688,12 @@ function initial(){
 <div class="alert alert-info">本页面使用 Padavan 原生表格和按钮样式。后台负责实时监听、周期发现和 SNAT；页面仅显示状态并保存参数。</div>
 
 <table class="table table-condensed status-table">
+<colgroup>
+<col class="status-label"><col class="status-value">
+<col class="status-label-wide"><col class="status-value-wide">
+<col class="status-label-port"><col class="status-value-port">
+<col class="status-label-health"><col class="status-value-health">
+</colgroup>
 <tr><th colspan="8">当前状态</th></tr>
 <tr>
 <td>检测接口</td><td id="status_iface">-</td>
@@ -678,28 +705,17 @@ function initial(){
 <td>发现状态</td><td id="status_state">-</td>
 <td>最后活动</td><td id="status_last">-</td>
 <td>网络健康</td><td id="status_health">-</td>
-<td colspan="2">红色文字表示健康状态异常</td>
+<td colspan="2" class="status-small">红色文字表示健康状态异常</td>
 </tr>
 <tr>
-<td title="每秒检测到的广播报文数量">广播速率</td><td id="status_broadcast">0/s</td>
-<td colspan="6"></td>
-</tr>
-<tr>
-<td colspan="8" class="lan-health-note">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
-</tr>
-<tr>
-<td>MAC</td><td id="status_mac">-</td>
-<td title="每秒检测到疑似二层环路回流报文的数量">MAC回流</td><td id="status_loop">0/s</td>
+<td>广播速率</td><td id="status_broadcast">0/s</td>
+<td>MAC回流</td><td id="status_loop">0/s</td>
 <td colspan="4"></td>
 </tr>
-<tr>
-<td colspan="8" class="lan-health-note">正常应长期为 0/s；持续非0请检查网线、交换机或网络环路</td>
-</tr>
 </table>
-<div class="note" style="margin:4px 0 10px">
-<b>广播速率：</b>表示LAN口每秒检测到多少个广播报文。短时间有变化属于正常网络活动；如果长期明显偏高，可能存在广播风暴或异常设备。
-&nbsp;&nbsp;
-<b>MAC回流：</b>表示检测到疑似二层环路回流的报文速率，即发出的网络帧又从LAN口绕回来。正常应长期为 <b>0/s</b>；持续出现非0值时，应检查网线、交换机或是否形成网络环路。
+<div class="status-explain">
+<div class="status-explain-row"><b>广播速率：</b>每秒检测到的广播报文数量；短时间变化属于正常网络活动，长期明显偏高时检查广播风暴或异常设备。</div>
+<div class="status-explain-row"><b>MAC回流：</b>疑似二层环路回流报文速率；正常应长期为 <b>0/s</b>，持续非0时检查网线、交换机或网络环路。</div>
 </div>
 
 <h4 class="section-head">目标网段</h4>
