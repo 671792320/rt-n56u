@@ -606,7 +606,22 @@ function initial(){
 .legend-temp{background:#d9edf7}
 .legend-conflict{background:#f2dede}
 .legend-empty{background:#fff}
-.lan-health-note{white-space:normal;word-break:break-all;overflow-wrap:anywhere;}\n.discovered-table th,.discovered-table td{
+.status-table{
+    width:100%;
+    table-layout:fixed;
+}
+.status-table td,.status-table th{
+    word-break:break-word;
+    overflow-wrap:anywhere;
+}
+.lan-health-note{
+    white-space:normal;
+    word-break:break-word;
+    overflow-wrap:anywhere;
+    line-height:18px;
+    font-size:12px;
+}
+.discovered-table th,.discovered-table td{
     vertical-align:middle;
 }
 .discovered-table .device-status-found{
@@ -664,7 +679,7 @@ function initial(){
 </tr>
 <tr>
 <td title="每秒检测到的广播报文数量">广播速率</td><td id="status_broadcast">0/s</td>
-<td colspan="6">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
+<td colspan="6" class="lan-health-note">每秒检测到的广播报文数量；短时间变化属于正常网络活动</td>
 </tr>
 <tr>
 <td>MAC</td><td id="status_mac">-</td>
