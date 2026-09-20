@@ -69,6 +69,40 @@ ping_device() {
     return 2
 }
 
+# 判断设备发现事件中的IPv4地址是否合法。
+# 现场设备可能使用标准私网、非标准私网甚至公网地址，因此这里不按RFC1918过滤；
+# 只过滤非法地址、回环地址、组播地址以及网络/广播地址。
+is_discovery_ip() {
+    ip="$1"
+    case "$ip" in
+        *.*.*.*) ;;
+        *) return 1 ;;
+    esac
+
+    old_ifs="$IFS"
+    IFS=.
+    set -- $ip
+    IFS="$old_ifs"
+
+    [ "$#" -eq 4 ] || return 1
+    for octet in "$@"; do
+        case "$octet" in
+            ''|*[!0-9]*) return 1;;
+        esac
+        [ "$octet" -ge 0 ] 2>/dev/null || return 1
+        [ "$octet" -le 255 ] 2>/dev/null || return 1
+    done
+
+    case "$1" in
+        0|127) return 1;;
+    esac
+    case "$4" in
+        0|255) return 1;;
+    esac
+    [ "$1" -le 223 ] 2>/dev/null || return 1
+    return 0
+}
+
 is_ip() {
     ip="$1"
     case "$ip" in *.*.*.*) ;; *) return 1;; esac
@@ -132,7 +166,7 @@ clean_device_line() {
     mac="$(printf '%s\n' "$raw" | sed -n 's/.* MAC=\([^ ]*\).*/\1/p')"
     [ -n "$type" ] || type=IP
     [ -n "$ip" ] || return 1
-    is_private_ip "$ip" || return 1
+    is_discovery_ip "$ip" || return 1
     mac="$(norm_mac "$mac")"
     if [ "$type" = "SUBNET" ]; then
         prefix="$(printf '%s\n' "$raw" | sed -n 's/.*INFO=\([0-9][0-9]*\).*/\1/p')"
