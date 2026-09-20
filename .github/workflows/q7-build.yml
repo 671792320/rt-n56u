@@ -93,10 +93,10 @@ jobs:
         shell: bash
         run: |
           set -e
-          BUILD_DATE=$(date -u +'%Y%m%d_%H%M%S')
-          VERSION_STAMP=$(date -u +'%y%m%d_%H%M')
-          VERSION_DATE=${VERSION_STAMP%_*}
-          VERSION_TIME=${VERSION_STAMP#*_}
+          BUILD_DATE=$(TZ=Asia/Shanghai date +'%Y%m%d_%H%M%S')
+          VERSION_STAMP=$(TZ=Asia/Shanghai date +'%y%m%d%H%M')
+          VERSION_DATE=${VERSION_STAMP:0:6}
+          VERSION_TIME=${VERSION_STAMP:6:4}
           VERSION_STRING="3.4.3.9-${VERSION_STAMP}"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           echo "VERSION_STAMP=${VERSION_STAMP}" >> "$GITHUB_ENV"
