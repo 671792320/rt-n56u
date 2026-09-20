@@ -222,7 +222,10 @@ function renderMatrix(){
         title.innerHTML='当前网段：-';
         return;
     }
-    title.innerHTML='当前网段：'+t.net+' <span class="note">临时IP：'+t.temp+'，状态：'+t.state+'</span>';
+    title.className='matrix-header';
+    title.innerHTML='<span class="matrix-label">当前网段</span><strong>'+escHtml(t.net)+'</strong>'
+        +'<span class="matrix-meta">临时IP：<b>'+escHtml(t.temp)+'</b></span>'
+        +'<span class="matrix-meta">状态：<span class="label label-info">'+escHtml(t.state)+'</span></span>';
     var table=document.createElement('table');
     table.className='table table-bordered table-condensed ip-grid';
     var tbody=document.createElement('tbody');
@@ -259,8 +262,6 @@ function renderMatrix(){
     }
     table.appendChild(tbody);
     box.appendChild(table);
-    var cur=findTarget(selected_target);
-    if(cur)$j('#matrix_summary').text('已发现 '+countTargetFound(cur.net)+' 个，临时IP 1 个，冲突 '+countTargetConflict(cur.net)+' 个');
 }
 function countTargetFound(net){
     var base=targetBase(net),n=0;
@@ -469,6 +470,10 @@ function initial(){
 .summary-table td{white-space:nowrap;text-align:center}
 .summary-table #summary_targets{font-size:13px;font-weight:bold}
 .target-tabs .btn{font-size:12px}
+.matrix-header{margin:8px 0 6px;padding:9px 12px;border:1px solid #ddd;border-radius:4px;background:#f5f5f5;font-size:14px;line-height:22px}
+.matrix-header .matrix-label{font-weight:bold;margin-right:8px}
+.matrix-header .matrix-meta{margin-left:18px;color:#666}
+.matrix-header .matrix-meta b{color:#333}
 .ip-grid td.ip-cell{background:#fff}
 .ip-grid td.ip-cell a{position:relative;line-height:18px}
 .ip-grid td.ip-cell{
@@ -571,13 +576,8 @@ function initial(){
 <h4 class="section-head">目标网段</h4>
 <div id="targets" class="target-tabs"><span class="note">暂未发现目标网段</span></div>
 
-<h4 class="section-head" id="matrix_title">当前网段：-</h4>
-<div class="note" style="margin-bottom:4px">
-<span class="label label-success">已发现</span>
-<span class="label label-info">临时IP</span>
-<span class="label label-important">IP冲突</span>
-<span class="label">未使用</span>
-<span id="matrix_summary" style="margin-left:8px"></span>
+<div id="matrix_title" class="matrix-header">
+当前网段：-
 </div>
 <div id="ip_matrix"><div class="note">等待目标网段状态...</div></div>
 
