@@ -32,41 +32,19 @@ function initial(){
 	}
 }
 
-var fw_upgrade_pending=false;
-
-function stopLanDiscoveryBeforeUpgrade(){
-	var stopForm=document.getElementById('lan_upgrade_stop_form');
-	if(!stopForm)return false;
-	stopForm.current_page.value='Advanced_FirmwareUpgrade_Content.asp';
-	stopForm.next_page.value='';
-	stopForm.action_mode.value=' Update ';
-	stopForm.action_script.value='lan_discovery_stop_for_upgrade';
-	stopForm.submit();
-	return true;
-}
-
 function fwUpload(){
 	if (!document.form.file.value) {
 		alert("<#JS_Shareblanktest#>");
 		document.form.file.focus();
 		return false;
 	}
-	if(fw_upgrade_pending)return false;
 
 	/*
-	 * 固件升级必须优先于LAN发现运行任务。
-	 * 先通过Padavan原生start_apply流程停止LAN发现，再提交升级文件。
-	 * 不修改LAN发现NVRAM配置，刷机重启后服务仍按原设置恢复。
+	 * 固件升级由upgrade.cgi服务端在真正接收文件时同步停止LAN发现。
+	 * 避免浏览器端延时和hidden iframe并发请求造成升级时序竞态。
 	 */
-	fw_upgrade_pending=true;
 	disableCheckChangedStatus();
-	if(stopLanDiscoveryBeforeUpgrade()){
-		setTimeout(function(){
-			document.form.submit();
-		},1200);
-	}else{
-		document.form.submit();
-	}
+	document.form.submit();
 }
 
 $j.fn.fileName = function(){
@@ -165,13 +143,6 @@ $j.fn.fileName = function(){
 
     <iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
 
-    <!-- 固件升级前通过Padavan原生start_apply流程停止LAN发现。 -->
-    <form method="post" action="/start_apply.htm" name="lan_upgrade_stop_form" id="lan_upgrade_stop_form" target="hidden_frame">
-    <input type="hidden" name="current_page" value="Advanced_FirmwareUpgrade_Content.asp">
-    <input type="hidden" name="next_page" value="">
-    <input type="hidden" name="action_mode" value=" Update ">
-    <input type="hidden" name="action_script" value="lan_discovery_stop_for_upgrade">
-    </form>
 
     <form method="post" action="upgrade.cgi" name="form" target="hidden_frame" enctype="multipart/form-data">
     <input type="hidden" name="current_page" value="Advanced_FirmwareUpgrade_Content.asp">
