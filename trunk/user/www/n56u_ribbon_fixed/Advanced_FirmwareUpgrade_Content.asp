@@ -32,6 +32,8 @@ function initial(){
 	}
 }
 
+var fw_upgrade_pending = false;
+
 function fwUpload(){
 	if (!document.form.file.value) {
 		alert("<#JS_Shareblanktest#>");
@@ -39,12 +41,20 @@ function fwUpload(){
 		return false;
 	}
 
+	if (fw_upgrade_pending)
+		return false;
+
 	/*
-	 * 固件升级由upgrade.cgi服务端在真正接收文件时同步停止LAN发现。
-	 * 避免浏览器端延时和hidden iframe并发请求造成升级时序竞态。
+	 * 固件升级停止流程由upgrade.cgi服务端统一处理。
+	 * 上传请求直接在当前页面提交，不能再放到隐藏iframe里，
+	 * 否则浏览器在上传或升级失败时看不到任何页面反馈。
 	 */
+	fw_upgrade_pending = true;
 	disableCheckChangedStatus();
+	document.form.button.disabled = true;
+	document.form.target = "_self";
 	document.form.submit();
+	return false;
 }
 
 $j.fn.fileName = function(){
