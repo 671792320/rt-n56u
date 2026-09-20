@@ -32,35 +32,14 @@ function initial(){
 	}
 }
 
-var fw_upgrade_pending = false;
-
 function fwUpload(){
 	if (!document.form.file.value) {
 		alert("<#JS_Shareblanktest#>");
 		document.form.file.focus();
 		return false;
 	}
-
-	if (fw_upgrade_pending)
-		return false;
-
-	/*
-	 * 固件升级沿用Padavan原生隐藏iframe流程。
-	 * upgrade.cgi返回Updating.asp后，由Updating.asp调用父页面的
-	 * showUpgradeBar()显示刷写进度，避免页面跳转到空白的upgrade.cgi。
-	 * LAN发现停止由服务端在收到升级请求后异步处理，刷写前再次兜底。
-	 */
-	fw_upgrade_pending = true;
 	disableCheckChangedStatus();
-	document.form.button.disabled = true;
-
-	/* 提交前立即显示进度层，让用户能够看到上传已开始。 */
-	if (typeof(showUpgradeBar) === "function")
-		showUpgradeBar();
-
-	document.form.target = "hidden_frame";
 	document.form.submit();
-	return false;
 }
 
 $j.fn.fileName = function(){
@@ -158,7 +137,6 @@ $j.fn.fileName = function(){
     </div>
 
     <iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
-
 
     <form method="post" action="upgrade.cgi" name="form" target="hidden_frame" enctype="multipart/form-data">
     <input type="hidden" name="current_page" value="Advanced_FirmwareUpgrade_Content.asp">
