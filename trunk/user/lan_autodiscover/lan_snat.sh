@@ -70,23 +70,23 @@ rule_del_all() {
     done
 }
 
-is_private_net() {
-    net="$1"
-    first="$(printf '%s\n' "$net" | awk -F. 'NF==4 {print $1}')"
-    second="$(printf '%s\n' "$net" | awk -F. 'NF==4 {print $2}')"
-    [ "$first" = "10" ] && return 0
-    [ "$first" = "172" ] && [ "$second" -ge 16 ] 2>/dev/null && [ "$second" -le 31 ] 2>/dev/null && return 0
-    [ "$first" = "192" ] && [ "$second" = "168" ] && return 0
-    return 1
-}
-
 check_args() {
     case "$1:$2:$3" in *.*.*.*:*.*.*.*:*.*.*.*) ;; *) return 1;; esac
-    is_private_net "$1" || { log 1 "SNAT参数无效：目标网段不是RFC1918私有网段：$1"; return 1; }
+    target_valid="$(printf '%s\n' "$1" | awk -F. 'NF==4 &&
+        $1+0>=1 && $1+0<=223 && $1+0!=127 &&
+        $2+0>=0 && $2+0<=255 &&
+        $3+0>=0 && $3+0<=255 &&
+        $4+0==0 {print "1"}')"
+    [ "$target_valid" = "1" ] || { log 1 "SNAT参数无效：目标网段不是有效单播/24网段：$1"; return 1; }
+    target_prefix="$(printf '%s\n' "$1" | awk -F. '{print $1"."$2"."$3}')"
+    temp_valid="$(printf '%s\n' "$2" | awk -F. -v prefix="$target_prefix" 'NF==4 &&
+        $1+0>=1 && $1+0<=223 && $1+0!=127 &&
+        $2+0>=0 && $2+0<=255 &&
+        $3+0>=0 && $3+0<=255 &&
+        $4+0>=1 && $4+0<=254 &&
+        ($1"."$2"."$3)==prefix {print "1"}')"
+    [ "$temp_valid" = "1" ] || { log 1 "SNAT参数无效：临时地址不属于目标网段：$1 -> $2"; return 1; }
     [ "$1" != "$3" ] || { log 1 "SNAT参数无效：目标网段与本地网段相同：$1"; return 1; }
-    target_prefix="$(printf '%s\n' "$1" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
-    ip_prefix="$(printf '%s\n' "$2" | awk -F. 'NF==4 {print $1"."$2"."$3}')"
-    [ "$target_prefix" = "$ip_prefix" ] || { log 1 "SNAT参数无效：临时地址不属于目标网段：$1 -> $2"; return 1; }
     return 0
 }
 

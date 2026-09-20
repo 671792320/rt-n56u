@@ -123,24 +123,6 @@ local_ip() {
     ip -4 addr show dev "$BR_IF" 2>/dev/null |
         sed -n 's/^[[:space:]]*inet[[:space:]]\+\([0-9.]*\)\/.*$/\1/p' | head -n 1
 }
-is_private_ip() {
-    ip="$1"
-    printf '%s\n' "$ip" | awk -F. '
-        NF==4 &&
-        (($1+0)==10 ||
-         (($1+0)==172 && ($2+0)>=16 && ($2+0)<=31) ||
-         (($1+0)==192 && ($2+0)==168))
-        { exit 0 }
-        { exit 1 }
-    '
-}
-
-network_allowed() {
-    net="$1"
-    prefix="$(printf '%s\n' "$net" | awk -F. 'NF==4 {print $1 "." $2 "." $3 ".1"}')"
-    is_private_ip "$prefix"
-}
-
 network_from_ip() {
     printf '%s\n' "$1" |
         awk -F. 'NF==4 && $1+0>0 && $1+0<=255 && $2+0>=0 && $2+0<=255 && $3+0>=0 && $3+0<=255 && $4+0>=0 && $4+0<=255 {printf "%d.%d.%d.0\n",$1,$2,$3}'
@@ -310,9 +292,8 @@ consume_realtime_events() {
             split(ip, p, ".")
             if (net == "" || net == localnet || net == "0.0.0.0")
                 return
-            if (p[1]+0 == 10 ||
-                (p[1]+0 == 172 && p[2]+0 >= 16 && p[2]+0 <= 31) ||
-                (p[1]+0 == 192 && p[2]+0 == 168))
+            # 不按RFC1918过滤：现场设备可能使用公网地址或非标准私网地址。
+            if (p[1]+0 >= 1 && p[1]+0 <= 223 && p[1]+0 != 127)
                 seen[net] = 1
         }
         function emit_arp(line, f) {
@@ -420,28 +401,6 @@ esac
 localnet="$(network_from_ip "$localip")"
 [ -n "$localnet" ] || exit 0
 
-# 对旧版本在本次开机周期内产生的公网目标状态做一次清理，避免旧SNAT继续保留。
-prune_public_targets() {
-    for state in "$RUNTIME_DIR"/lan_snat_*.state; do
-        [ -r "$state" ] || continue
-        target_net="$(state_get "$state" target_net)"
-        [ -n "$target_net" ] || continue
-        if ! network_allowed "$target_net"; then
-            log 1 "清理非法公网目标网段：$target_net/24"
-            /usr/bin/lan_snat.sh down "$target_net" >/dev/null 2>&1 || :
-        fi
-    done
-
-    for state in "$RUNTIME_DIR"/lan_target_state_*.state "$RUNTIME_DIR"/lan_takeover_*.state "$RUNTIME_DIR"/lan_pending_*.state; do
-        [ -r "$state" ] || continue
-        target_net="$(state_get "$state" target_net)"
-        [ -n "$target_net" ] || target_net="$(state_get "$state" network)"
-        [ -n "$target_net" ] || rm -f "$state"
-        network_allowed "$target_net" || rm -f "$state"
-    done
-}
-
-prune_public_targets
 update_runtime_targets
 
 maintenance_ticks=0
