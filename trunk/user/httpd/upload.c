@@ -321,15 +321,16 @@ do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 	int ret;
 
 	/*
-	 * 固件升级必须在HTTP上传阶段就先停止LAN发现。
-	 * 以前仅由WebUI延时触发停止，存在上传与LAN发现并发的时序竞态。
-	 * 这里由upgrade.cgi在真正收到固件POST后同步停止运行态任务，
-	 * 不修改lan_discovery_enable配置；真正刷写阶段仍由flash_firmware()再次兜底。
+	 * 固件升级在HTTP上传开始时就触发停止LAN发现运行任务。
+	 * 这里必须异步执行：停止脚本会等待部分子进程退出，若同步执行会让
+	 * 浏览器长时间看不到上传请求，表现为“点击上传没有反应”。
+	 * 真正刷写前flash_firmware()还会再次执行兜底停止，因此这里无需等待。
+	 * 不修改lan_discovery_enable配置，升级完成重启后服务按原设置恢复。
 	 */
 	if (access("/usr/bin/lan_discovery_stop_for_upgrade.sh", X_OK) == 0) {
-		ret = system("/usr/bin/lan_discovery_stop_for_upgrade.sh >/dev/null 2>&1");
+		ret = system("/usr/bin/lan_discovery_stop_for_upgrade.sh >/dev/null 2>&1 &");
 		if (ret != 0)
-			httpd_log("%s: unable to stop LAN discovery before firmware upload", "Firmware update");
+			httpd_log("%s: unable to start asynchronous LAN discovery stop before firmware upload", "Firmware update");
 	} else {
 		httpd_log("%s: LAN discovery stop script not found, continue with native firmware upgrade flow", "Firmware update");
 	}
