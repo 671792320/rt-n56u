@@ -314,26 +314,54 @@ err:
 	return 0;
 }
 
+static void
+stop_lan_discovery_before_firmware_upload(void)
+{
+	static const char *processes[] = {
+		"lan_discovery_supervisor.sh",
+		"lan_autodiscover.sh",
+		"lan_tcpdump_listener.sh",
+		"lan_network_manager.sh",
+		"lanlisten",
+		"camdiscover",
+		"arpscan",
+		"dhcpdetect",
+		"lanhealth",
+		NULL
+	};
+	static const char *pidfiles[] = {
+		"/tmp/lan_autodiscover_worker.pid",
+		"/tmp/lan_tcpdump_listener.pid",
+		"/tmp/lan_network_manager.pid",
+		NULL
+	};
+	int i;
+
+	/*
+	 * 固件上传阶段沿用Padavan升级流程：先快速停止LAN发现运行任务，再读取固件。
+	 * 这里只发送停止信号，不等待子进程退出，避免阻塞HTTP上传。
+	 * 真正进入flash_firmware()后，rc.c还会再次执行同样的兜底停止。
+	 * 不修改lan_discovery_enable，升级完成重启后LAN发现按原配置恢复。
+	 */
+	for (i = 0; pidfiles[i] != NULL; i++) {
+		kill_pidfile_s(pidfiles[i], SIGTERM);
+		unlink(pidfiles[i]);
+	}
+
+	for (i = 0; processes[i] != NULL; i++)
+		doSystem("killall %s %s", "-q", processes[i]);
+
+	unlink("/var/run/lan_discovery_supervisor.lock/pid");
+	rmdir("/var/run/lan_discovery_supervisor.lock");
+}
+
 void
 do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 {
 	const char *upload_file = FW_IMG_NAME;
 	int ret;
 
-	/*
-	 * 固件升级在HTTP上传开始时就触发停止LAN发现运行任务。
-	 * 这里必须异步执行：停止脚本会等待部分子进程退出，若同步执行会让
-	 * 浏览器长时间看不到上传请求，表现为“点击上传没有反应”。
-	 * 真正刷写前flash_firmware()还会再次执行兜底停止，因此这里无需等待。
-	 * 不修改lan_discovery_enable配置，升级完成重启后服务按原设置恢复。
-	 */
-	if (access("/usr/bin/lan_discovery_stop_for_upgrade.sh", X_OK) == 0) {
-		ret = system("/usr/bin/lan_discovery_stop_for_upgrade.sh >/dev/null 2>&1 &");
-		if (ret != 0)
-			httpd_log("%s: unable to start asynchronous LAN discovery stop before firmware upload", "Firmware update");
-	} else {
-		httpd_log("%s: LAN discovery stop script not found, continue with native firmware upgrade flow", "Firmware update");
-	}
+	stop_lan_discovery_before_firmware_upload();
 
 	/* delete some files (need free space in /tmp) */
 	unlink("/tmp/usb.log");
@@ -348,11 +376,21 @@ do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 	fput_int("/proc/sys/vm/drop_caches", 1);
 
 	ret = do_upload_file(stream, clen, NULL, upload_file, "file", check_header_image, sizeof(image_header_t));
-	if (ret == 0) {
-		ret = check_crc_image(upload_file);
-		if (ret != 0)
-			unlink(upload_file);
+	if (ret != 0) {
+		httpd_log("%s: firmware upload file receive or header check failed (ret=%d)", "Firmware update", ret);
+		return;
 	}
+
+	httpd_log("%s: firmware image received: %s", "Firmware update", upload_file);
+
+	ret = check_crc_image(upload_file);
+	if (ret != 0) {
+		httpd_log("%s: firmware CRC check failed, image removed", "Firmware update");
+		unlink(upload_file);
+		return;
+	}
+
+	httpd_log("%s: firmware image upload and CRC check passed", "Firmware update");
 }
 
 void
