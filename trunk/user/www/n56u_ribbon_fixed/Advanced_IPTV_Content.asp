@@ -34,9 +34,9 @@ $j(document).ready(function() {
 var lan_ipaddr = '<% nvram_get_x("", "lan_ipaddr_t"); %>';
 
 function initial(){
-	var id_menu = 4;
+	var id_menu = 5;
 	if(get_ap_mode()){
-		id_menu = 3;
+		id_menu = 4;
 		if (lan_proto == '1')
 			id_menu--;
 		showhide_div('row_mroute', 0);
