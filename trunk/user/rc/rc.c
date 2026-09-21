@@ -584,54 +584,6 @@ erase_nvram(void)
 }
 
 static void
-stop_lan_discovery_for_upgrade(void)
-{
-	const char *pidfiles[] = {
-		"/tmp/lan_autodiscover_worker.pid",
-		"/tmp/lan_tcpdump_listener.pid",
-		"/tmp/lan_network_manager.pid",
-		NULL
-	};
-	const char *processes[] = {
-		"lan_discovery_supervisor.sh",
-		"lan_autodiscover.sh",
-		"lan_tcpdump_listener.sh",
-		"lan_network_manager.sh",
-		"lanlisten",
-		"camdiscover",
-		"arpscan",
-		"dhcpdetect",
-		"lanhealth",
-		NULL
-	};
-	int i;
-	FILE *fp;
-	char buf[32];
-	pid_t pid;
-
-	/* 固件升级开始后立即停止LAN发现，仅停止运行态进程，不修改LAN发现启用配置。 */
-	for (i = 0; pidfiles[i] != NULL; i++) {
-		fp = fopen(pidfiles[i], "r");
-		if (!fp)
-			continue;
-		if (fgets(buf, sizeof(buf), fp)) {
-			pid = (pid_t)strtol(buf, NULL, 10);
-			if (pid > 1)
-				kill(pid, SIGTERM);
-		}
-		fclose(fp);
-		unlink(pidfiles[i]);
-	}
-
-	/* 清理可能没有PID文件的旧版/孤儿进程，避免升级期间继续访问LAN、iptables或/tmp。 */
-	for (i = 0; processes[i] != NULL; i++)
-		doSystem("killall -q %s", processes[i]);
-
-	/* 给子进程极短的退出时间；升级流程随后继续执行原生Padavan关停逻辑。 */
-	sleep(1);
-}
-
-static void
 flash_firmware(void)
 {
 	const char *script_name = SCRIPT_SHUTDOWN;
@@ -642,8 +594,8 @@ flash_firmware(void)
 			 "wpa_supplicant",
 			 NULL };
 
-	/* 固件升级事件进入后，先停止LAN发现，避免监听、SNAT和拔插状态机干扰原生升级流程。 */
-	stop_lan_discovery_for_upgrade();
+	/* 固件升级前停止LAN发现，后续继续执行Padavan原生升级流程。 */
+	stop_lan_discovery();
 
 	stop_misc();
 	stop_services(0); // don't stop httpd/telnetd/sshd/vpn
