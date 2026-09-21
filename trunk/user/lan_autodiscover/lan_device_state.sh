@@ -130,7 +130,7 @@ acquire_db_lock() {
     attempt=0
     while [ "$attempt" -lt 10 ]; do
         if mkdir "$DB_LOCKDIR" 2>/dev/null; then
-            printf '%s\n' "$" > "$DB_LOCKDIR/pid"
+            printf '%s\n' "$$" > "$DB_LOCKDIR/pid"
             return 0
         fi
 
