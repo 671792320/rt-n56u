@@ -35,7 +35,7 @@ var old_lan_mask = "<% nvram_get_x("","lan_netmask"); %>";
 
 function initial(){
 	show_banner(1);
-	show_menu(5,3,1);
+	show_menu(5,3,2);
 	show_footer();
 }
 
