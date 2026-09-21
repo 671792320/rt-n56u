@@ -254,7 +254,8 @@ function renderMatrix(){
     }
 
     table.appendChild(tbody);
-    box.appendChild(table);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
 }
 function countTargetFound(net){
     var base=targetBase(net),n=0;
@@ -299,6 +300,9 @@ function renderDiscoveredDevices(){
         box.innerHTML='<div class="note">当前目标网段暂未发现在线设备。</div>';
         return;
     }
+
+    var wrap=document.createElement('div');
+    wrap.className='discovered-wrap';
 
     var table=document.createElement('table');
     table.className='table table-bordered table-condensed discovered-table';
@@ -632,6 +636,7 @@ function initial(){
     display:inline-block;
     margin-right:18px;
     white-space:nowrap;
+    margin-bottom:3px;
 }
 .ip-legend-swatch{
     display:inline-block;
@@ -641,13 +646,35 @@ function initial(){
     vertical-align:-2px;
     margin-right:4px;
 }
-.legend-found{background:#dff0d8}
-.legend-temp{background:#d9edf7}
-.legend-conflict{background:#f2dede}
-.legend-empty{background:#fff}
+.legend-found{background:#dff0d8 !important}
+.legend-temp{background:#d9edf7 !important}
+.legend-conflict{background:#f2dede !important}
+.legend-empty{background:#fff !important}
+.discovered-wrap{
+    width:100%;
+    overflow-x:auto;
+    margin-bottom:10px;
+    -webkit-overflow-scrolling:touch;
+}
+.discovered-table{
+    width:100%;
+    table-layout:fixed;
+    margin-bottom:0;
+}
 .discovered-table th,.discovered-table td{
     vertical-align:middle;
+    padding:6px 8px;
+    line-height:18px;
+    white-space:normal;
+    word-break:break-word;
+    overflow-wrap:anywhere;
 }
+.discovered-table th:nth-child(1),.discovered-table td:nth-child(1){width:15%}
+.discovered-table th:nth-child(2),.discovered-table td:nth-child(2){width:12%}
+.discovered-table th:nth-child(3),.discovered-table td:nth-child(3){width:22%}
+.discovered-table th:nth-child(4),.discovered-table td:nth-child(4){width:17%}
+.discovered-table th:nth-child(5),.discovered-table td:nth-child(5){width:12%}
+.discovered-table th:nth-child(6),.discovered-table td:nth-child(6){width:22%}
 .discovered-table .device-status-found{
     color:#3c763d;
     font-weight:bold;
