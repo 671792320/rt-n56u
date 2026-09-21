@@ -193,7 +193,9 @@ void
 stop_lan_discovery(void)
 {
 	char* svcs[] = { "lan_discovery_supervisor", NULL };
+	/* 同时按实际脚本命令名清理，兼容BusyBox/当前shell进程名显示差异。 */
 	kill_services(svcs, 3, 1);
+	doSystem("killall lan_discovery_supervisor.sh 2>/dev/null");
 	kill_pidfile_s("/tmp/lan_network_manager.pid", SIGTERM);
 	kill_pidfile_s("/tmp/lan_autodiscover_worker.pid", SIGTERM);
 	unlink("/tmp/lan_network_manager.pid");
