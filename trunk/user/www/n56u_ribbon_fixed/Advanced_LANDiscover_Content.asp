@@ -454,7 +454,15 @@ function initial(){
 .custom-area{width:100%;min-height:180px;box-sizing:border-box;font:13px/1.55 monospace;white-space:pre}
 .note{color:#888}
 .hidden-builtin{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
-.target-tabs{padding:2px 0 5px}
+.target-tabs{padding:6px 8px 4px;margin:0 0 8px;border:1px solid #ddd;background:#f7f7f7;min-height:30px;box-sizing:border-box}
+.target-tabs .btn{font-size:12px;margin-right:6px!important;margin-bottom:4px!important}
+.matrix-current{margin:0 0 8px;padding:6px 8px;border:1px solid #ddd;background:#f7f7f7}
+.matrix-current-title{margin-bottom:6px;font-size:14px;font-weight:bold}
+.matrix-status{line-height:26px;white-space:normal}
+.matrix-status .label{margin-right:5px}
+.matrix-status #matrix_summary{margin-left:4px;font-weight:normal}
+.status-note{margin:4px 0 10px;line-height:1.7}
+.status-note > div{display:block}
 .ip-grid{table-layout:fixed;margin-bottom:8px}
 .ip-grid td{text-align:center;vertical-align:middle;padding:2px 0!important;height:23px}
 .ip-grid td a{text-decoration:none}
@@ -462,9 +470,6 @@ function initial(){
 .detail-table{margin-bottom:10px}
 .detail-table th{white-space:nowrap}
 .section-head{margin:8px 0}
-.summary-table td{white-space:nowrap;text-align:center}
-.summary-table #summary_targets{font-size:13px;font-weight:bold}
-.target-tabs .btn{font-size:12px}
 .ip-grid td.ip-cell{background:#fff}
 .ip-grid td.ip-cell a{position:relative;line-height:18px}
 .ip-grid td.ip-cell{
@@ -525,8 +530,6 @@ function initial(){
 <h2 class="box_head round_top">LAN监听与设备发现</h2>
 <div class="round_bottom"><div id="tabMenu" class="submenuBlock"></div>
 
-<div class="alert alert-info">本页面使用 Padavan 原生表格和按钮样式。后台负责实时监听、周期发现和 SNAT；页面仅显示状态并保存参数。</div>
-
 <table class="table table-condensed status-table">
 <tr><th colspan="8">当前状态</th></tr>
 <tr>
@@ -547,33 +550,23 @@ function initial(){
 <td colspan="4">红色文字表示健康状态异常</td>
 </tr>
 </table>
-<div class="note" style="margin:4px 0 10px">
-<b>广播速率：</b>表示LAN口每秒检测到多少个广播报文。短时间有变化属于正常网络活动；如果长期明显偏高，可能存在广播风暴或异常设备。
-&nbsp;&nbsp;
-<b>MAC回流：</b>表示检测到疑似二层环路回流的报文速率，即发出的网络帧又从LAN口绕回来。正常应长期为 <b>0/s</b>；持续出现非0值时，应检查网线、交换机或是否形成网络环路。
+<div class="status-note note">
+<div><b>广播速率：</b>表示LAN口每秒检测到多少个广播报文。短时间有变化属于正常网络活动；如果长期明显偏高，可能存在广播风暴或异常设备。</div>
+<div><b>MAC回流：</b>表示检测到疑似二层环路回流的报文速率，即发出的网络帧又从LAN口绕回来。正常应长期为 <b>0/s</b>；持续出现非0值时，应检查网线、交换机或是否形成网络环路。</div>
 </div>
-
-<h4 class="section-head">发现统计</h4>
-<table class="table table-bordered table-condensed summary-table">
-<tr>
-<td><b>目标网段</b><br><span id="summary_targets">0</span></td>
-<td><b>已发现</b><br><span id="summary_found">0</span></td>
-<td><b>临时IP</b><br><span id="summary_temp">0</span></td>
-<td><b>未使用</b><br><span id="summary_unused">0</span></td>
-<td><b>IP冲突</b><br><span id="summary_conflict">0</span></td>
-</tr>
-</table>
 
 <h4 class="section-head">目标网段</h4>
 <div id="targets" class="target-tabs"><span class="note">暂未发现目标网段</span></div>
 
-<h4 class="section-head" id="matrix_title">当前网段：-</h4>
-<div class="note" style="margin-bottom:4px">
+<div class="matrix-current">
+<div id="matrix_title" class="matrix-current-title">当前网段：-</div>
+<div class="matrix-status">
 <span class="label label-success">已发现</span>
 <span class="label label-info">临时IP</span>
 <span class="label label-important">IP冲突</span>
 <span class="label">未使用</span>
-<span id="matrix_summary" style="margin-left:8px"></span>
+<span id="matrix_summary"></span>
+</div>
 </div>
 <div id="ip_matrix"><div class="note">等待目标网段状态...</div></div>
 
