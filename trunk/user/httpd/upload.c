@@ -314,52 +314,11 @@ err:
 	return 0;
 }
 
-static void
-stop_lan_discovery_before_firmware_upload(void)
-{
-	static const char *processes[] = {
-		"lan_discovery_supervisor.sh",
-		"lan_autodiscover.sh",
-		"lan_tcpdump_listener.sh",
-		"lan_network_manager.sh",
-		"lanlisten",
-		"camdiscover",
-		"arpscan",
-		"dhcpdetect",
-		"lanhealth",
-		NULL
-	};
-	static const char *pidfiles[] = {
-		"/tmp/lan_autodiscover_worker.pid",
-		"/tmp/lan_tcpdump_listener.pid",
-		"/tmp/lan_network_manager.pid",
-		NULL
-	};
-	int i;
-
-	/*
-	 * 固件上传阶段沿用Padavan升级流程：先快速停止LAN发现运行任务，再读取固件。
-	 * 这里只发送停止信号，不等待子进程退出，避免阻塞HTTP上传。
-	 * 真正进入flash_firmware()后，rc.c还会再次执行同样的兜底停止。
-	 * 不修改lan_discovery_enable，升级完成重启后LAN发现按原配置恢复。
-	 */
-	for (i = 0; pidfiles[i] != NULL; i++)
-		unlink(pidfiles[i]);
-
-	for (i = 0; processes[i] != NULL; i++)
-		doSystem("killall %s %s", "-q", processes[i]);
-
-	unlink("/var/run/lan_discovery_supervisor.lock/pid");
-	rmdir("/var/run/lan_discovery_supervisor.lock");
-}
-
 void
 do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 {
 	const char *upload_file = FW_IMG_NAME;
 	int ret;
-
-	stop_lan_discovery_before_firmware_upload();
 
 	/* delete some files (need free space in /tmp) */
 	unlink("/tmp/usb.log");
@@ -374,21 +333,11 @@ do_upgrade_fw_post(const char *url, FILE *stream, int clen, char *boundary)
 	fput_int("/proc/sys/vm/drop_caches", 1);
 
 	ret = do_upload_file(stream, clen, NULL, upload_file, "file", check_header_image, sizeof(image_header_t));
-	if (ret != 0) {
-		httpd_log("%s: firmware upload file receive or header check failed (ret=%d)", "Firmware update", ret);
-		return;
+	if (ret == 0) {
+		ret = check_crc_image(upload_file);
+		if (ret != 0)
+			unlink(upload_file);
 	}
-
-	httpd_log("%s: firmware image received: %s", "Firmware update", upload_file);
-
-	ret = check_crc_image(upload_file);
-	if (ret != 0) {
-		httpd_log("%s: firmware CRC check failed, image removed", "Firmware update");
-		unlink(upload_file);
-		return;
-	}
-
-	httpd_log("%s: firmware image upload and CRC check passed", "Firmware update");
 }
 
 void
