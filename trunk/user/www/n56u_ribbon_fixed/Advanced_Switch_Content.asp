@@ -37,9 +37,9 @@ $j(document).ready(function() {
 var id_update_status = 0;
 
 function initial(){
-	var id_menu = 5;
+	var id_menu = 6;
 	if(get_ap_mode()){
-		id_menu = 4;
+		id_menu = 5;
 		if (lan_proto == '1')
 			id_menu--;
 	}
