@@ -121,6 +121,15 @@ migrate_lan_discovery_config() {
 
 migrate_lan_discovery_config
 
+# 防御性检查：即使启动入口因历史版本/异常残留而拉起监督器，
+# LAN发现关闭时也不允许监督器继续常驻。
+if [ "$(cfg lan_discovery_enable 0)" != "1" ]; then
+    set_supervisor_status "已停止"
+    runtime_set lan_discovery_status_enable="已禁用"
+    runtime_set lan_discovery_status_state="LAN监听已禁用"
+    exit 0
+fi
+
 mtk_esw_lan4_state() {
     [ -x /sbin/mtk_esw ] || return 2
     state="$(/sbin/mtk_esw 10 4 2>/dev/null | sed -n 's/^LAN4 link state: \([01]\)$/\1/p')"
@@ -492,12 +501,14 @@ while :; do
             stop_worker
             stop_tcpdump
             stop_network_manager
+            set_supervisor_status "已停止"
+            exit 0
         fi
     fi
 
     if [ "$enable" != "1" ]; then
-        sleep 1
-        continue
+        set_supervisor_status "已停止"
+        exit 0
     fi
 
     if [ -e "/sys/class/net/$iface" ]; then
