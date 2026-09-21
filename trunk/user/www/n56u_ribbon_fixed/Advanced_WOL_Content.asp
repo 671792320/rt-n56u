@@ -30,9 +30,9 @@ var devices = {};
 var allMacs = {};
 
 function initial(){
-	var id_menu = 6;
+	var id_menu = 7;
 	if(get_ap_mode()){
-		id_menu = 5;
+		id_menu = 6;
 		if (lan_proto == '1')
 			id_menu--;
 	}
