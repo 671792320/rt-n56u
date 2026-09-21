@@ -313,7 +313,8 @@ sync)
     release_db_lock
     ;;
 
-begin)\n    # 开始新一轮检测，清空本轮ARP和协议事件。
+begin)
+    # 开始新一轮检测，清空本轮ARP和协议事件。
     : > "$ARP_SEEN_FILE"
     : > "$EVENT_FILE"
     ;;
