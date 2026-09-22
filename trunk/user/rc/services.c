@@ -212,7 +212,7 @@ stop_lan_discovery(void)
 	 * supervisor停止后，再清理可能遗留的LAN发现子进程。
 	 * 目标网段、临时IP和SNAT不在这里删除。
 	 */
-	doSystem("for pid in $(ps 2>/dev/null | awk '$0 ~ /\\/usr\\/bin\\/lan_tcpdump_listener\\.sh/ || $0 ~ /\\/usr\\/bin\\/lanlisten / || $0 ~ /\\/usr\\/bin\\/lan_autodiscover\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_network_manager\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_device_state\\.sh/ && $1 ~ /^[0-9]+$/ {print $1}'); do kill $pid 2>/dev/null; done");
+	doSystem("for pid in $(ps 2>/dev/null | awk '($1 ~ /^[0-9]+$/) && ($0 ~ /\\/usr\\/bin\\/lan_tcpdump_listener\\.sh/ || $0 ~ /\\/usr\\/bin\\/lanlisten / || $0 ~ /\\/usr\\/bin\\/lan_autodiscover\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_network_manager\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_device_state\\.sh/) {print $1}'); do kill $pid 2>/dev/null; done");
 }
 
 void
