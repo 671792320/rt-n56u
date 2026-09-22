@@ -193,17 +193,26 @@ void
 stop_lan_discovery(void)
 {
 	char* svcs[] = { "lan_discovery_supervisor", NULL };
-	/* 同时按实际脚本命令名清理，兼容BusyBox/当前shell进程名显示差异。 */
+	/*
+	 * 优先使用监督器自身登记的PID精确停止。
+	 * Q7上的BusyBox ps显示shell脚本名会被截断，不能只依赖killall脚本名匹配。
+	 */
+	kill_pidfile_s("/var/run/lan_discovery_supervisor.lock/pid", SIGTERM);
 	kill_services(svcs, 3, 1);
-	doSystem("killall lan_discovery_supervisor.sh 2>/dev/null");
+	/*
+	 * 兼容没有PID文件、旧版残留或脚本名被截断的监督器实例。
+	 * 这里只按完整命令行匹配lan_discovery_supervisor.sh，不碰其它/bin/sh。
+	 */
+	doSystem("for pid in $(ps 2>/dev/null | awk '$0 ~ /\\/usr\\/bin\\/lan_discovery_supervisor\\.sh/ && $1 ~ /^[0-9]+$/ {print $1}'); do kill $pid 2>/dev/null; done");
 	kill_pidfile_s("/tmp/lan_network_manager.pid", SIGTERM);
 	kill_pidfile_s("/tmp/lan_autodiscover_worker.pid", SIGTERM);
 	unlink("/tmp/lan_network_manager.pid");
 	unlink("/tmp/lan_autodiscover_worker.pid");
 	/*
-	 * 停止发现服务不等于删除已经锁定的SNAT。
-	 * 目标网段、临时IP和SNAT只有重启或用户手动down时才重新建立/清除。
+	 * supervisor停止后，再清理可能遗留的LAN发现子进程。
+	 * 目标网段、临时IP和SNAT不在这里删除。
 	 */
+	doSystem("for pid in $(ps 2>/dev/null | awk '$0 ~ /\\/usr\\/bin\\/lan_tcpdump_listener\\.sh/ || $0 ~ /\\/usr\\/bin\\/lanlisten / || $0 ~ /\\/usr\\/bin\\/lan_autodiscover\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_network_manager\\.sh/ || $0 ~ /\\/usr\\/bin\\/lan_device_state\\.sh/ && $1 ~ /^[0-9]+$/ {print $1}'); do kill $pid 2>/dev/null; done");
 }
 
 void
